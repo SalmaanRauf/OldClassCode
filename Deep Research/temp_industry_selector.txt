@@ -1,0 +1,24 @@
+            # Load and display industry prompt options
+            from services.prompt_loader import PromptLoader
+            loader = PromptLoader()
+            industries = loader.get_available_industries()
+            
+            actions = []
+            for key, meta in industries.items():
+                actions.append(
+                    cl.Action(
+                        name="set_industry",
+                        value=key,
+                        label=f"{meta['display_name']} v{meta['version']}",
+                    )
+                )
+            
+            await cl.AskActionMessage(
+                content=(
+                    "**Step 2:** Select industry focus for Deep Research:\\n\\n"
+                    "This customizes the agent's expertise, data sources, and search strategy. "
+                    "Choose 'General' if researching across multiple industries."
+                ),
+                actions=actions
+            ).send()
+

@@ -1,0 +1,25 @@
+
+
+@cl.action_callback("set_industry")
+async def update_industry(action: cl.Action):
+    """Handle industry prompt selection."""
+    selected_industry = action.value or DEFAULT_INDUSTRY
+    cl.user_session.set(INDUSTRY_PROMPT_SESSION_KEY, selected_industry)
+    
+    # Get metadata for confirmation
+    from services.prompt_loader import PromptLoader
+    loader = PromptLoader()
+    try:
+        meta = loader.get_prompt_metadata(selected_industry)
+        await cl.Message(
+            f"✅ Industry focus selected: **{meta['display_name']}** (v{meta['version']})\\n\\n"
+            f"📋 Optimized for: {meta['description']}\\n\\n"
+            f"You can now ask your research question in the chat."
+        ).send()
+    except Exception as e:
+        logger.error(f"Failed to load industry metadata: {e}")
+        await cl.Message(
+            f"✅ Industry focus selected: **{selected_industry}**\\n\\n"
+            f"You can now ask your research question in the chat."
+        ).send()
+

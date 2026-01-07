@@ -1,0 +1,278 @@
+{
+    "defense": {
+        "display_name": "Defense",
+        "signals": {
+            "RFI_RFP": {
+                "label": "RFI/RFP Released",
+                "description": "Active federal procurement opportunity"
+            },
+            "RECOMPETE": {
+                "label": "Recompete Window",
+                "description": "Contract nearing end of period of performance"
+            },
+            "IVV": {
+                "label": "IV&V Requirement",
+                "description": "Independent verification & validation need"
+            },
+            "CMMC": {
+                "label": "CMMC Mandate",
+                "description": "Cybersecurity maturity certification requirement"
+            },
+            "PROTEST_DENIED": {
+                "label": "Protest Denied",
+                "description": "GAO denied competitor protest"
+            },
+            "ATO": {
+                "label": "A&A/ATO Need",
+                "description": "Assessment & authorization requirement"
+            },
+            "OTE": {
+                "label": "OT&E Mandate",
+                "description": "Operational test & evaluation requirement"
+            }
+        },
+        "service_lines": [
+            "Model Validation (IV&V)",
+            "Cybersecurity Compliance",
+            "Risk Advisory",
+            "Technology Implementation"
+        ],
+        "geography_options": [
+            "CONUS",
+            "OCONUS",
+            "CONUS+OCONUS",
+            "NATO",
+            "INDOPACOM"
+        ]
+    },
+    "financial_services": {
+        "display_name": "Financial Services",
+        "signals": {
+            "CONSENT_ORDER": {
+                "label": "Consent Order / Enforcement",
+                "description": "Regulatory enforcement action requiring remediation"
+            },
+            "MODEL_RISK": {
+                "label": "Model Risk Findings",
+                "description": "SR 11-7 compliance gaps identified"
+            },
+            "CRO_TRANSITION": {
+                "label": "CRO/CFO Transition",
+                "description": "New risk or finance leadership"
+            },
+            "STRESS_TEST": {
+                "label": "Stress Test Issues",
+                "description": "CCAR/DFAST findings requiring response"
+            },
+            "REG_DEADLINE": {
+                "label": "Regulatory Deadline",
+                "description": "Time-bound compliance requirement"
+            },
+            "AML_BSA": {
+                "label": "AML/BSA Findings",
+                "description": "Financial crimes compliance need"
+            },
+            "CECL": {
+                "label": "CECL Implementation",
+                "description": "Credit loss accounting standard"
+            }
+        },
+        "service_lines": [
+            "Model Validation (SR 11-7)",
+            "Regulatory Compliance",
+            "Risk Advisory",
+            "Internal Audit",
+            "Technology Implementation"
+        ],
+        "geography_options": [
+            "US",
+            "EMEA",
+            "APAC",
+            "Global"
+        ]
+    },
+    "healthcare": {
+        "display_name": "Healthcare & Life Sciences",
+        "signals": {
+            "FDA_WARNING": {
+                "label": "FDA Warning Letter",
+                "description": "FDA enforcement requiring remediation"
+            },
+            "PHASE3_TRIAL": {
+                "label": "Phase III Trial Initiated",
+                "description": "Large-scale clinical operations"
+            },
+            "CMS_RFP": {
+                "label": "CMS Procurement / RFP",
+                "description": "Government healthcare contract opportunity"
+            },
+            "HIPAA_BREACH": {
+                "label": "HIPAA Breach",
+                "description": "Privacy/security incident requiring remediation"
+            },
+            "FDA_APPROVAL": {
+                "label": "FDA Approval",
+                "description": "Post-market surveillance needs"
+            },
+            "GXP_ISSUES": {
+                "label": "GxP Compliance Issues",
+                "description": "Quality system remediation"
+            },
+            "CLINICAL_HOLD": {
+                "label": "Clinical Hold",
+                "description": "Trial suspension requiring resolution"
+            }
+        },
+        "service_lines": [
+            "Regulatory Compliance (FDA, GxP)",
+            "Clinical Operations",
+            "Quality Systems",
+            "HIPAA/Cybersecurity",
+            "Healthcare IT"
+        ],
+        "geography_options": [
+            "US",
+            "EU",
+            "Global"
+        ]
+    },
+    "energy": {
+        "display_name": "Energy",
+        "signals": {
+            "NERC_VIOLATION": {
+                "label": "NERC CIP Violation",
+                "description": "Grid cybersecurity compliance issue"
+            },
+            "DOE_FUNDING": {
+                "label": "DOE Funding Opportunity",
+                "description": "Energy grants and contracts"
+            },
+            "FERC_ORDER": {
+                "label": "FERC Order / Mandate",
+                "description": "Regulatory compliance requirement"
+            },
+            "GRID_MOD": {
+                "label": "Grid Modernization Project",
+                "description": "Smart grid technology implementation"
+            },
+            "OT_SECURITY": {
+                "label": "OT/SCADA Security Incident",
+                "description": "Industrial cybersecurity remediation"
+            },
+            "RENEWABLE_RFP": {
+                "label": "Renewable Energy Procurement",
+                "description": "Large-scale renewable project"
+            },
+            "IRP_FILING": {
+                "label": "IRP Filing / Resource Planning",
+                "description": "Strategic utility planning"
+            }
+        },
+        "service_lines": [
+            "NERC CIP Compliance",
+            "Grid Modernization",
+            "OT Cybersecurity",
+            "Risk Advisory",
+            "Technology Implementation"
+        ],
+        "geography_options": [
+            "Northeast",
+            "Southeast",
+            "Midwest",
+            "West",
+            "Texas",
+            "National"
+        ]
+    },
+    "technology": {
+        "display_name": "Technology",
+        "signals": {
+            "CIO_TRANSITION": {
+                "label": "CIO/CTO/CISO Transition",
+                "description": "New technology leadership"
+            },
+            "DATA_BREACH": {
+                "label": "Data Breach / Cyber Incident",
+                "description": "Security remediation need"
+            },
+            "CLOUD_MIGRATION": {
+                "label": "Cloud Migration Announced",
+                "description": "Cloud transformation project"
+            },
+            "DATA_AI": {
+                "label": "Data & AI Initiative",
+                "description": "Data governance and AI implementation"
+            },
+            "IT_MODERNIZATION": {
+                "label": "IT Modernization / ERP",
+                "description": "Legacy system transformation"
+            },
+            "ZERO_TRUST": {
+                "label": "Zero Trust / SOC Modernization",
+                "description": "Security transformation"
+            },
+            "DEVOPS": {
+                "label": "DevOps / Platform Engineering",
+                "description": "Engineering transformation"
+            }
+        },
+        "service_lines": [
+            "Cloud Transformation",
+            "Cybersecurity",
+            "Data & AI Advisory",
+            "IT Modernization",
+            "Digital Operations"
+        ],
+        "geography_options": [
+            "US",
+            "EMEA",
+            "APAC",
+            "Global"
+        ]
+    },
+    "general": {
+        "display_name": "General / Multi-Industry",
+        "signals": {
+            "REG_ACTION": {
+                "label": "Regulatory Action / Enforcement",
+                "description": "Any regulatory enforcement creating remediation need"
+            },
+            "EXEC_TRANSITION": {
+                "label": "Executive Transition",
+                "description": "C-suite leadership change"
+            },
+            "MA_ACTIVITY": {
+                "label": "M&A Activity",
+                "description": "Merger, acquisition, or divestiture"
+            },
+            "MAJOR_INVESTMENT": {
+                "label": "Major Investment / Initiative",
+                "description": "Significant technology or transformation investment"
+            },
+            "RISK_EVENT": {
+                "label": "Risk Event / Crisis",
+                "description": "Security, compliance, or operational incident"
+            },
+            "STRATEGIC_PIVOT": {
+                "label": "Strategic Pivot",
+                "description": "Business model or market change"
+            },
+            "PERFORMANCE_ISSUE": {
+                "label": "Performance Challenges",
+                "description": "Restructuring or cost reduction"
+            }
+        },
+        "service_lines": [
+            "Risk & Compliance",
+            "Internal Audit",
+            "Technology",
+            "Business Performance"
+        ],
+        "geography_options": [
+            "US",
+            "EMEA",
+            "APAC",
+            "Global"
+        ]
+    }
+}

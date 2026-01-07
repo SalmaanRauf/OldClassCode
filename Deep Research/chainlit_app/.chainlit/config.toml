@@ -1,0 +1,13 @@
+[project]
+enable_telemetry = false
+
+[features]
+persistent_chat = true
+readme_as_header = true
+
+[ui]
+name = "Company Intelligence Briefing System"
+description = "Up-to-date company briefings with grounded citations"
+show_readme_as_header = true
+hide_cot = true
+

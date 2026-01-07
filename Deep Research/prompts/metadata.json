@@ -1,0 +1,47 @@
+{
+  "prompts": {
+    "defense": {
+      "version": "1.0",
+      "last_updated": "2025-01-17",
+      "display_name": "Defense",
+      "description": "Federal procurement, IV&V, CMMC, SAM.gov",
+      "file": "industries/defense.md"
+    },
+    "financial_services": {
+      "version": "1.0",
+      "last_updated": "2025-01-17",
+      "display_name": "Financial Services",
+      "description": "Banking, model risk, SR 11-7, regulatory compliance",
+      "file": "industries/financial_services.md"
+    },
+    "healthcare": {
+      "version": "1.0",
+      "last_updated": "2025-01-17",
+      "display_name": "Healthcare",
+      "description": "FDA, clinical trials, GxP compliance, CMS",
+      "file": "industries/healthcare.md"
+    },
+    "energy": {
+      "version": "1.0",
+      "last_updated": "2025-01-17",
+      "display_name": "Energy",
+      "description": "NERC CIP, FERC, grid modernization, renewables",
+      "file": "industries/energy.md"
+    },
+    "technology": {
+      "version": "1.0",
+      "last_updated": "2025-01-17",
+      "display_name": "Technology",
+      "description": "Cloud, cybersecurity, data/AI, digital transformation",
+      "file": "industries/technology.md"
+    },
+    "general": {
+      "version": "1.0",
+      "last_updated": "2025-01-17",
+      "display_name": "General",
+      "description": "Multi-industry comprehensive research",
+      "file": "industries/general.md"
+    }
+  }
+}
+

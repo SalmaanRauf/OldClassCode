@@ -1,0 +1,140 @@
+alright we need to make some refinements. switching to planning mode now based off feedback we got.
+
+From our middle man to stakeholder:
+Below are some ideas I’ve been iterating with AI and would like to discuss with you.
+ 
+Approach Overview – Package-Based Model
+Rather than relying on broad prompts, hard-coded parameters, or one-off searches, the MVP will move to a package-based configuration model.
+Each industry (e.g., Defense, Financial Services, Healthcare, Energy, Technology) and service line (e.g., Risk Advisory, Model Validation, Compliance, Technology Implementation) will have a curated configuration package that defines:
+	•	Relevant data sources, such as SAM.gov, GAO protests, FPDS, DCSA, and Defense News for Defense; or SEC EDGAR, FINRA, and OCC bulletins for Financial Services.
+	•	Detectable signals, such as recompetes, protests, RFP releases, hiring spikes, regulatory deadlines, funding changes, and executive transitions.
+	•	Weighted heuristics, defining timing, fit, momentum, and risk to calculate composite opportunity scores.
+	•	Context-specific keywords, drawn from domain taxonomies (e.g., CMMC, A&A, OT&E, AI model validation) relevant to each sector.
+These packages act as structured “brains” for each vertical, ensuring the agent searches, ranks, and explains opportunities in ways that are consistent, transparent, and auditable — unlike a purely prompt-based system that changes with every query.
+ 
+Governance, Schema, and Learning
+Each package is version-controlled (for example, Defense v1.2, Finance v0.9) and follows a standard YAML schema defining:
+	•	industry
+	•	service
+	•	sources (with trust weights)
+	•	signals (with precision scores and stage: active/shadow)
+	•	scoring (weights, boosters, penalties)
+	•	fit_profile (NAICS, keywords, exclusions)
+ 
+Users can propose new signals (for example, “Supply Chain Disruption”) which run in shadow mode — visible in outputs but not yet influencing scores. Analyst tagging (useful, meeting, won) feeds a feedback registry that computes per-signal precision and auto-promotes proven signals to active.
+ 
+This creates a governed, data-driven learning loop:
+	•	Analysts explore and tag results naturally.
+	•	The system tracks which signals correlate with successful outcomes.
+	•	Package weights and signal statuses are automatically recalibrated.
+	•	Version changelogs record each improvement for traceability.
+ 
+Over time, the BD Agent becomes self-optimizing while remaining fully explainable and compliant with audit and data governance standards.
+ 
+Defense Pilot Implementation
+The initial pilot will focus on Defense sector opportunities, particularly where model validation and compliance services intersect.
+ 
+Scope:
+	•	Use the Defense base package (sources: SAM.gov, GAO, FPDS, DCSA) merged with the Model Validation service overlay (signals: IV&V, A&A, OT&E, AI Validation).
+	•	Identify recompetes, test and evaluation contracts, and CMMC readiness opportunities.
+	•	Capture analyst feedback to refine weighting of technical validation signals versus compliance or risk indicators.
+Outcome:
+	•	Deliver ranked opportunity outputs with transparent reasoning (for example: Ranked 0.84 due to RFP timing, IV&V requirement, and protest denied signal).
+	•	Capture signal precision metrics (e.g., ivv=0.76, rfi_rfp=0.83) for weekly model updates.
+	•	Produce a changelog summarizing version increments and accuracy improvements.
+ 
+ 
+-----
+Note: Separating Signal from Noise
+A core design objective of the BD Agent is to clearly separate signal from noise — identifying meaningful, actionable opportunities while filtering out irrelevant or low-value activity.
+This requires domain-specific intelligence at three levels:
+	1.	Source-Level Precision
+Each industry relies on a unique ecosystem of data sources that define its “ground truth.”
+	•	Defense: SAM.gov, FPDS, GAO protests, DCSA, and Defense News.
+	•	Financial Services: SEC EDGAR filings, FINRA actions, OCC/Fed releases.
+	•	Healthcare/Life Sciences: FDA approvals, CMS procurement schedules, NIH grant calls.
+	•	Energy: DOE solicitations, FERC dockets, EIA funding notices.
+ 
+Curated, weighted source lists ensure the system emphasizes verified institutional channels rather than unstructured chatter.
+	2.	Keyword and Phrase Mapping
+Each industry speaks its own technical dialect. The model must learn these vocabularies and differentiate true intent signals from generic business terms.
+Examples:
+	•	Defense: IV&V, A&A, CMMC, OTA, PoP end.
+	•	Finance: stress testing, Basel III, model risk, AML tuning, OCC 11-7.
+	•	Healthcare: Phase III, clinical protocol, IRB approval, sponsor RFP.
+	3.	Domain-Specific Signal Weighting
+Signals like recompete, regulatory deadline, or hiring spike exist in every domain but carry different predictive weights.
+	•	A GAO protest denied in Defense may increase opportunity probability.
+	•	A consent order in Finance may signal compliance remediation opportunities.
+	•	A clinical trial registry update in Life Sciences may signal an upcoming vendor need.
+ 
+By encoding these distinctions within the industry package schema, the system can:
+	•	Rank results using sources and terms that actually matter for that sector.
+	•	Learn which signals are predictive of real wins based on feedback.
+	•	Suppress repetitive, generic, or misaligned patterns that produce noise.
+ 
+This ensures the BD Agent evolves from a broad search tool into a targeted intelligence engine that speaks each industry’s language — translating noise into signal through structure, governance, and learning.
+ 
+Next Steps
+	•	Implement the package-based architecture and supporting schema for sources, signals, and scoring.
+	•	Integrate the feedback learning loop (analyst tagging → precision tracking → auto-weight updates).
+	•	Launch the Defense pilot, focusing on overlays sourced from Naomi — we’ll need specific user input.
+	•	Develop the governance layer — version control, audit logging, and explainable output templates.
+	•	Once stable, extend to additional industries and services (Finance, Energy, Technology) for scalable, multi-sector deployment, leveraging input from different audiences and refining role-based approaches as appropriate.
+	•	 
+These are working ideas and I welcome your feedback. Salmaan has done excellent work so far — my key takeaway is that we need greater precision, curation, and visibility in the final analysis.
+ 
+I’m not suggesting removing features, but rather curating Industry/Service Line packages so searches are user-controlled, governed, and traceable — a Protiviti product, not just a general approach.
+
+more recently he said:
+user feedback:
+My thoughts:
+ 
+	•	It’s a great domain brief (sources, signals, output structure are all spot on), but it hard-codes Defense and the signal set into the text and each prompt seems curated by Industry when there is really a need for user driving flexibility (based on my reading of Naomi)
+	•	For the architecture we’re aiming for, I’d like to treat things like sector, geography, time_window, min_value_usd, companies, and the signal list, etc as parameters passed into a single reusable agent, rather than baked into a Defense-only prompt.
+	•	Likewise, the validation “firewalls” are a placeholder (e.g., sector must be from an approved list, min deal size ≥ $X, signals must come from the ontology) should live in the parameter schema to  provide repeatability and integrity. It misses the mark a bit in the graphic but this the intentn
+	•	The agent should see those constraints and either respect them or explicitly say “no qualifying opportunities found,” rather than quietly relaxing them.
+	•	That gives us the balance we want: repeatable output structure (exec summary → signals → opportunity details → BD action plan) but flexibility to swap in different sectors/signal packs without rewriting the whole prompt every time?
+	•	The diagram is from Nano Banana prompt I build – it’s meant to be an aid to talk about basically what the prompt does and has some future state elements – I realize this is not ideal. I think something like this is important as it is hard for non-tech. people to absorb the whole process and the promise of the prompt by just running the tool
+ 
+I would recommend we consider tracking specific requirements at a high-level to ensure we are on the same page. If any of the above is a misreading of the approach please let me know. What I think we want to avoid is to show a prompt that does not provide flexibility (even if this exists in the future state). I appreciate my feedback is late and I am happy to reschedule if this allows us to present a unfied approach rather than be pulling from different directions in the meeting.
+
+transcript from meeting with stakeholders:
+And so we want to unlock these accounts. These other accounts over here were added second-half of the year where either Protiviti is doing work and Robert Half isn't. Robert Half is doing work, but Protiviti isn't. We might both have paper there, but we're just not active. Or again, we're trying to unlock the account.
+Thomas, Will (10260) 7 minutes 5 seconds
+And then I'm local here in Winchester, which is the affiliate office of Metro DC. So I want to, I want to bring business into, I want to bring Protiviti into some of the businesses here. Valley Health is an active client. Shenandoah and American Woodmark would be net new pursuits.
+Thomas, Will (10260) 7 minutes 21 seconds
+So what I asked the team to do to start the year was for for GBGE Aviation. So an arm of GE Aerospace that's local here in Metro DCI said, you know, for for Lauren and Angela.
+Thomas, Will (10260) 7 minutes 36 seconds
+Come in here and just give me an overview of the account. I I think this is similar to what you're doing in your in your deep search, but I want to know financial performance, recent in the news type of type of details, who their customers are, where they're located and you know what is it that they do and then I want this.
+Thomas, Will (10260) 7 minutes 56 seconds
+Updated of in the news. So what's latest and greatest? What's happening? I want a repeatable query that people can run to just get the latest and greatest information so that we know what's going on within this account. So who they are, what's going on.
+Thomas, Will (10260) 8 minutes 14 seconds
+With within the account in the news. So that's that was just background probably wouldn't change a heck of a lot minus the in the news stuff. This is where it starts getting important because we all know Protiviti.
+Thomas, Will (10260) 8 minutes 29 seconds
+Wins work through existing relationships. So I want to know who their leadership is and step down. I wanted to traverse our sales force and understand what contacts we have, knowing that our sales force has a lot of contacts that marketing put in there because people showed up to an event or responded to something and I want to know the.
+Thomas, Will (10260) 8 minutes 49 seconds
+Weight of those particular contacts, what relationships we have there, and who at Protiviti has relationships. People move, switch jobs all the time. I need this to be repeatable and to constantly be updating. People should be interacting and updating within Salesforce, but I don't do a good job at that.
+Thomas, Will (10260) 9 minutes 9 seconds
+So that means I don't assume anyone else does a good job at that. I've gone to Carefirst website, Blue Cross of North Carolina, Blue Cross of Tennessee, all these different websites to just look at their leadership pages. Who, who are, who are those leaders? Who do we have relationships with? And then the plus.
+Thomas, Will (10260) 9 minutes 29 seconds
+One would be what is what? What things can you draw from their LinkedIn? What things can you draw from their activity to that can help us help tell us what they're interested in or who they are personally as well. So it kind of a deeper.
+Thomas, Will (10260) 14 minutes 48 seconds
+Additional information and that can kind of. So I have this template which leads me to my second point. I do have this template that I use across IBM, Microsoft, just these accounts that say what am I actively doing when Naomi gave me these four accounts. It's exactly like what am I doing to Danaher?
+Thomas, Will (10260) 15 minutes 8 seconds
+What are we doing at Carefirst? What are we doing at DC Housing Authority? Go across both Protiviti and Robert Half and tell me what we've done at these accounts. Tell me who the people are and all that stuff and and then I can now I can whittle down of how.
+Thomas, Will (10260) 15 minutes 26 seconds
+Again, I can hunt smarter through relationships.
+Wolak, Naomi (10260)
+15 minutes 30 seconds15:30
+Wolak, Naomi (10260) 15 minutes 30 seconds
+Can I pause you there for a second, Will? Because one point I want to ask these guys about is when you're pulling this together, are you able to pull from both Salesforce instances, the Protiviti and the Rubber Half? Because that's part of part of the struggle with that enterprise revenue acceleration program is that.
+Wolak, Naomi (10260) 15 minutes 48 seconds
+I can only see Protiviti, and then I partner with my counterparts on the Robert Half side. They can only see Robert Half. So we're doing all this manual reconciling between the two. That's really ugly and painful. And there's supposed to be this grand plan of having this tool that merges all of that, but I don't know.
+Lyttleton, Benjamin (10260)
+15 minutes 57 seconds15:57
+Lyttleton, Benjamin (10260) 15 minutes 57 seconds
+No.
+
+
+Without any code. I want you to take a far step backwards. As a senior staff level SWE who is also a product manager, owner, etc... how would you go about fulfilling the users needs? Remember that we have access to the system prompts, can help users with prompts, need to give users place to specify parameters, and we can have post processing to both the deep research or the strandard grounding with bing search workflow. The post processing doesnt exist yet on the deep research implementation, but the normal GWBS implementation does have that from the analyst agent!

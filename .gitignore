@@ -1,0 +1,31 @@
+# Never push Reference_Code folder
+Reference_Code/
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.env
+.venv/
+
+# Node (if applicable)
+node_modules/
+
+# Logs
+*.log
