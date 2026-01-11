@@ -1,5 +1,6 @@
 # Never push Reference_Code folder
 Reference_Code/
+StakeholderPlans/
 
 # macOS system files
 .DS_Store
