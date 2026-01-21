@@ -324,4 +324,28 @@ class TestFullFlow:
         with patch("httpx.AsyncClient") as mock_client:
             mock_instance = AsyncMock()
             mock_client.return_value.__aenter__.return_value = mock_instance
-     
+            
+            token_response = MagicMock()
+            token_response.status_code = 200
+            token_response.json.return_value = mock_token_response
+            token_response.raise_for_status = MagicMock()
+            
+            chat_response = MagicMock()
+            chat_response.status_code = 200
+            chat_response.json.return_value = credentials_response
+            chat_response.raise_for_status = MagicMock()
+            
+            mock_instance.post.side_effect = [token_response, chat_response]
+            
+            result = await client.ask(
+                "Find credentials for CMMC assessment",
+                "https://as-assistant-api.azurewebsites.net/assistantapi/api/OmniInterface/asst_xxx"
+            )
+            
+            # Should get JSON response with credentials
+            assert "CMMC Assessment" in result
+            assert "Defense Contractor" in result
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

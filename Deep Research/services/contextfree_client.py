@@ -235,4 +235,60 @@ class ContextFreeClient:
                 return str(response_data["message"])
             
             # Variables array (SK GPT raw format)
-            # Per docs
+            # Per docs: "variables" contains [{"key": "message", "value": "..."}]
+            if "variables" in response_data:
+                variables = response_data["variables"]
+                if isinstance(variables, list):
+                    for var in variables:
+                        if isinstance(var, dict) and var.get("key") == "message":
+                            return str(var.get("value", ""))
+            
+            # Content field (Assistant GPT single object format)
+            if "Content" in response_data:
+                return str(response_data["Content"])
+            if "content" in response_data:
+                return str(response_data["content"])
+        
+        # Fallback: stringify response
+        logger.warning(f"Unexpected response format: {type(response_data)}")
+        return str(response_data)
+    
+    def _extract_from_assistant_array(self, messages: list) -> str:
+        """Extract message from Assistant GPT array format.
+        
+        Per ContextFreeAPI_REPORT.md lines 166-170 and 921-957:
+        - Response is a JSON array of messages
+        - Each message has: Timestamp, Content, Id, etc.
+        - Returns the record with the LATEST Timestamp
+        """
+        if not messages:
+            return ""
+        
+        # Sort by timestamp to get latest
+        # Timestamp format: "2025-01-01T12:05:00Z"
+        try:
+            sorted_messages = sorted(
+                [m for m in messages if isinstance(m, dict) and m.get("Timestamp") or m.get("timestamp")],
+                key=lambda m: m.get("Timestamp") or m.get("timestamp") or "",
+                reverse=True
+            )
+            
+            if sorted_messages:
+                latest = sorted_messages[0]
+                # Extract Content (capital C per docs) or content (lowercase)
+                return str(latest.get("Content") or latest.get("content") or "")
+        except Exception as e:
+            logger.warning(f"Failed to sort assistant messages by timestamp: {e}")
+        
+        # Fallback: return last item's content
+        if messages:
+            last = messages[-1]
+            if isinstance(last, dict):
+                return str(last.get("Content") or last.get("content") or "")
+        
+        return ""
+
+
+class ContextFreeError(Exception):
+    """Error from ContextFree API operations."""
+    pass
