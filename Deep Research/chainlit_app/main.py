@@ -31,8 +31,9 @@ from tools.response_formatter import response_formatter
 from services.company_profiles import load_company_profiles
 from services.prompt_generator import get_prompt_generator, ResearchParameters
 
-# BD Analysis Mode
-from chainlit_app import bd_mode  # Registers BD mode action callbacks
+# BD Analysis enrichment (auto-runs after Deep Research)
+from services.bd_orchestrator import BDOrchestrator
+from models.bd_schemas import BDTrigger, MDReport, MDReportOpportunity
 
 setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -143,6 +144,181 @@ async def handle_error(error: Exception, context: str, user_message: str = "Sorr
     
     # Log additional details for debugging
     logger.debug(f"Error details: {type(error).__name__}: {str(error)}")
+
+# --- BD Analysis enrichment helpers ---
+
+async def enrich_with_bd_analysis(
+    deep_research_response: Dict[str, Any],
+    sector: str,
+    progress_callback = None
+) -> Dict[str, Any]:
+    """Enrich Deep Research output with Credentials validation + ATLAS synthesis.
+    
+    Automatically runs after Deep Research completes:
+    1. Extracts opportunities from DR output
+    2. Queries Credentials Agent for each opportunity
+    3. Synthesizes final report via ATLAS
+    4. Appends results as new section to DR response
+    
+    Args:
+        deep_research_response: Dict from run_deep_research()
+        sector: Industry sector (from GUI form)
+        progress_callback: Optional async callback for progress updates
+        
+    Returns:
+        Enriched response with BD analysis section appended
+    """
+    try:
+        # Convert DR response sections to markdown for BD orchestrator
+        dr_markdown = _format_dr_as_markdown(deep_research_response)
+        
+        if not dr_markdown or len(dr_markdown.strip()) < 100:
+            logger.warning("Deep Research output too short for BD enrichment")
+            return deep_research_response
+        
+        # Build trigger from sector
+        trigger = BDTrigger(
+            sector=sector.replace("_", " ").title() if sector else "General",
+            signals=[],  # Will be inferred from research
+            time_window_days=30
+        )
+        
+        # Progress update
+        if progress_callback:
+            await progress_callback("Extracting opportunities...")
+        
+        # Run BD orchestration
+        orchestrator = BDOrchestrator()
+        
+        async def bd_progress(msg: str):
+            if progress_callback:
+                await progress_callback(f"BD Analysis: {msg}")
+        
+        report = await orchestrator.run(
+            trigger,
+            deep_research_output=dr_markdown,
+            progress_cb=bd_progress
+        )
+        
+        # Append BD section to response
+        bd_section = _format_bd_report_as_section(report)
+        if bd_section:
+            deep_research_response["sections"].append(bd_section)
+            logger.info(f"BD enrichment complete: {len(report.top_opportunities)} opportunities validated")
+        
+    except Exception as e:
+        logger.warning(f"BD enrichment failed (non-fatal): {e}")
+        # Non-fatal - return original response unchanged
+    
+    return deep_research_response
+
+
+def _format_dr_as_markdown(response: Dict[str, Any]) -> str:
+    """Convert Deep Research response dict to markdown for BD orchestrator."""
+    lines = []
+    
+    # Add summary as executive summary
+    summary = response.get("summary", "")
+    if summary:
+        lines.append("# Executive Summary")
+        lines.append(summary)
+        lines.append("")
+    
+    # Add sections
+    for section in response.get("sections", []):
+        title = section.get("title", "Findings")
+        content = section.get("content", "")
+        if content:
+            lines.append(f"## {title}")
+            lines.append(content)
+            lines.append("")
+    
+    # Add citations as sources
+    citations = response.get("citations", [])
+    if citations:
+        lines.append("## Sources")
+        for cite in citations[:20]:  # Limit
+            url = cite.get("url", "")
+            title = cite.get("title", url)
+            if url:
+                lines.append(f"• {title}: {url}")
+        lines.append("")
+    
+    return "\n".join(lines)
+
+
+def _format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
+    """Format MDReport as a section dict for present_enhanced_response."""
+    if not report:
+        return None
+    
+    lines = []
+    
+    # Executive Summary
+    if report.executive_summary:
+        lines.append("### Executive Summary")
+        lines.append(report.executive_summary)
+        lines.append("")
+    
+    # Top Opportunities with Credentials
+    if report.top_opportunities:
+        lines.append("### Validated Opportunities")
+        lines.append("")
+        
+        for i, opp_report in enumerate(report.top_opportunities, 1):
+            opp = opp_report.opportunity
+            status_emoji = {
+                "Validated": "✅",
+                "Partial": "🔶",
+                "No Internal Data": "❓"
+            }.get(opp_report.validation_status, "❓")
+            
+            lines.append(f"**{i}. {opp.title}** {status_emoji}")
+            
+            if opp.agency:
+                lines.append(f"   - Agency: {opp.agency}")
+            if opp.estimated_value:
+                lines.append(f"   - Value: {opp.estimated_value}")
+            if opp.timeline:
+                lines.append(f"   - Timeline: {opp.timeline}")
+            
+            lines.append(f"   - Validation: {opp_report.validation_status}")
+            
+            # Show credentials if any
+            if opp_report.credentials:
+                lines.append("   - **Supporting Credentials:**")
+                for cred in opp_report.credentials[:2]:
+                    if cred.url:
+                        lines.append(f"     - [{cred.title}]({cred.url})")
+                    else:
+                        lines.append(f"     - {cred.title}")
+            lines.append("")
+    
+    # Signals Detected
+    if report.signals_detected:
+        lines.append("### Key Signals Detected")
+        for signal in report.signals_detected[:5]:
+            lines.append(f"• {signal}")
+        lines.append("")
+    
+    # Recommended Actions
+    if report.recommended_actions:
+        lines.append("### Recommended Next Steps")
+        for action in report.recommended_actions[:5]:
+            lines.append(f"• {action}")
+        lines.append("")
+    
+    # Confidence Note
+    if report.confidence_note:
+        lines.append(f"*{report.confidence_note}*")
+    
+    content = "\n".join(lines)
+    
+    return {
+        "title": "🎯 BD Analysis & Credentials Validation",
+        "content": content,
+        "citations": []  # Credentials have their own URLs inline
+    }
 
 # --- Enhanced system integration ---
 
@@ -670,8 +846,6 @@ async def update_mode(action: cl.Action):
     
     # If Deep Research mode selected, show the research parameters form
     if selected == "deep":
-        # Show BD mode option alongside research form
-        await bd_mode.show_bd_mode_selection()
         await show_research_form()
 
 
@@ -879,8 +1053,25 @@ async def on_message(message: cl.Message):
                     progress_callback=progress_callback
                 )
                 
+                # Auto-enrich with BD Analysis (Credentials + ATLAS synthesis)
+                progress_msg.content = f"**Deep Research Complete!** Enriching with Credentials validation..."
+                await progress_msg.update()
+                
+                async def bd_progress_update(msg: str):
+                    try:
+                        progress_msg.content = f"**BD Analysis:** {msg}"
+                        await progress_msg.update()
+                    except:
+                        pass
+                
+                response = await enrich_with_bd_analysis(
+                    response, 
+                    sector=selected_industry,
+                    progress_callback=bd_progress_update
+                )
+                
                 # Final update
-                progress_msg.content = f"**Deep Research Complete!** (Industry: {selected_industry})\n\nFinal Report Ready"
+                progress_msg.content = f"**Analysis Complete!** (Industry: {selected_industry})\n\nFinal Report Ready"
                 await progress_msg.update()
                 
                 await present_enhanced_response(response)
