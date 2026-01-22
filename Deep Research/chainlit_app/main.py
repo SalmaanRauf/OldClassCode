@@ -670,6 +670,8 @@ async def update_mode(action: cl.Action):
     
     # If Deep Research mode selected, show the research parameters form
     if selected == "deep":
+        # Show BD mode option alongside research form
+        await bd_mode.show_bd_mode_selection()
         await show_research_form()
 
 
