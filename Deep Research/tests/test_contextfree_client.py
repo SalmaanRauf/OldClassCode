@@ -234,6 +234,12 @@ class TestErrorHandling:
         
         with pytest.raises(ContextFreeError, match="empty"):
             await client.ask("   ", "https://endpoint.com")
+            
+    @pytest.mark.asyncio
+    async def test_rejects_short_question(self, client):
+        """Should reject questions shorter than 3 characters."""
+        with pytest.raises(ContextFreeError, match="at least 3 characters"):
+            await client.ask("Hi", "https://endpoint.com")
     
     @pytest.mark.asyncio
     async def test_rejects_empty_endpoint(self, client):
