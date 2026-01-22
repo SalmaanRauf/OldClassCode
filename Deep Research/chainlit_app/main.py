@@ -31,6 +31,9 @@ from tools.response_formatter import response_formatter
 from services.company_profiles import load_company_profiles
 from services.prompt_generator import get_prompt_generator, ResearchParameters
 
+# BD Analysis Mode
+from chainlit_app import bd_mode  # Registers BD mode action callbacks
+
 setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
 DEEP_RESEARCH_SESSION_KEY = "deep_research_mode"
