@@ -83,16 +83,16 @@ class ContextFreeClient:
         Required env vars:
             - CONTEXTFREE_API_URL
             - TENANT_ID
-            - AppID (client_id)
+            - CLIENT_ID
             - CLIENT_SECRET
-            - scope
+            - SCOPE
         """
         return cls(
             api_url=os.getenv("CONTEXTFREE_API_URL", ""),
             tenant_id=os.getenv("TENANT_ID", ""),
-            client_id=os.getenv("AppID", ""),
+            client_id=os.getenv("CLIENT_ID", ""),
             client_secret=os.getenv("CLIENT_SECRET", ""),
-            scope=os.getenv("scope", "")
+            scope=os.getenv("SCOPE", "")
         )
     
     async def ask(self, question: str, gpt_endpoint: str) -> str:
@@ -110,6 +110,9 @@ class ContextFreeClient:
         """
         if not question or not question.strip():
             raise ContextFreeError("Question cannot be empty")
+            
+        if len(question.strip()) < 3:
+            raise ContextFreeError("Input must be at least 3 characters")
         
         if not gpt_endpoint:
             raise ContextFreeError("GPT endpoint cannot be empty")

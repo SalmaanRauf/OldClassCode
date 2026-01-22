@@ -100,7 +100,7 @@ async def test_credentials_agent(opportunities):
     print("="*60)
     
     # Check env vars
-    required_vars = ["CONTEXTFREE_API_URL", "TENANT_ID", "AppID", "CLIENT_SECRET", "scope"]
+    required_vars = ["CONTEXTFREE_API_URL", "TENANT_ID", "CLIENT_ID", "CLIENT_SECRET", "SCOPE"]
     missing = [v for v in required_vars if not os.getenv(v)]
     
     if missing:
@@ -149,7 +149,7 @@ async def test_full_orchestration():
     print("TEST 3: Full BD Orchestration")
     print("="*60)
     
-    required_vars = ["CONTEXTFREE_API_URL", "TENANT_ID", "AppID", "CLIENT_SECRET", "scope"]
+    required_vars = ["CONTEXTFREE_API_URL", "TENANT_ID", "CLIENT_ID", "CLIENT_SECRET", "SCOPE"]
     missing = [v for v in required_vars if not os.getenv(v)]
     
     if missing:
