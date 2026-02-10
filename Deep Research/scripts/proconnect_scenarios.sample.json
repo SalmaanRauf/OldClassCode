@@ -1,0 +1,39 @@
+{
+  "scenarios": [
+    {
+      "name": "1_direct_account_success",
+      "account_id": "00130000000BYU2AAO"
+    },
+    {
+      "name": "2_unauthorized_token_diagnostic",
+      "account_id": "00130000000BYU2AAO",
+      "token": "invalid.token.for.negative.test"
+    },
+    {
+      "name": "3_dynamic_company_resolve",
+      "company": "American Express"
+    },
+    {
+      "name": "4_person_match_key_buyers",
+      "company": "Capital One",
+      "person": "Replace With Known Key Buyer"
+    },
+    {
+      "name": "5_person_match_executive_org_chart",
+      "company": "Capital One",
+      "person": "Replace With Known Executive",
+      "department": "C-Suite"
+    },
+    {
+      "name": "6_person_not_found_company_still_resolves",
+      "company": "Capital One",
+      "person": "Definitely Not A Real Person"
+    },
+    {
+      "name": "7_mixed_pass_fail_report",
+      "company": "Capital One",
+      "person": "Replace With Known Executive",
+      "department": "Finance"
+    }
+  ]
+}
