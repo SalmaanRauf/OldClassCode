@@ -1,0 +1,56 @@
+{
+  "run_id": "fbddc97193ad",
+  "timestamp_utc": "2026-02-10T18:57:46.964077+00:00",
+  "inputs_redacted": {
+    "base_url": "https://proconnect.protiviti.com",
+    "account_id": "00130000000BYU2AAO",
+    "search": null,
+    "token_source": "cli",
+    "token_preview": "<redacted>",
+    "extra_header_keys": [],
+    "timeout_seconds": 5
+  },
+  "http_calls": [
+    {
+      "method": "GET",
+      "endpoint": "/api/accounts/00130000000BYU2AAO",
+      "url": "https://proconnect.protiviti.com/api/accounts/00130000000BYU2AAO",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 118,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    }
+  ],
+  "company_resolution": null,
+  "person_resolution": {
+    "status": "not_requested",
+    "match_source": null,
+    "matched_person": null
+  },
+  "account_summary": null,
+  "errors": [
+    "Direct account retrieval failed."
+  ],
+  "pass_fail": {
+    "status": "FAIL",
+    "checks": [
+      {
+        "check": "Direct account retrieval",
+        "status": "FAIL",
+        "http": null,
+        "details": "Network error: [Errno 8] nodename nor servname provided, or not known"
+      }
+    ],
+    "token_health": {
+      "token_preview": "<redacted>",
+      "issued_at_utc": null,
+      "expires_at_utc": null,
+      "seconds_to_expiry": null,
+      "is_expired": null,
+      "is_near_expiry": null,
+      "warnings": [
+        "Token is not JWT-like."
+      ]
+    }
+  }
+}

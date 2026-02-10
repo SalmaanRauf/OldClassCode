@@ -1,0 +1,89 @@
+{
+  "run_id": "fa16b14c59de",
+  "timestamp_utc": "2026-02-10T18:58:00.885130+00:00",
+  "inputs_redacted": {
+    "base_url": "https://proconnect.protiviti.com",
+    "company": "Capital One",
+    "person": "Jane Doe",
+    "department": null,
+    "token_source": "cli",
+    "token_preview": "<redacted>",
+    "extra_header_keys": [],
+    "timeout_seconds": 5
+  },
+  "http_calls": [
+    {
+      "method": "GET",
+      "endpoint": "/api/prospects",
+      "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 27,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    }
+  ],
+  "company_resolution": {
+    "query": "Capital One",
+    "search_status_code": null,
+    "search_success": false,
+    "candidate_count": 0,
+    "candidates": [],
+    "selected_candidate": null,
+    "selected_score": null,
+    "account_fetch_status_code": null,
+    "resolved_account": false
+  },
+  "person_resolution": {
+    "status": "not_found",
+    "match_source": null,
+    "matched_person": null,
+    "checked": {
+      "key_buyers": 0,
+      "executive_team": 0,
+      "department_people": 0,
+      "department_calls": 0
+    },
+    "warnings": [
+      "No account context available for person lookup."
+    ]
+  },
+  "account_summary": null,
+  "errors": [
+    "Prospects search failed for 'Capital One' with status None",
+    "Account resolution failed."
+  ],
+  "pass_fail": {
+    "status": "FAIL",
+    "checks": [
+      {
+        "check": "Prospects search",
+        "status": "FAIL",
+        "http": null,
+        "details": "Search endpoint failed."
+      },
+      {
+        "check": "Account resolution",
+        "status": "FAIL",
+        "http": null,
+        "details": "No account resolved from prospects candidates."
+      },
+      {
+        "check": "Person lookup",
+        "status": "WARN",
+        "http": "-",
+        "details": "Person not found; company context still returned."
+      }
+    ],
+    "token_health": {
+      "token_preview": "<redacted>",
+      "issued_at_utc": null,
+      "expires_at_utc": null,
+      "seconds_to_expiry": null,
+      "is_expired": null,
+      "is_near_expiry": null,
+      "warnings": [
+        "Token is not JWT-like."
+      ]
+    }
+  }
+}

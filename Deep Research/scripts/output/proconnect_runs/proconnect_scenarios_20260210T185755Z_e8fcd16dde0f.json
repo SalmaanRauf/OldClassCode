@@ -1,0 +1,484 @@
+{
+  "run_id": "e8fcd16dde0f",
+  "timestamp_utc": "2026-02-10T18:57:55.348846+00:00",
+  "inputs_redacted": {
+    "base_url": "https://proconnect.protiviti.com",
+    "scenarios_file": "Deep Research/scripts/proconnect_scenarios.sample.json",
+    "scenario_count": 7,
+    "token_source": "cli",
+    "token_preview": "<redacted>",
+    "extra_header_keys": [],
+    "timeout_seconds": 5
+  },
+  "http_calls": [
+    {
+      "method": "GET",
+      "endpoint": "/api/accounts/00130000000BYU2AAO",
+      "url": "https://proconnect.protiviti.com/api/accounts/00130000000BYU2AAO",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 33,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/api/accounts/00130000000BYU2AAO",
+      "url": "https://proconnect.protiviti.com/api/accounts/00130000000BYU2AAO",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 0,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/api/prospects",
+      "url": "https://proconnect.protiviti.com/api/prospects?search='American+Express'",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 0,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/api/prospects",
+      "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 0,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/api/prospects",
+      "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 0,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/api/prospects",
+      "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 0,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    },
+    {
+      "method": "GET",
+      "endpoint": "/api/prospects",
+      "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+      "status_code": null,
+      "success": false,
+      "elapsed_ms": 0,
+      "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+    }
+  ],
+  "company_resolution": {
+    "scenarios_with_company": 5,
+    "resolved_accounts": 0
+  },
+  "person_resolution": {
+    "person_requested": 4,
+    "person_matched": 0,
+    "person_not_found": 4
+  },
+  "account_summary": {
+    "accounts_with_summary": 0
+  },
+  "scenario_results": [
+    {
+      "name": "1_direct_account_success",
+      "status": "FAIL",
+      "checks": [
+        {
+          "check": "Direct account",
+          "status": "FAIL",
+          "http": null,
+          "details": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "errors": [
+        "Direct account call failed."
+      ],
+      "http_calls": [
+        {
+          "method": "GET",
+          "endpoint": "/api/accounts/00130000000BYU2AAO",
+          "url": "https://proconnect.protiviti.com/api/accounts/00130000000BYU2AAO",
+          "status_code": null,
+          "success": false,
+          "elapsed_ms": 33,
+          "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "company_resolution": null,
+      "person_resolution": {
+        "status": "not_requested",
+        "match_source": null,
+        "matched_person": null
+      },
+      "account_summary": null
+    },
+    {
+      "name": "2_unauthorized_token_diagnostic",
+      "status": "FAIL",
+      "checks": [
+        {
+          "check": "Direct account",
+          "status": "FAIL",
+          "http": null,
+          "details": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "errors": [
+        "Direct account call failed."
+      ],
+      "http_calls": [
+        {
+          "method": "GET",
+          "endpoint": "/api/accounts/00130000000BYU2AAO",
+          "url": "https://proconnect.protiviti.com/api/accounts/00130000000BYU2AAO",
+          "status_code": null,
+          "success": false,
+          "elapsed_ms": 0,
+          "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "company_resolution": null,
+      "person_resolution": {
+        "status": "not_requested",
+        "match_source": null,
+        "matched_person": null
+      },
+      "account_summary": null
+    },
+    {
+      "name": "3_dynamic_company_resolve",
+      "status": "FAIL",
+      "checks": [
+        {
+          "check": "Prospects search",
+          "status": "FAIL",
+          "http": null,
+          "details": "Search failed"
+        },
+        {
+          "check": "Person lookup",
+          "status": "PASS",
+          "http": "-",
+          "details": "Not requested"
+        }
+      ],
+      "errors": [
+        "Prospects search failed for 'American Express' with status None",
+        "No account returned from company resolution."
+      ],
+      "http_calls": [
+        {
+          "method": "GET",
+          "endpoint": "/api/prospects",
+          "url": "https://proconnect.protiviti.com/api/prospects?search='American+Express'",
+          "status_code": null,
+          "success": false,
+          "elapsed_ms": 0,
+          "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "company_resolution": {
+        "query": "American Express",
+        "search_status_code": null,
+        "search_success": false,
+        "candidate_count": 0,
+        "candidates": [],
+        "selected_candidate": null,
+        "selected_score": null,
+        "account_fetch_status_code": null,
+        "resolved_account": false
+      },
+      "person_resolution": {
+        "status": "not_requested",
+        "match_source": null,
+        "matched_person": null,
+        "checked": {
+          "key_buyers": 0,
+          "executive_team": 0,
+          "department_people": 0,
+          "department_calls": 0
+        },
+        "warnings": []
+      },
+      "account_summary": null
+    },
+    {
+      "name": "4_person_match_key_buyers",
+      "status": "FAIL",
+      "checks": [
+        {
+          "check": "Prospects search",
+          "status": "FAIL",
+          "http": null,
+          "details": "Search failed"
+        },
+        {
+          "check": "Person lookup",
+          "status": "WARN",
+          "http": "-",
+          "details": "Person not found"
+        }
+      ],
+      "errors": [
+        "Prospects search failed for 'Capital One' with status None",
+        "No account returned from company resolution."
+      ],
+      "http_calls": [
+        {
+          "method": "GET",
+          "endpoint": "/api/prospects",
+          "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+          "status_code": null,
+          "success": false,
+          "elapsed_ms": 0,
+          "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "company_resolution": {
+        "query": "Capital One",
+        "search_status_code": null,
+        "search_success": false,
+        "candidate_count": 0,
+        "candidates": [],
+        "selected_candidate": null,
+        "selected_score": null,
+        "account_fetch_status_code": null,
+        "resolved_account": false
+      },
+      "person_resolution": {
+        "status": "not_found",
+        "match_source": null,
+        "matched_person": null,
+        "checked": {
+          "key_buyers": 0,
+          "executive_team": 0,
+          "department_people": 0,
+          "department_calls": 0
+        },
+        "warnings": [
+          "No account context available for person lookup."
+        ]
+      },
+      "account_summary": null
+    },
+    {
+      "name": "5_person_match_executive_org_chart",
+      "status": "FAIL",
+      "checks": [
+        {
+          "check": "Prospects search",
+          "status": "FAIL",
+          "http": null,
+          "details": "Search failed"
+        },
+        {
+          "check": "Person lookup",
+          "status": "WARN",
+          "http": "-",
+          "details": "Person not found"
+        }
+      ],
+      "errors": [
+        "Prospects search failed for 'Capital One' with status None",
+        "No account returned from company resolution."
+      ],
+      "http_calls": [
+        {
+          "method": "GET",
+          "endpoint": "/api/prospects",
+          "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+          "status_code": null,
+          "success": false,
+          "elapsed_ms": 0,
+          "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "company_resolution": {
+        "query": "Capital One",
+        "search_status_code": null,
+        "search_success": false,
+        "candidate_count": 0,
+        "candidates": [],
+        "selected_candidate": null,
+        "selected_score": null,
+        "account_fetch_status_code": null,
+        "resolved_account": false
+      },
+      "person_resolution": {
+        "status": "not_found",
+        "match_source": null,
+        "matched_person": null,
+        "checked": {
+          "key_buyers": 0,
+          "executive_team": 0,
+          "department_people": 0,
+          "department_calls": 0
+        },
+        "warnings": [
+          "No account context available for person lookup."
+        ]
+      },
+      "account_summary": null
+    },
+    {
+      "name": "6_person_not_found_company_still_resolves",
+      "status": "FAIL",
+      "checks": [
+        {
+          "check": "Prospects search",
+          "status": "FAIL",
+          "http": null,
+          "details": "Search failed"
+        },
+        {
+          "check": "Person lookup",
+          "status": "WARN",
+          "http": "-",
+          "details": "Person not found"
+        }
+      ],
+      "errors": [
+        "Prospects search failed for 'Capital One' with status None",
+        "No account returned from company resolution."
+      ],
+      "http_calls": [
+        {
+          "method": "GET",
+          "endpoint": "/api/prospects",
+          "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+          "status_code": null,
+          "success": false,
+          "elapsed_ms": 0,
+          "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "company_resolution": {
+        "query": "Capital One",
+        "search_status_code": null,
+        "search_success": false,
+        "candidate_count": 0,
+        "candidates": [],
+        "selected_candidate": null,
+        "selected_score": null,
+        "account_fetch_status_code": null,
+        "resolved_account": false
+      },
+      "person_resolution": {
+        "status": "not_found",
+        "match_source": null,
+        "matched_person": null,
+        "checked": {
+          "key_buyers": 0,
+          "executive_team": 0,
+          "department_people": 0,
+          "department_calls": 0
+        },
+        "warnings": [
+          "No account context available for person lookup."
+        ]
+      },
+      "account_summary": null
+    },
+    {
+      "name": "7_mixed_pass_fail_report",
+      "status": "FAIL",
+      "checks": [
+        {
+          "check": "Prospects search",
+          "status": "FAIL",
+          "http": null,
+          "details": "Search failed"
+        },
+        {
+          "check": "Person lookup",
+          "status": "WARN",
+          "http": "-",
+          "details": "Person not found"
+        }
+      ],
+      "errors": [
+        "Prospects search failed for 'Capital One' with status None",
+        "No account returned from company resolution."
+      ],
+      "http_calls": [
+        {
+          "method": "GET",
+          "endpoint": "/api/prospects",
+          "url": "https://proconnect.protiviti.com/api/prospects?search='Capital+One'",
+          "status_code": null,
+          "success": false,
+          "elapsed_ms": 0,
+          "error": "Network error: [Errno 8] nodename nor servname provided, or not known"
+        }
+      ],
+      "company_resolution": {
+        "query": "Capital One",
+        "search_status_code": null,
+        "search_success": false,
+        "candidate_count": 0,
+        "candidates": [],
+        "selected_candidate": null,
+        "selected_score": null,
+        "account_fetch_status_code": null,
+        "resolved_account": false
+      },
+      "person_resolution": {
+        "status": "not_found",
+        "match_source": null,
+        "matched_person": null,
+        "checked": {
+          "key_buyers": 0,
+          "executive_team": 0,
+          "department_people": 0,
+          "department_calls": 0
+        },
+        "warnings": [
+          "No account context available for person lookup."
+        ]
+      },
+      "account_summary": null
+    }
+  ],
+  "errors": [
+    "1_direct_account_success: Direct account call failed.",
+    "2_unauthorized_token_diagnostic: Direct account call failed.",
+    "3_dynamic_company_resolve: Prospects search failed for 'American Express' with status None",
+    "3_dynamic_company_resolve: No account returned from company resolution.",
+    "4_person_match_key_buyers: Prospects search failed for 'Capital One' with status None",
+    "4_person_match_key_buyers: No account returned from company resolution.",
+    "5_person_match_executive_org_chart: Prospects search failed for 'Capital One' with status None",
+    "5_person_match_executive_org_chart: No account returned from company resolution.",
+    "6_person_not_found_company_still_resolves: Prospects search failed for 'Capital One' with status None",
+    "6_person_not_found_company_still_resolves: No account returned from company resolution.",
+    "7_mixed_pass_fail_report: Prospects search failed for 'Capital One' with status None",
+    "7_mixed_pass_fail_report: No account returned from company resolution."
+  ],
+  "pass_fail": {
+    "status": "FAIL",
+    "token_health": {
+      "token_preview": "<redacted>",
+      "issued_at_utc": null,
+      "expires_at_utc": null,
+      "seconds_to_expiry": null,
+      "is_expired": null,
+      "is_near_expiry": null,
+      "warnings": [
+        "Token is not JWT-like."
+      ]
+    },
+    "scenario_status_counts": {
+      "PASS": 0,
+      "WARN": 0,
+      "FAIL": 7
+    }
+  }
+}
