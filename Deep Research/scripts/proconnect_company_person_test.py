@@ -30,6 +30,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--department", default=None, help="Optional department hint for person lookup.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="ProConnect base URL.")
     parser.add_argument("--token", default=None, help="Bearer token (with or without 'Bearer ' prefix).")
+    parser.add_argument(
+        "--token-file",
+        default=None,
+        help="Optional token file path (raw token or 'Bearer <token>'). Defaults to ./token.txt when present.",
+    )
     parser.add_argument("--extra-headers-file", default=None, help="Optional JSON object file for extra request headers.")
     parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT_SECONDS, help="HTTP timeout in seconds.")
     parser.add_argument("--output-dir", default=default_output_dir(), help="Directory for JSON artifacts.")
@@ -42,7 +47,7 @@ def main() -> int:
     errors: List[str] = []
 
     try:
-        token, token_source = resolve_bearer_token(args.token)
+        token, token_source = resolve_bearer_token(args.token, args.token_file)
     except Exception as exc:
         print(f"Token resolution failed: {exc}")
         return 1
@@ -166,6 +171,7 @@ def main() -> int:
             "department": args.department,
             "token_source": token_source,
             "token_preview": redact_token(token),
+            "token_file": args.token_file,
             "extra_header_keys": sorted(extra_headers.keys()),
             "timeout_seconds": args.timeout,
         },

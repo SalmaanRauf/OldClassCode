@@ -21,12 +21,19 @@ All scripts resolve token in this order:
 
 1. CLI flag `--token`
 2. Environment variable `PROCONNECT_BEARER_TOKEN`
-3. Secure terminal prompt (hidden input)
+3. Token file (`--token-file` if provided, otherwise `./token.txt` or script-folder `token.txt` when present)
+4. Secure terminal prompt (hidden input)
 
 You can paste either:
 
 - raw JWT token
 - `Bearer <token>`
+
+If your token is in a file, create `token.txt` in this folder:
+
+```text
+eyJ...<your_jwt>...
+```
 
 The scripts normalize it to `Authorization: Bearer <token>`.
 
@@ -56,6 +63,14 @@ python3 "Deep Research/scripts/proconnect_smoke_test.py" \
   --account-id "00130000000BYU2AAO"
 ```
 
+Using explicit token file:
+
+```bash
+python3 "Deep Research/scripts/proconnect_smoke_test.py" \
+  --account-id "00130000000BYU2AAO" \
+  --token-file "Deep Research/scripts/token.txt"
+```
+
 Optional search add-on:
 
 ```bash
@@ -79,6 +94,12 @@ python3 "Deep Research/scripts/proconnect_company_person_test.py" \
 python3 "Deep Research/scripts/proconnect_scenario_runner.py" \
   --scenarios-file "Deep Research/scripts/proconnect_scenarios.sample.json"
 ```
+
+## Auth Troubleshooting
+
+- `401`: token is invalid/expired/malformed.
+- `403`: token is valid but not authorized for target endpoint/account.
+- Smoke test automatically runs `/api/user` auth check when account call returns `401/403`, which helps distinguish "token rejected globally" vs "account-level access denied".
 
 ## Output Artifacts
 

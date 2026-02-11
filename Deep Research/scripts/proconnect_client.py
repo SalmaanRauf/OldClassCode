@@ -19,6 +19,8 @@ from urllib.request import Request, urlopen
 DEFAULT_BASE_URL = "https://proconnect.protiviti.com"
 DEFAULT_TIMEOUT_SECONDS = 30
 NEAR_EXPIRY_SECONDS = 10 * 60
+DEFAULT_TOKEN_FILE = "token.txt"
+DEFAULT_USER_AGENT = "Mozilla/5.0"
 
 
 class ProConnectClient:
@@ -66,6 +68,10 @@ class ProConnectClient:
             params["size"] = size
         return self._request_json(endpoint, params=params)
 
+    def get_user(self) -> Dict[str, Any]:
+        endpoint = "/api/user"
+        return self._request_json(endpoint)
+
     def _request_json(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = urljoin(self.base_url, endpoint.lstrip("/"))
         if params:
@@ -92,6 +98,12 @@ class ProConnectClient:
             raw_text = exc.read().decode("utf-8", errors="replace")
             parsed_data = _parse_json_or_text(raw_text)
             error_message = f"HTTP {status_code}"
+            if status_code in {401, 403}:
+                error_detail = _extract_error_detail(parsed_data)
+                if error_detail:
+                    error_message = f"{error_message}: {error_detail}"
+                else:
+                    error_message = f"{error_message}: authorization failed"
         except URLError as exc:
             error_message = f"Network error: {exc.reason}"
         except Exception as exc:  # pragma: no cover - defensive
@@ -122,8 +134,9 @@ class ProConnectClient:
 
     def _build_headers(self) -> Dict[str, str]:
         headers = {
-            "Accept": "application/json, text/plain, */*",
+            "Accept": "application/json",
             "Authorization": self.bearer_token,
+            "User-Agent": DEFAULT_USER_AGENT,
         }
         for key, value in self.extra_headers.items():
             if key.lower() == "authorization":
@@ -132,14 +145,30 @@ class ProConnectClient:
         return headers
 
 
-def resolve_bearer_token(cli_token: Optional[str]) -> Tuple[str, str]:
-    """Resolve token by priority: CLI, env, secure prompt."""
+def resolve_bearer_token(cli_token: Optional[str], token_file: Optional[str] = None) -> Tuple[str, str]:
+    """Resolve token by priority: CLI, env, token file, secure prompt."""
     if cli_token and cli_token.strip():
         return normalize_bearer_token(cli_token), "cli"
 
     env_token = os.getenv("PROCONNECT_BEARER_TOKEN")
     if env_token and env_token.strip():
         return normalize_bearer_token(env_token), "env"
+
+    search_paths: List[Path] = []
+    if token_file:
+        search_paths.append(Path(token_file).expanduser())
+    else:
+        search_paths.append(Path.cwd() / DEFAULT_TOKEN_FILE)
+        search_paths.append(Path(__file__).resolve().parent / DEFAULT_TOKEN_FILE)
+
+    for path in search_paths:
+        if path.exists():
+            from_file = read_token_from_file(path)
+            if from_file:
+                return normalize_bearer_token(from_file), f"file:{path}"
+
+    if token_file:
+        raise FileNotFoundError(f"Token file not found: {token_file}")
 
     pasted = getpass.getpass("Paste ProConnect bearer token (input hidden): ").strip()
     if not pasted:
@@ -156,6 +185,14 @@ def normalize_bearer_token(token: str) -> str:
         raw = token[7:].strip()
     else:
         raw = token
+
+    if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in {"'", '"'}:
+        raw = raw[1:-1].strip()
+    if raw.startswith("<") and raw.endswith(">"):
+        raw = raw[1:-1].strip()
+
+    # Token strings should not contain whitespace; collapse accidental wraps/pastes.
+    raw = "".join(raw.split())
 
     if not raw:
         raise ValueError("Bearer token is invalid.")
@@ -240,6 +277,13 @@ def load_extra_headers(path: Optional[str]) -> Dict[str, str]:
     return headers
 
 
+def read_token_from_file(path: Path) -> str:
+    raw = path.read_text(encoding="utf-8")
+    if not raw:
+        raise ValueError(f"Token file is empty: {path}")
+    return raw.strip()
+
+
 def write_json_artifact(output_dir: str, prefix: str, payload: Dict[str, Any]) -> str:
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -318,3 +362,12 @@ def _parse_json_or_text(text: str) -> Any:
         return json.loads(content)
     except json.JSONDecodeError:
         return {"raw_text": content}
+
+
+def _extract_error_detail(payload: Any) -> Optional[str]:
+    if isinstance(payload, dict):
+        for key in ("message", "error_description", "error", "detail", "title"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
