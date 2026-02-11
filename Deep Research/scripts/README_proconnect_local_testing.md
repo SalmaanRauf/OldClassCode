@@ -5,6 +5,7 @@ This folder provides local-only scripts to validate ProConnect retrieval logic w
 - No wiring to `Deep Research/chainlit_app/main.py`.
 - No mutation of existing Deep Research runtime flow.
 - Python standard library only (no new pip dependencies required).
+- Fast Windows copy-paste instructions: `RUN_GUIDE.md`.
 
 ## Files
 
