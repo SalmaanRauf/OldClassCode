@@ -1,0 +1,29 @@
+{
+  "scenarios": [
+    {
+      "name": "stakeholder_direct_account_exact_match_attempt",
+      "payload_type": "stakeholder",
+      "company": "Capital One",
+      "account_id": "00130000000BYU2AAO",
+      "person": "Jenna Jerry",
+      "department": "C-Suite",
+      "expected_status": "WARN"
+    },
+    {
+      "name": "stakeholder_dynamic_company_person_not_found",
+      "payload_type": "stakeholder",
+      "company": "Capital One",
+      "person": "Definitely Not A Real Person",
+      "department": "C-Suite",
+      "expected_status": "WARN"
+    },
+    {
+      "name": "stakeholder_unauthorized_diagnostic",
+      "payload_type": "stakeholder",
+      "company": "Capital One",
+      "person": "Jenna Jerry",
+      "token": "invalid.token.for.negative.test",
+      "expected_status": "FAIL"
+    }
+  ]
+}

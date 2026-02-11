@@ -72,6 +72,44 @@ class ProConnectClient:
         endpoint = "/api/user"
         return self._request_json(endpoint)
 
+    def get_endpoint(
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        retry_on_5xx: int = 0,
+        retry_delay_seconds: float = 0.25,
+        stop_on_auth: bool = False,
+    ) -> Dict[str, Any]:
+        """Generic GET with bounded retries and optional auth short-circuit."""
+        last_response: Dict[str, Any] = {
+            "success": False,
+            "status_code": None,
+            "data": {},
+            "error": "No request attempted.",
+            "url": None,
+            "elapsed_ms": 0,
+            "attempts": 0,
+        }
+
+        max_attempts = max(int(retry_on_5xx), 0) + 1
+        for attempt in range(max_attempts):
+            response = self._request_json(endpoint, params=params)
+            response["attempts"] = attempt + 1
+            last_response = response
+
+            status_code = response.get("status_code")
+            if stop_on_auth and status_code in {401, 403}:
+                response["auth_blocked"] = True
+                return response
+
+            if isinstance(status_code, int) and status_code >= 500 and attempt < max_attempts - 1:
+                time.sleep(retry_delay_seconds * (attempt + 1))
+                continue
+
+            return response
+
+        return last_response
+
     def _request_json(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = urljoin(self.base_url, endpoint.lstrip("/"))
         if params:

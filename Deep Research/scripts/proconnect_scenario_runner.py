@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from proconnect_client import (
     DEFAULT_BASE_URL,
@@ -23,6 +23,7 @@ from proconnect_client import (
     write_json_artifact,
 )
 from proconnect_lookup_logic import build_account_summary, resolve_company_and_account, resolve_person_tiered
+from proconnect_stakeholder_payload import load_research_inputs, run_stakeholder_case
 
 
 def parse_args() -> argparse.Namespace:
@@ -31,6 +32,12 @@ def parse_args() -> argparse.Namespace:
         "--scenarios-file",
         required=True,
         help="Path to JSON file containing a top-level 'scenarios' array (or a direct array).",
+    )
+    parser.add_argument(
+        "--payload-type",
+        choices=["legacy", "stakeholder"],
+        default="legacy",
+        help="Scenario execution mode. Omit to preserve legacy behavior.",
     )
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="ProConnect base URL.")
     parser.add_argument("--token", default=None, help="Bearer token (with or without 'Bearer ' prefix).")
@@ -56,7 +63,7 @@ def load_scenarios(path: str) -> List[Dict[str, Any]]:
     raise ValueError("Scenario file must be a JSON array or object with a 'scenarios' array.")
 
 
-def execute_scenario(
+def execute_legacy_scenario(
     scenario: Dict[str, Any],
     base_url: str,
     base_token: str,
@@ -76,6 +83,7 @@ def execute_scenario(
 
     checks: List[Dict[str, Any]] = []
     errors: List[str] = []
+    warnings: List[str] = []
     company_resolution: Optional[Dict[str, Any]] = None
     account_summary: Optional[Dict[str, Any]] = None
     person_resolution: Dict[str, Any] = {"status": "not_requested", "match_source": None, "matched_person": None}
@@ -160,6 +168,7 @@ def execute_scenario(
                 }
             )
         elif person_status == "not_found":
+            warnings.append("Person not found for requested company.")
             checks.append(
                 {
                     "check": "Person lookup",
@@ -178,24 +187,152 @@ def execute_scenario(
                 }
             )
 
-    statuses = {row.get("status") for row in checks}
-    if "FAIL" in statuses:
-        scenario_status = "FAIL"
-    elif "WARN" in statuses:
-        scenario_status = "WARN"
-    else:
-        scenario_status = "PASS"
-
+    status = derive_status(checks=checks, errors=errors, warnings=warnings)
     return {
         "name": scenario_name,
-        "status": scenario_status,
+        "status": status,
         "checks": checks,
+        "warnings": warnings,
         "errors": errors,
         "http_calls": client.http_calls,
         "company_resolution": company_resolution,
         "person_resolution": person_resolution,
         "account_summary": account_summary,
     }
+
+
+def execute_stakeholder_scenario(
+    scenario: Dict[str, Any],
+    base_url: str,
+    base_token: str,
+    timeout_seconds: int,
+    extra_headers: Dict[str, str],
+) -> Dict[str, Any]:
+    scenario_name = str(scenario.get("name") or "Unnamed Scenario")
+    scenario_token_raw = scenario.get("token")
+    token = base_token if not scenario_token_raw else str(scenario_token_raw)
+
+    client = ProConnectClient(
+        base_url=base_url,
+        bearer_token=token,
+        timeout_seconds=timeout_seconds,
+        extra_headers=extra_headers,
+    )
+
+    company = scenario.get("company")
+    person = scenario.get("person")
+    if not company or not person:
+        checks = [
+            {
+                "check": "Scenario input validation",
+                "status": "FAIL",
+                "http": "-",
+                "details": "Stakeholder scenarios require both 'company' and 'person'.",
+            }
+        ]
+        return {
+            "name": scenario_name,
+            "status": "FAIL",
+            "checks": checks,
+            "warnings": [],
+            "errors": ["Missing required stakeholder scenario fields: company/person."],
+            "http_calls": client.http_calls,
+            "company_resolution": None,
+            "person_resolution": {"status": "not_found"},
+            "account_summary": None,
+            "stakeholder_payload": None,
+        }
+
+    research_inputs = scenario.get("research_inputs")
+    if not isinstance(research_inputs, dict):
+        research_inputs_file = scenario.get("research_inputs_file")
+        if research_inputs_file:
+            try:
+                research_inputs = load_research_inputs(str(research_inputs_file))
+            except Exception as exc:
+                research_inputs = None
+                input_warning = f"Could not load research_inputs_file '{research_inputs_file}': {exc}"
+            else:
+                input_warning = None
+        else:
+            input_warning = None
+    else:
+        input_warning = None
+
+    result = run_stakeholder_case(
+        client=client,
+        company=str(company),
+        person=str(person),
+        department_hint=str(scenario.get("department")) if scenario.get("department") else None,
+        account_id_override=str(scenario.get("account_id")) if scenario.get("account_id") else None,
+        research_inputs=research_inputs,
+        enable_probes=True,
+    )
+
+    if input_warning:
+        result.setdefault("warnings", []).append(input_warning)
+        if result.get("status") == "PASS":
+            result["status"] = "WARN"
+
+    return {
+        "name": scenario_name,
+        "status": result.get("status", "FAIL"),
+        "checks": result.get("checks", []),
+        "warnings": result.get("warnings", []),
+        "errors": result.get("errors", []),
+        "http_calls": client.http_calls,
+        "company_resolution": result.get("company_resolution"),
+        "person_resolution": result.get("person_resolution"),
+        "account_summary": result.get("account_summary"),
+        "stakeholder_payload": result.get("stakeholder_payload"),
+    }
+
+
+def execute_scenario(
+    scenario: Dict[str, Any],
+    base_url: str,
+    base_token: str,
+    timeout_seconds: int,
+    extra_headers: Dict[str, str],
+    default_payload_type: str,
+) -> Dict[str, Any]:
+    payload_type = str(scenario.get("payload_type") or default_payload_type or "legacy").strip().lower()
+    if payload_type == "stakeholder":
+        result = execute_stakeholder_scenario(
+            scenario=scenario,
+            base_url=base_url,
+            base_token=base_token,
+            timeout_seconds=timeout_seconds,
+            extra_headers=extra_headers,
+        )
+    else:
+        result = execute_legacy_scenario(
+            scenario=scenario,
+            base_url=base_url,
+            base_token=base_token,
+            timeout_seconds=timeout_seconds,
+            extra_headers=extra_headers,
+        )
+
+    expected_status = scenario.get("expected_status")
+    expected_value = str(expected_status).upper() if expected_status else None
+    actual_value = str(result.get("status") or "FAIL").upper()
+    status_match = True if expected_value is None else (actual_value == expected_value)
+    unexpected_failure = expected_value is None and actual_value == "FAIL"
+
+    result["payload_type"] = payload_type
+    result["expected_status"] = expected_value
+    result["status_match"] = status_match
+    result["unexpected_failure"] = unexpected_failure
+    return result
+
+
+def derive_status(checks: List[Dict[str, Any]], errors: List[str], warnings: List[str]) -> str:
+    if errors or any(item.get("status") == "FAIL" for item in checks):
+        return "FAIL"
+    if warnings or any(item.get("status") == "WARN" for item in checks):
+        return "WARN"
+    return "PASS"
 
 
 def main() -> int:
@@ -228,6 +365,7 @@ def main() -> int:
     scenario_results: List[Dict[str, Any]] = []
     all_http_calls: List[Dict[str, Any]] = []
     all_errors: List[str] = []
+    all_warnings: List[str] = []
 
     for index, scenario in enumerate(scenarios, start=1):
         result = execute_scenario(
@@ -236,6 +374,7 @@ def main() -> int:
             base_token=token,
             timeout_seconds=args.timeout,
             extra_headers=extra_headers,
+            default_payload_type=args.payload_type,
         )
         scenario_results.append(result)
         all_http_calls.extend(result.get("http_calls", []))
@@ -243,25 +382,33 @@ def main() -> int:
         scenario_name = result.get("name", f"Scenario #{index}")
         for error in result.get("errors", []):
             all_errors.append(f"{scenario_name}: {error}")
+        for warning in result.get("warnings", []):
+            all_warnings.append(f"{scenario_name}: {warning}")
 
     rows_for_console = []
     for result in scenario_results:
         checks = result.get("checks") or []
         failed_checks = sum(1 for check in checks if check.get("status") == "FAIL")
         warn_checks = sum(1 for check in checks if check.get("status") == "WARN")
+        expected_status = result.get("expected_status")
+        expected_label = expected_status if expected_status else "n/a"
+        match_label = "match" if result.get("status_match", True) else "mismatch"
         rows_for_console.append(
             {
                 "check": result.get("name", "Scenario"),
                 "status": result.get("status"),
                 "http": "-",
-                "details": f"fail={failed_checks}, warn={warn_checks}, checks={len(checks)}",
+                "details": f"type={result.get('payload_type')}, expected={expected_label} ({match_label}), fail={failed_checks}, warn={warn_checks}",
             }
         )
 
-    aggregate_statuses = {result.get("status") for result in scenario_results}
-    if "FAIL" in aggregate_statuses:
+    has_mismatch = any(not result.get("status_match", True) for result in scenario_results)
+    has_unexpected_failure = any(result.get("unexpected_failure", False) for result in scenario_results)
+    any_warn = any(result.get("status") == "WARN" for result in scenario_results)
+
+    if has_mismatch or has_unexpected_failure:
         overall_status = "FAIL"
-    elif "WARN" in aggregate_statuses:
+    elif any_warn:
         overall_status = "WARN"
     else:
         overall_status = "PASS"
@@ -281,6 +428,7 @@ def main() -> int:
             "base_url": args.base_url,
             "scenarios_file": str(args.scenarios_file),
             "scenario_count": len(scenarios),
+            "payload_type": args.payload_type,
             "token_source": token_source,
             "token_preview": redact_token(token),
             "token_file": args.token_file,
@@ -301,14 +449,21 @@ def main() -> int:
             "accounts_with_summary": sum(1 for result in scenario_results if result.get("account_summary")),
         },
         "scenario_results": scenario_results,
+        "warnings": all_warnings,
         "errors": all_errors,
         "pass_fail": {
             "status": overall_status,
             "token_health": token_health,
+            "has_status_mismatch": has_mismatch,
+            "has_unexpected_failure": has_unexpected_failure,
             "scenario_status_counts": {
                 "PASS": sum(1 for result in scenario_results if result.get("status") == "PASS"),
                 "WARN": sum(1 for result in scenario_results if result.get("status") == "WARN"),
                 "FAIL": sum(1 for result in scenario_results if result.get("status") == "FAIL"),
+            },
+            "expectation_match_counts": {
+                "matched": sum(1 for result in scenario_results if result.get("status_match", True)),
+                "mismatched": sum(1 for result in scenario_results if not result.get("status_match", True)),
             },
         },
     }
@@ -320,6 +475,8 @@ def main() -> int:
     print_check_table(rows_for_console)
     for warning in token_health.get("warnings", []):
         print(f"Token warning: {warning}")
+    for warning in all_warnings:
+        print(f"Warning: {warning}")
     print(f"\nArtifact: {artifact_path}")
     print(f"Overall: {overall_status}")
 

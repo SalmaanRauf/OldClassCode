@@ -476,3 +476,65 @@ def normalize_text(value: str) -> str:
     value = re.sub(r"[^a-z0-9\s]", " ", value)
     value = re.sub(r"\s+", " ", value)
     return value.strip()
+
+
+def normalize_person_name(value: str) -> str:
+    return normalize_text(value)
+
+
+def exact_name_equals(left: str, right: str) -> bool:
+    return bool(normalize_person_name(left) and normalize_person_name(left) == normalize_person_name(right))
+
+
+def find_exact_person_match(person_name: str, people: Iterable[Any]) -> Optional[Dict[str, Any]]:
+    for item in people:
+        if not isinstance(item, dict):
+            continue
+        candidate_name = full_person_name(item)
+        if not candidate_name:
+            continue
+        if exact_name_equals(person_name, candidate_name):
+            return {
+                "id": item.get("id"),
+                "name": candidate_name,
+                "title": item.get("title"),
+                "department": item.get("department") or item.get("function"),
+                "sfdcJobFunction": item.get("sfdcJobFunction"),
+                "linkedinUrl": item.get("linkedinUrl"),
+                "emailAddress": item.get("emailAddress"),
+                "score": 1.0,
+                "source": item.get("_source"),
+            }
+    return None
+
+
+def top_person_candidates(person_name: str, people: Iterable[Any], top_n: int = 3) -> List[Dict[str, Any]]:
+    ranked: List[Dict[str, Any]] = []
+    seen = set()
+
+    for item in people:
+        if not isinstance(item, dict):
+            continue
+        candidate_name = full_person_name(item)
+        if not candidate_name:
+            continue
+        score = name_match_score(person_name, candidate_name)
+        if score <= 0:
+            continue
+
+        key = (normalize_person_name(candidate_name), normalize_text(str(item.get("title") or "")))
+        if key in seen:
+            continue
+        seen.add(key)
+
+        ranked.append(
+            {
+                "name": candidate_name,
+                "title": item.get("title"),
+                "source": item.get("_source", "unknown"),
+                "score": round(score, 4),
+            }
+        )
+
+    ranked.sort(key=lambda row: (row.get("score", 0.0), row.get("name", "")), reverse=True)
+    return ranked[: max(int(top_n), 0)]
