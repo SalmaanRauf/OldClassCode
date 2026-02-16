@@ -4,7 +4,7 @@ Integration tests for BDOrchestrator.
 Uses mocked components to test the full workflow without live API calls.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from datetime import datetime
 from pathlib import Path
 import json
@@ -23,6 +23,7 @@ from models.bd_schemas import (
     Opportunity,
     DeepResearchOutput,
     CredentialsResponse,
+    CredentialsLookupDiagnostics,
     CredentialMatch,
     MDReport,
     MDReportOpportunity
@@ -100,6 +101,16 @@ def mock_extractor():
 def mock_credentials_agent():
     """Mock CredentialsAgent returning credentials."""
     agent = MagicMock(spec=CredentialsAgent)
+    diagnostics = CredentialsLookupDiagnostics(
+        opportunity_title="CMMC Program",
+        sector="Defense",
+        query_text="full query text",
+        raw_response_text='{"matches":[{"title":"A"}]}',
+        parse_outcome="json_parsed_with_matches",
+        lookup_status="Matched",
+        duration_ms=10.0,
+        match_count=1
+    )
     agent.find_credentials = AsyncMock(return_value=CredentialsResponse(
         opportunity_title="CMMC Program",
         matches=[
@@ -110,7 +121,9 @@ def mock_credentials_agent():
                 url="https://ishare.protiviti.com/cred/123"
             )
         ],
-        no_matches_found=False
+        no_matches_found=False,
+        lookup_status="Matched",
+        diagnostics=diagnostics
     ))
     return agent
 
@@ -130,7 +143,8 @@ def mock_final_analyst():
                     confidence="High"
                 ),
                 credentials=[],
-                validation_status="Validated"
+                validation_status="Validated",
+                credentials_lookup_status="Matched"
             )
         ],
         signals_detected=["CMMC expanding"],
@@ -177,6 +191,9 @@ class TestFullWorkflow:
         assert report is not None
         assert report.trigger_summary == "Defense CMMC analysis"
         assert len(report.top_opportunities) > 0
+        assert report.credentials_evidence
+        assert report.credentials_evidence[0].opportunity_title == "CMMC Program"
+        assert report.credentials_evidence[0].lookup_status == "Matched"
     
     @pytest.mark.asyncio
     async def test_progress_callback_receives_updates(
@@ -260,9 +277,9 @@ class TestParallelCredentials:
         failing_agent = MagicMock(spec=CredentialsAgent)
         failing_agent.find_credentials = AsyncMock(
             side_effect=[
-                CredentialsResponse(opportunity_title="Opp 1", matches=[], no_matches_found=False),
+                CredentialsResponse(opportunity_title="Opp 1", matches=[], no_matches_found=True, lookup_status="No Match"),
                 Exception("API Error"),
-                CredentialsResponse(opportunity_title="Opp 3", matches=[], no_matches_found=True)
+                CredentialsResponse(opportunity_title="Opp 3", matches=[], no_matches_found=True, lookup_status="No Match")
             ]
         )
         
@@ -317,6 +334,13 @@ class TestTraceFiles:
             assert "timestamp" in trace_data
             assert trace_data["trigger"]["sector"] == "Defense"
             assert "duration_seconds" in trace_data
+            assert "credentials_status_counts" in trace_data
+            assert "credentials_diagnostics" in trace_data
+            assert trace_data["credentials_status_counts"]["Matched"] == 1
+            assert trace_data["credentials_status_counts"]["No Match"] == 0
+            assert trace_data["credentials_status_counts"]["Lookup Failed"] == 0
+            assert len(trace_data["credentials_diagnostics"]) == 1
+            assert trace_data["credentials_diagnostics"][0]["query_text"] == "full query text"
     
     @pytest.mark.asyncio
     async def test_trace_includes_errors(
@@ -348,6 +372,9 @@ class TestTraceFiles:
             
             assert len(trace_data["errors"]) > 0
             assert "Test error" in trace_data["errors"][0]
+            assert trace_data["credentials_status_counts"]["Lookup Failed"] == 1
+            assert trace_data["credentials_lookup_failed"] == 1
+            assert trace_data["credentials_diagnostics"][0]["lookup_status"] == "Lookup Failed"
 
 
 # =============================================================================

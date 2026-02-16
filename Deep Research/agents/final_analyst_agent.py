@@ -17,6 +17,7 @@ from models.bd_schemas import (
     BDTrigger,
     DeepResearchOutput,
     CredentialsResponse,
+    CredentialsLookupDiagnostics,
     MDReport,
     MDReportOpportunity,
     Opportunity,
@@ -157,7 +158,9 @@ class FinalAnalystAgent:
                     {"title": m.title, "value_provided": m.value_provided, "url": m.url}
                     for m in resp.matches[:3]
                 ],
-                "no_matches_found": resp.no_matches_found
+                "no_matches_found": resp.no_matches_found,
+                "lookup_status": resp.lookup_status,
+                "failure_reason": resp.failure_reason
             }
         
         return {
@@ -198,6 +201,23 @@ class FinalAnalystAgent:
                         value_provided="",
                         url=cred_data.get("url", "")
                     ))
+
+                source_title = (original_opp.title if original_opp else opp_data.get("title", ""))
+                source_response = credentials.get(source_title, credentials.get(opp_data.get("title", ""), None))
+                lookup_status = source_response.lookup_status if source_response else "No Match"
+                if not cred_matches and source_response and source_response.matches:
+                    cred_matches = source_response.matches[:2]
+
+                validation_status = opp_data.get("validation_status", "No Internal Data")
+                if validation_status not in ("Validated", "Partial", "No Internal Data"):
+                    validation_status = "No Internal Data"
+
+                if lookup_status == "Matched":
+                    if validation_status == "No Internal Data":
+                        validation_status = "Validated" if len(cred_matches) >= 2 else "Partial"
+                else:
+                    # No Match and Lookup Failed must not be represented as validated.
+                    validation_status = "No Internal Data"
                 
                 top_opps.append(MDReportOpportunity(
                     opportunity=original_opp or Opportunity(
@@ -208,7 +228,8 @@ class FinalAnalystAgent:
                         confidence="Medium"
                     ),
                     credentials=cred_matches,
-                    validation_status=opp_data.get("validation_status", "No Internal Data")
+                    validation_status=validation_status,
+                    credentials_lookup_status=lookup_status
                 ))
             
             return MDReport(
@@ -218,7 +239,8 @@ class FinalAnalystAgent:
                 signals_detected=data.get("signals_detected", [])[:5],
                 recommended_actions=data.get("recommended_actions", [])[:5],
                 generated_at=datetime.now(),
-                confidence_note=data.get("confidence_note", "")
+                confidence_note=data.get("confidence_note", ""),
+                credentials_evidence=self._build_credentials_evidence(credentials)
             )
             
         except Exception as e:
@@ -272,26 +294,103 @@ class FinalAnalystAgent:
             cred_resp = credentials.get(opp.title)
             validation = "No Internal Data"
             cred_matches = []
+            lookup_status = "No Match"
             
-            if cred_resp and cred_resp.matches:
-                validation = "Validated" if len(cred_resp.matches) >= 2 else "Partial"
-                cred_matches = cred_resp.matches[:2]
+            if cred_resp:
+                lookup_status = cred_resp.lookup_status
+                if cred_resp.lookup_status == "Matched" and cred_resp.matches:
+                    validation = "Validated" if len(cred_resp.matches) >= 2 else "Partial"
+                    cred_matches = cred_resp.matches[:2]
             
             top_opps.append(MDReportOpportunity(
                 opportunity=opp,
                 credentials=cred_matches,
-                validation_status=validation
+                validation_status=validation,
+                credentials_lookup_status=lookup_status
             ))
         
         return MDReport(
             trigger_summary=f"{trigger.sector} research with {', '.join(trigger.signals)} signals",
-            executive_summary=research.executive_summary or "Analysis complete. See opportunities below.",
+            executive_summary=self._build_three_block_summary(research, credentials),
             top_opportunities=top_opps,
             signals_detected=research.signals_detected[:5],
             recommended_actions=research.recommended_actions[:5],
             generated_at=datetime.now(),
-            confidence_note="Report generated with fallback logic due to synthesis error."
+            confidence_note="Report generated with fallback logic due to synthesis error.",
+            credentials_evidence=self._build_credentials_evidence(credentials)
         )
+
+    def _build_three_block_summary(
+        self,
+        research: DeepResearchOutput,
+        credentials: Dict[str, CredentialsResponse]
+    ) -> str:
+        """Build fixed-format summary with deep research + credentials + combined actions."""
+        counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
+        for response in credentials.values():
+            if response.lookup_status in counts:
+                counts[response.lookup_status] += 1
+            else:
+                counts["Lookup Failed"] += 1
+
+        deep_research_text = research.executive_summary or "No deep research summary was available."
+        credentials_lines = [
+            f"- Matched opportunities: {counts['Matched']}",
+            f"- No-match opportunities: {counts['No Match']}",
+            f"- Lookup failures: {counts['Lookup Failed']}",
+        ]
+        if counts["Lookup Failed"] > 0:
+            failed_titles = [title for title, resp in credentials.items() if resp.lookup_status == "Lookup Failed"]
+            credentials_lines.append(f"- Failed lookups: {', '.join(failed_titles[:5])}")
+
+        combined_lines = []
+        if research.recommended_actions:
+            combined_lines.extend(f"- {action}" for action in research.recommended_actions[:3])
+        else:
+            combined_lines.append("- Continue targeted opportunity monitoring and refresh signals weekly.")
+        if counts["Lookup Failed"] > 0:
+            combined_lines.append("- Resolve credentials lookup failures before final MD-ready validation.")
+        if counts["No Match"] > 0:
+            combined_lines.append("- Prioritize opportunities with stronger internal proof or develop supporting credential narratives.")
+
+        return "\n".join(
+            [
+                "Deep Research Findings",
+                deep_research_text,
+                "",
+                "Credentials Agent Findings",
+                *credentials_lines,
+                "",
+                "Combined Report & Action Items",
+                *combined_lines
+            ]
+        )
+
+    def _build_credentials_evidence(
+        self,
+        credentials: Dict[str, CredentialsResponse]
+    ) -> list[CredentialsLookupDiagnostics]:
+        """Normalize credentials diagnostics for report rendering."""
+        evidence: list[CredentialsLookupDiagnostics] = []
+        for title, response in credentials.items():
+            if response.diagnostics:
+                evidence.append(response.diagnostics)
+                continue
+
+            evidence.append(
+                CredentialsLookupDiagnostics(
+                    opportunity_title=title,
+                    sector="",
+                    query_text="",
+                    raw_response_text="",
+                    parse_outcome="diagnostics_missing",
+                    lookup_status=response.lookup_status,
+                    error_message=response.failure_reason,
+                    duration_ms=0.0,
+                    match_count=len(response.matches)
+                )
+            )
+        return evidence
     
     def _get_fallback_prompt(self) -> str:
         """Fallback prompt if file not found."""

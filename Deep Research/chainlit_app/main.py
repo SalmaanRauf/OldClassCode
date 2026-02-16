@@ -33,6 +33,7 @@ from services.prompt_generator import get_prompt_generator, ResearchParameters
 
 # BD Analysis enrichment (auto-runs after Deep Research)
 from services.bd_orchestrator import BDOrchestrator
+from services.bd_report_formatter import format_bd_report_as_section
 from models.bd_schemas import BDTrigger, MDReport, MDReportOpportunity
 
 setup_logging(level=logging.INFO)
@@ -42,6 +43,7 @@ INDUSTRY_PROMPT_SESSION_KEY = "industry_prompt"
 RESEARCH_PARAMS_SESSION_KEY = "research_params"
 DEFAULT_MODE = "standard"
 DEFAULT_INDUSTRY = "general"
+BD_TRACES_DIR = Path(__file__).parent.parent / "traces"
 
 # --- Input validation helpers ---
 
@@ -187,8 +189,13 @@ async def enrich_with_bd_analysis(
         if progress_callback:
             await progress_callback("Extracting opportunities...")
         
-        # Run BD orchestration
-        orchestrator = BDOrchestrator()
+        # Run BD orchestration with trace persistence (non-fatal if unavailable)
+        try:
+            BD_TRACES_DIR.mkdir(parents=True, exist_ok=True)
+        except Exception as trace_err:
+            logger.warning(f"Could not prepare BD traces directory '{BD_TRACES_DIR}': {trace_err}")
+
+        orchestrator = BDOrchestrator(traces_dir=BD_TRACES_DIR)
         
         async def bd_progress(msg: str):
             if progress_callback:
@@ -249,76 +256,7 @@ def _format_dr_as_markdown(response: Dict[str, Any]) -> str:
 
 def _format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
     """Format MDReport as a section dict for present_enhanced_response."""
-    if not report:
-        return None
-    
-    lines = []
-    
-    # Executive Summary
-    if report.executive_summary:
-        lines.append("### Executive Summary")
-        lines.append(report.executive_summary)
-        lines.append("")
-    
-    # Top Opportunities with Credentials
-    if report.top_opportunities:
-        lines.append("### Validated Opportunities")
-        lines.append("")
-        
-        for i, opp_report in enumerate(report.top_opportunities, 1):
-            opp = opp_report.opportunity
-            status_emoji = {
-                "Validated": "✅",
-                "Partial": "🔶",
-                "No Internal Data": "❓"
-            }.get(opp_report.validation_status, "❓")
-            
-            lines.append(f"**{i}. {opp.title}** {status_emoji}")
-            
-            if opp.agency:
-                lines.append(f"   - Agency: {opp.agency}")
-            if opp.estimated_value:
-                lines.append(f"   - Value: {opp.estimated_value}")
-            if opp.timeline:
-                lines.append(f"   - Timeline: {opp.timeline}")
-            
-            lines.append(f"   - Validation: {opp_report.validation_status}")
-            
-            # Show credentials if any
-            if opp_report.credentials:
-                lines.append("   - **Supporting Credentials:**")
-                for cred in opp_report.credentials[:2]:
-                    if cred.url:
-                        lines.append(f"     - [{cred.title}]({cred.url})")
-                    else:
-                        lines.append(f"     - {cred.title}")
-            lines.append("")
-    
-    # Signals Detected
-    if report.signals_detected:
-        lines.append("### Key Signals Detected")
-        for signal in report.signals_detected[:5]:
-            lines.append(f"• {signal}")
-        lines.append("")
-    
-    # Recommended Actions
-    if report.recommended_actions:
-        lines.append("### Recommended Next Steps")
-        for action in report.recommended_actions[:5]:
-            lines.append(f"• {action}")
-        lines.append("")
-    
-    # Confidence Note
-    if report.confidence_note:
-        lines.append(f"*{report.confidence_note}*")
-    
-    content = "\n".join(lines)
-    
-    return {
-        "title": "🎯 BD Analysis & Credentials Validation",
-        "content": content,
-        "citations": []  # Credentials have their own URLs inline
-    }
+    return format_bd_report_as_section(report)
 
 # --- Enhanced system integration ---
 

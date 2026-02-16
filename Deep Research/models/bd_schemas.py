@@ -90,6 +90,9 @@ class DeepResearchOutput(BaseModel):
 # Credentials Agent
 # =============================================================================
 
+LookupStatus = Literal["Matched", "No Match", "Lookup Failed"]
+
+
 class CredentialMatch(BaseModel):
     """Single credential from Protiviti's internal database.
     
@@ -117,6 +120,71 @@ class CredentialsResponse(BaseModel):
     opportunity_title: str = Field(..., description="The opportunity being validated")
     matches: List[CredentialMatch] = Field(default_factory=list, description="Matching credentials")
     no_matches_found: bool = Field(False, description="True if no relevant credentials exist")
+    lookup_status: LookupStatus = Field(
+        "No Match",
+        description="Explicit lookup result classification"
+    )
+    failure_reason: Optional[str] = Field(
+        None,
+        description="Failure reason when lookup_status is 'Lookup Failed'"
+    )
+    diagnostics: Optional["CredentialsLookupDiagnostics"] = Field(
+        None,
+        description="Full diagnostics for credentials lookup"
+    )
+
+    def __init__(self, **data):
+        super().__init__(**data)
+        self._sync_legacy_fields()
+
+    def _sync_legacy_fields(self) -> None:
+        """Keep legacy flags compatible with explicit lookup status."""
+        if self.lookup_status == "No Match" and self.matches:
+            # Backward compatibility for older call sites that populated matches
+            # without setting explicit lookup_status.
+            self.lookup_status = "Matched"
+
+        if self.lookup_status == "Matched":
+            if not self.matches:
+                self.lookup_status = "No Match"
+                self.no_matches_found = True
+            else:
+                self.no_matches_found = False
+                self.failure_reason = None
+        elif self.lookup_status == "No Match":
+            self.no_matches_found = True
+            self.failure_reason = None
+        else:
+            self.no_matches_found = True
+            if not self.failure_reason:
+                self.failure_reason = "Credentials lookup failed."
+
+        if self.diagnostics:
+            self.diagnostics.lookup_status = self.lookup_status
+            self.diagnostics.match_count = len(self.matches)
+            if self.lookup_status == "Lookup Failed":
+                self.diagnostics.error_message = self.failure_reason or self.diagnostics.error_message
+
+
+class CredentialsLookupDiagnostics(BaseModel):
+    """Per-opportunity diagnostics for Credentials Agent telemetry."""
+
+    opportunity_title: str = Field(..., description="Opportunity title sent to credentials agent")
+    sector: str = Field("", description="Sector context passed to credentials agent")
+    query_text: str = Field("", description="Full rendered prompt/query sent to credentials agent")
+    raw_response_text: str = Field("", description="Raw unparsed response from credentials agent")
+    parse_outcome: str = Field("", description="Parser outcome (json_parsed/no_match_text/lookup_failed/etc)")
+    lookup_status: LookupStatus = Field("No Match", description="Final lookup classification")
+    error_type: Optional[str] = Field(None, description="Error type if lookup failed")
+    error_message: Optional[str] = Field(None, description="Error message if lookup failed")
+    duration_ms: float = Field(0.0, description="Lookup duration in milliseconds")
+    match_count: int = Field(0, description="Number of parsed credential matches")
+
+
+try:  # pragma: no cover - harmless when pydantic is unavailable
+    CredentialsResponse.model_rebuild()
+except Exception:
+    pass
 
 
 # =============================================================================
@@ -133,6 +201,10 @@ class MDReportOpportunity(BaseModel):
     validation_status: Literal["Validated", "Partial", "No Internal Data"] = Field(
         "No Internal Data", 
         description="Whether opportunity is validated by internal credentials"
+    )
+    credentials_lookup_status: LookupStatus = Field(
+        "No Match",
+        description="Explicit status of credentials lookup for this opportunity"
     )
 
 
@@ -157,6 +229,10 @@ class MDReport(BaseModel):
     recommended_actions: List[str] = Field(default_factory=list, description="3-5 actionable next steps")
     generated_at: datetime = Field(default_factory=datetime.now, description="Report generation timestamp")
     confidence_note: str = Field("", description="Overall confidence assessment")
+    credentials_evidence: List[CredentialsLookupDiagnostics] = Field(
+        default_factory=list,
+        description="Full credentials diagnostics to render in UI/report"
+    )
 
 
 # =============================================================================
@@ -175,6 +251,10 @@ class BDContext(BaseModel):
     credentials_results: Dict[str, CredentialsResponse] = Field(
         default_factory=dict, 
         description="Credentials per opportunity title"
+    )
+    credentials_diagnostics: Dict[str, CredentialsLookupDiagnostics] = Field(
+        default_factory=dict,
+        description="Credentials diagnostics per opportunity title"
     )
     final_report: Optional[MDReport] = Field(None, description="Final synthesized report")
     trace: List[str] = Field(default_factory=list, description="Execution trace log")

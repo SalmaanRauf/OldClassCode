@@ -13,13 +13,15 @@ Based on the Credentials Agent identity from NextSteps_POC.md:
 import os
 import json
 import logging
+from time import perf_counter
 from typing import Optional, List
 
 from services.contextfree_client import ContextFreeClient, ContextFreeError
 from models.bd_schemas import (
     Opportunity,
     CredentialMatch,
-    CredentialsResponse
+    CredentialsResponse,
+    CredentialsLookupDiagnostics
 )
 
 logger = logging.getLogger(__name__)
@@ -131,6 +133,8 @@ class CredentialsAgent:
         Returns:
             CredentialsResponse with matching credentials or no_matches_found=True
         """
+        start_time = perf_counter()
+
         # Build query from template
         query = self._build_query(opportunity, sector)
         
@@ -139,22 +143,32 @@ class CredentialsAgent:
             raw_response = await self.client.ask(query, self.gpt_endpoint)
             
             # Parse response
-            return self._parse_response(raw_response, opportunity.title)
+            duration_ms = (perf_counter() - start_time) * 1000
+            return self._parse_response(
+                raw_response,
+                opportunity.title,
+                sector=sector,
+                query_text=query,
+                duration_ms=duration_ms
+            )
             
         except ContextFreeError as e:
             logger.error(f"Credentials lookup failed for '{opportunity.title}': {e}")
-            # Return graceful failure
-            return CredentialsResponse(
+            return self._build_failure_response(
                 opportunity_title=opportunity.title,
-                matches=[],
-                no_matches_found=True
+                sector=sector,
+                query_text=query,
+                error=e,
+                duration_ms=(perf_counter() - start_time) * 1000
             )
         except Exception as e:
             logger.exception(f"Unexpected error in credentials lookup: {e}")
-            return CredentialsResponse(
+            return self._build_failure_response(
                 opportunity_title=opportunity.title,
-                matches=[],
-                no_matches_found=True
+                sector=sector,
+                query_text=query,
+                error=e,
+                duration_ms=(perf_counter() - start_time) * 1000
             )
     
     def _build_query(self, opportunity: Opportunity, sector: str) -> str:
@@ -184,16 +198,35 @@ class CredentialsAgent:
             requirements=requirements_str
         )
     
-    def _parse_response(self, raw: str, opportunity_title: str) -> CredentialsResponse:
+    def _parse_response(
+        self,
+        raw: str,
+        opportunity_title: str,
+        sector: str = "General",
+        query_text: str = "",
+        duration_ms: float = 0.0
+    ) -> CredentialsResponse:
         """Parse GPT response into CredentialsResponse.
         
         Handles both JSON responses and natural language fallback.
         """
         if not raw or not raw.strip():
+            diagnostics = CredentialsLookupDiagnostics(
+                opportunity_title=opportunity_title,
+                sector=sector,
+                query_text=query_text,
+                raw_response_text=raw or "",
+                parse_outcome="empty_response",
+                lookup_status="No Match",
+                duration_ms=duration_ms,
+                match_count=0
+            )
             return CredentialsResponse(
                 opportunity_title=opportunity_title,
                 matches=[],
-                no_matches_found=True
+                no_matches_found=True,
+                lookup_status="No Match",
+                diagnostics=diagnostics
             )
         
         # Try to parse as JSON
@@ -219,30 +252,107 @@ class CredentialsAgent:
                 except Exception as e:
                     logger.warning(f"Failed to parse credential match: {e}")
                     continue
-            
+
+            has_matches = len(matches) > 0
+            lookup_status = "Matched" if has_matches else "No Match"
+            parse_outcome = "json_parsed_with_matches" if has_matches else "json_parsed_no_matches"
+
+            if data.get("no_matches_found", False):
+                parse_outcome = "json_explicit_no_match"
+
+            diagnostics = CredentialsLookupDiagnostics(
+                opportunity_title=opportunity_title,
+                sector=sector,
+                query_text=query_text,
+                raw_response_text=raw,
+                parse_outcome=parse_outcome,
+                lookup_status=lookup_status,
+                duration_ms=duration_ms,
+                match_count=len(matches)
+            )
+
             return CredentialsResponse(
                 opportunity_title=opportunity_title,
                 matches=matches,
-                no_matches_found=data.get("no_matches_found", len(matches) == 0)
+                no_matches_found=data.get("no_matches_found", len(matches) == 0),
+                lookup_status=lookup_status,
+                diagnostics=diagnostics
             )
             
         except json.JSONDecodeError:
             # Fallback: check for "no matching credentials" in natural language
             raw_lower = raw.lower()
             if "no matching" in raw_lower or "no relevant" in raw_lower or "could not find" in raw_lower:
+                diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_title=opportunity_title,
+                    sector=sector,
+                    query_text=query_text,
+                    raw_response_text=raw,
+                    parse_outcome="natural_language_no_match",
+                    lookup_status="No Match",
+                    duration_ms=duration_ms,
+                    match_count=0
+                )
                 return CredentialsResponse(
                     opportunity_title=opportunity_title,
                     matches=[],
-                    no_matches_found=True
+                    no_matches_found=True,
+                    lookup_status="No Match",
+                    diagnostics=diagnostics
                 )
             
             # Can't parse - log and return empty
             logger.warning(f"Could not parse credentials response: {raw[:200]}...")
+            diagnostics = CredentialsLookupDiagnostics(
+                opportunity_title=opportunity_title,
+                sector=sector,
+                query_text=query_text,
+                raw_response_text=raw,
+                parse_outcome="json_parse_error",
+                lookup_status="Lookup Failed",
+                error_type="JSONDecodeError",
+                error_message="Could not parse credentials response as JSON.",
+                duration_ms=duration_ms,
+                match_count=0
+            )
             return CredentialsResponse(
                 opportunity_title=opportunity_title,
                 matches=[],
-                no_matches_found=True
+                no_matches_found=True,
+                lookup_status="Lookup Failed",
+                failure_reason="Could not parse credentials response as JSON.",
+                diagnostics=diagnostics
             )
+
+    def _build_failure_response(
+        self,
+        opportunity_title: str,
+        sector: str,
+        query_text: str,
+        error: Exception,
+        duration_ms: float
+    ) -> CredentialsResponse:
+        """Build a deterministic lookup failure response with diagnostics."""
+        diagnostics = CredentialsLookupDiagnostics(
+            opportunity_title=opportunity_title,
+            sector=sector,
+            query_text=query_text,
+            raw_response_text="",
+            parse_outcome="lookup_failed",
+            lookup_status="Lookup Failed",
+            error_type=type(error).__name__,
+            error_message=str(error),
+            duration_ms=duration_ms,
+            match_count=0
+        )
+        return CredentialsResponse(
+            opportunity_title=opportunity_title,
+            matches=[],
+            no_matches_found=True,
+            lookup_status="Lookup Failed",
+            failure_reason=str(error),
+            diagnostics=diagnostics
+        )
     
     def _extract_json(self, text: str) -> str:
         """Extract JSON from text, handling markdown code blocks."""

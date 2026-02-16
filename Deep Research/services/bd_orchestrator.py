@@ -13,7 +13,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime
-from dataclasses import dataclass, field
 from typing import Optional, Callable, Dict, List, Any
 from pathlib import Path
 
@@ -21,6 +20,7 @@ from models.bd_schemas import (
     BDTrigger,
     DeepResearchOutput,
     CredentialsResponse,
+    CredentialsLookupDiagnostics,
     MDReport,
     BDContext
 )
@@ -120,9 +120,19 @@ class BDOrchestrator:
                 trigger.sector,
                 ctx
             )
-            
-            matched = sum(1 for r in ctx.credentials_results.values() if not r.no_matches_found)
-            ctx.trace.append(f"Credentials: {matched}/{len(top_opportunities)} matched")
+
+            ctx.credentials_diagnostics = self._collect_credentials_diagnostics(
+                top_opportunities,
+                trigger.sector,
+                ctx.credentials_results
+            )
+            status_counts = self._count_lookup_statuses(ctx.credentials_results)
+            ctx.trace.append(
+                "Credentials: "
+                f"matched={status_counts['Matched']}, "
+                f"no_match={status_counts['No Match']}, "
+                f"failed={status_counts['Lookup Failed']}"
+            )
             
             # Step 4: Synthesize final report
             await self._notify(progress_cb, "Synthesizing MD Report...")
@@ -131,6 +141,7 @@ class BDOrchestrator:
                 ctx.parsed_research,
                 ctx.credentials_results
             )
+            self._attach_credentials_evidence(ctx.final_report, ctx.credentials_results, ctx.credentials_diagnostics)
             ctx.trace.append("Synthesis complete")
             
             # Save trace
@@ -199,15 +210,92 @@ class BDOrchestrator:
         for opp, response in zip(opportunities, responses):
             if isinstance(response, Exception):
                 ctx.errors.append(f"Credentials lookup failed for {opp.title}: {response}")
+                diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_title=opp.title,
+                    sector=sector,
+                    query_text="",
+                    raw_response_text="",
+                    parse_outcome="lookup_failed_in_parallel",
+                    lookup_status="Lookup Failed",
+                    error_type=type(response).__name__,
+                    error_message=str(response),
+                    duration_ms=0.0,
+                    match_count=0
+                )
                 results[opp.title] = CredentialsResponse(
                     opportunity_title=opp.title,
                     matches=[],
-                    no_matches_found=True
+                    no_matches_found=True,
+                    lookup_status="Lookup Failed",
+                    failure_reason=str(response),
+                    diagnostics=diagnostics
                 )
             else:
                 results[opp.title] = response
         
         return results
+
+    def _count_lookup_statuses(self, results: Dict[str, CredentialsResponse]) -> Dict[str, int]:
+        """Count lookup statuses for trace summaries."""
+        counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
+        for response in results.values():
+            status = response.lookup_status
+            if status not in counts:
+                status = "Lookup Failed"
+            counts[status] += 1
+        return counts
+
+    def _collect_credentials_diagnostics(
+        self,
+        opportunities: List[Any],
+        sector: str,
+        results: Dict[str, CredentialsResponse]
+    ) -> Dict[str, CredentialsLookupDiagnostics]:
+        """Collect diagnostics for all looked-up opportunities."""
+        diagnostics: Dict[str, CredentialsLookupDiagnostics] = {}
+        for opp in opportunities:
+            response = results.get(opp.title)
+            if response and response.diagnostics:
+                diagnostics[opp.title] = response.diagnostics
+                continue
+            lookup_status = response.lookup_status if response else "Lookup Failed"
+            diagnostics[opp.title] = CredentialsLookupDiagnostics(
+                opportunity_title=opp.title,
+                sector=sector,
+                query_text="",
+                raw_response_text="",
+                parse_outcome="diagnostics_missing",
+                lookup_status=lookup_status,
+                error_message=response.failure_reason if response else "Missing credentials response.",
+                duration_ms=0.0,
+                match_count=len(response.matches) if response else 0
+            )
+        return diagnostics
+
+    def _attach_credentials_evidence(
+        self,
+        report: MDReport,
+        credentials_results: Dict[str, CredentialsResponse],
+        diagnostics: Dict[str, CredentialsLookupDiagnostics]
+    ) -> None:
+        """Attach explicit credentials evidence and lookup statuses to the final report."""
+        report.credentials_evidence = list(diagnostics.values())
+        for opp_report in report.top_opportunities:
+            title = opp_report.opportunity.title
+            cred_resp = credentials_results.get(title)
+            if not cred_resp:
+                continue
+
+            opp_report.credentials_lookup_status = cred_resp.lookup_status
+
+            if cred_resp.lookup_status == "Matched":
+                if not opp_report.credentials:
+                    opp_report.credentials = cred_resp.matches[:2]
+                if opp_report.validation_status == "No Internal Data":
+                    opp_report.validation_status = "Validated" if len(cred_resp.matches) >= 2 else "Partial"
+            else:
+                # Preserve legacy validation labels while surfacing explicit status separately.
+                opp_report.validation_status = "No Internal Data"
     
     def _save_trace(self, ctx: BDContext, duration: float):
         """Save execution trace to file."""
@@ -231,10 +319,16 @@ class BDOrchestrator:
                 "deep_research_length": len(ctx.deep_research_raw or ""),
                 "opportunities_extracted": len(ctx.parsed_research.opportunities) if ctx.parsed_research else 0,
                 "credentials_lookups": len(ctx.credentials_results),
-                "credentials_matched": sum(
-                    1 for r in ctx.credentials_results.values() 
-                    if not r.no_matches_found
+                "credentials_matched": sum(1 for r in ctx.credentials_results.values() if r.lookup_status == "Matched"),
+                "credentials_no_match": sum(1 for r in ctx.credentials_results.values() if r.lookup_status == "No Match"),
+                "credentials_lookup_failed": sum(
+                    1 for r in ctx.credentials_results.values() if r.lookup_status == "Lookup Failed"
                 ),
+                "credentials_status_counts": self._count_lookup_statuses(ctx.credentials_results),
+                "credentials_diagnostics": [
+                    diag.model_dump() if hasattr(diag, "model_dump") else diag.__dict__
+                    for diag in ctx.credentials_diagnostics.values()
+                ],
                 "trace": ctx.trace,
                 "errors": ctx.errors,
                 "duration_seconds": duration

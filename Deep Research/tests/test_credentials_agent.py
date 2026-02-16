@@ -4,16 +4,16 @@ Unit tests for CredentialsAgent.
 All tests use mocked responses (no live API calls).
 """
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock
 import json
 
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents.credentials_agent import CredentialsAgent, CREDENTIALS_QUERY_TEMPLATE
+from agents.credentials_agent import CredentialsAgent
 from services.contextfree_client import ContextFreeClient, ContextFreeError
-from models.bd_schemas import Opportunity, CredentialMatch, CredentialsResponse
+from models.bd_schemas import Opportunity
 
 
 # =============================================================================
@@ -146,6 +146,12 @@ class TestResponseParsing:
         assert result.opportunity_title == "Test Opportunity"
         assert len(result.matches) == 2
         assert result.no_matches_found == False
+        assert result.lookup_status == "Matched"
+        assert result.failure_reason is None
+        assert result.diagnostics is not None
+        assert result.diagnostics.lookup_status == "Matched"
+        assert result.diagnostics.match_count == 2
+        assert result.diagnostics.raw_response_text == mock_credentials_json_response
         
         # Check first credential
         first = result.matches[0]
@@ -159,6 +165,11 @@ class TestResponseParsing:
         
         assert len(result.matches) == 0
         assert result.no_matches_found == True
+        assert result.lookup_status == "No Match"
+        assert result.failure_reason is None
+        assert result.diagnostics is not None
+        assert result.diagnostics.lookup_status == "No Match"
+        assert result.diagnostics.match_count == 0
     
     def test_handles_markdown_code_block(self, agent, mock_credentials_json_response):
         """Should extract JSON from markdown code blocks."""
@@ -176,6 +187,10 @@ class TestResponseParsing:
         
         assert result.no_matches_found == True
         assert len(result.matches) == 0
+        assert result.lookup_status == "No Match"
+        assert result.failure_reason is None
+        assert result.diagnostics is not None
+        assert result.diagnostics.parse_outcome == "natural_language_no_match"
     
     def test_handles_empty_response(self, agent):
         """Should handle empty response gracefully."""
@@ -183,12 +198,21 @@ class TestResponseParsing:
         
         assert result.no_matches_found == True
         assert len(result.matches) == 0
+        assert result.lookup_status == "No Match"
+        assert result.failure_reason is None
+        assert result.diagnostics is not None
+        assert result.diagnostics.parse_outcome == "empty_response"
     
     def test_handles_malformed_json(self, agent):
         """Should handle malformed JSON gracefully."""
         result = agent._parse_response("{invalid json", "Test Opportunity")
         
         assert result.no_matches_found == True
+        assert result.lookup_status == "Lookup Failed"
+        assert result.failure_reason is not None
+        assert result.diagnostics is not None
+        assert result.diagnostics.parse_outcome == "json_parse_error"
+        assert result.diagnostics.error_type == "JSONDecodeError"
 
 
 # =============================================================================
@@ -214,6 +238,12 @@ class TestCredentialsLookup:
         # Verify result
         assert len(result.matches) == 2
         assert result.no_matches_found == False
+        assert result.lookup_status == "Matched"
+        assert result.failure_reason is None
+        assert result.diagnostics is not None
+        assert result.diagnostics.query_text
+        assert result.diagnostics.raw_response_text == mock_credentials_json_response
+        assert result.diagnostics.duration_ms >= 0.0
     
     @pytest.mark.asyncio
     async def test_handles_api_error(self, agent, mock_client, sample_opportunity):
@@ -226,6 +256,11 @@ class TestCredentialsLookup:
         assert result.no_matches_found == True
         assert len(result.matches) == 0
         assert result.opportunity_title == "CMMC Assessment Program"
+        assert result.lookup_status == "Lookup Failed"
+        assert result.failure_reason == "API unavailable"
+        assert result.diagnostics is not None
+        assert result.diagnostics.error_type == "ContextFreeError"
+        assert result.diagnostics.parse_outcome == "lookup_failed"
     
     @pytest.mark.asyncio
     async def test_handles_unexpected_exception(self, agent, mock_client, sample_opportunity):
@@ -236,6 +271,10 @@ class TestCredentialsLookup:
         
         assert result.no_matches_found == True
         assert len(result.matches) == 0
+        assert result.lookup_status == "Lookup Failed"
+        assert result.failure_reason == "Unexpected error"
+        assert result.diagnostics is not None
+        assert result.diagnostics.error_type == "Exception"
 
 
 # =============================================================================

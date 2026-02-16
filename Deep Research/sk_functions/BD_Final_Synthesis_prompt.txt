@@ -11,11 +11,12 @@ You are creating a BD research report based on:
 # Instructions
 Your task is to synthesize this data into a concise MD Report with the following structure:
 
-1. **trigger_summary**: One sentence describing what was requested
-2. **executive_summary**: 3-5 sentences covering:
-   - The key market signal or trend detected
-   - The top opportunity highlight
-   - Protiviti's positioning based on credentials
+1. **trigger_summary**: One sentence describing what was requested.
+2. **executive_summary**: A single string containing exactly these three titled blocks, in this fixed order:
+   - `Deep Research Findings`
+   - `Credentials Agent Findings`
+   - `Combined Report & Action Items`
+   Format the blocks as short, readable prose and bullet lines as needed.
 3. **top_opportunities**: Array of up to 3 prioritized opportunities (by value + credential match)
    - Each with: title, agency, estimated_value, scope, validation_status, credentials
 4. **signals_detected**: 3-5 key signals as bullet points
@@ -25,7 +26,14 @@ Your task is to synthesize this data into a concise MD Report with the following
 # Constraints
 - Keep total word count under 500 words
 - Use "Reported" or "Inferred" for unverified claims
-- If no credentials match an opportunity, set validation_status to "No Internal Data" and note "We could not find internal proof of similar work"
+- Do not produce contradictory claims between deep research findings and credentials findings.
+- Use credentials lookup semantics accurately:
+  - `Matched`: at least one credential match exists.
+  - `No Match`: lookup succeeded but returned zero relevant credentials.
+  - `Lookup Failed`: lookup did not complete (transport/auth/parsing/runtime issue).
+- If status is `No Match` or `Lookup Failed`, set `validation_status` to "No Internal Data".
+- If status is `No Match`, state that no vetted internal credential matched this opportunity.
+- If status is `Lookup Failed`, state that validation failed due to lookup failure (do not describe it as a true no-match).
 - Do not fabricate credentials or opportunities
 - Cite sources where available using [Source 1], [Source 2] format
 
@@ -33,7 +41,7 @@ Your task is to synthesize this data into a concise MD Report with the following
 Respond with a valid JSON object matching this schema:
 {
     "trigger_summary": "string - one sentence summary of request",
-    "executive_summary": "string - 3-5 sentence synthesis",
+    "executive_summary": "string - must include exactly the three titled blocks in fixed order",
     "top_opportunities": [
         {
             "title": "string",
@@ -59,7 +67,7 @@ If the trigger is "Defense CMMC opportunities for Hanwha" with 3 opportunities f
 
 {
     "trigger_summary": "Analysis of CMMC compliance opportunities in the Defense sector for Hanwha Group",
-    "executive_summary": "Recent CMMC requirement expansions [Source 1] create significant opportunities for compliance services. The top opportunity, a $2.4B CMMC program with DoD, aligns with Protiviti's demonstrated expertise in defense contractor certifications [Credential 1]. Our strong track record with similar assessments positions us well for rapid proposal development.",
+    "executive_summary": "Deep Research Findings:\nRecent CMMC requirement expansions [Source 1] create significant opportunities for compliance services.\n\nCredentials Agent Findings:\n- Matched: 2 opportunities with vetted internal credentials.\n- No Match: 1 opportunity had no vetted internal match.\n- Lookup Failed: 0 opportunities.\n\nCombined Report & Action Items:\nPrioritize the top DoD-aligned opportunity with validated credential support and create a targeted proposal package this quarter.",
     "top_opportunities": [
         {
             "title": "CMMC Compliance Program for Hanwha Defense USA",
