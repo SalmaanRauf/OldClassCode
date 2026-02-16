@@ -69,6 +69,38 @@ class Opportunity(BaseModel):
     citations: List[str] = Field(default_factory=list, description="Source URLs")
 
 
+OpportunityExtractionStatus = Literal["Parsed", "No Opportunities", "Extraction Failed"]
+
+
+class OpportunityExtractionDiagnostics(BaseModel):
+    """Diagnostics for opportunity extraction quality and method."""
+
+    status: OpportunityExtractionStatus = Field(
+        "No Opportunities",
+        description="Overall extraction status classification"
+    )
+    reason: Optional[str] = Field(
+        None,
+        description="Human-readable explanation for extraction status"
+    )
+    opportunities_extracted_count: int = Field(
+        0,
+        description="Number of parsed opportunities"
+    )
+    extraction_method: str = Field(
+        "none",
+        description="Method used for extraction"
+    )
+    extraction_confidence: Literal["High", "Medium", "Low"] = Field(
+        "Low",
+        description="Confidence in extraction completeness"
+    )
+    candidate_signal_count: int = Field(
+        0,
+        description="Count of opportunity-like signals detected in source text"
+    )
+
+
 class DeepResearchOutput(BaseModel):
     """Parsed output from Deep Research.
     
@@ -84,6 +116,10 @@ class DeepResearchOutput(BaseModel):
     opportunities: List[Opportunity] = Field(default_factory=list, description="Extracted opportunities")
     recommended_actions: List[str] = Field(default_factory=list, description="Recommended next steps")
     raw_citations: List[str] = Field(default_factory=list, description="All source URLs")
+    extraction_diagnostics: Optional[OpportunityExtractionDiagnostics] = Field(
+        None,
+        description="Opportunity extraction diagnostics"
+    )
 
 
 # =============================================================================
@@ -233,6 +269,30 @@ class MDReport(BaseModel):
         default_factory=list,
         description="Full credentials diagnostics to render in UI/report"
     )
+    opportunity_extraction_status: OpportunityExtractionStatus = Field(
+        "No Opportunities",
+        description="Extraction status for the pipeline run"
+    )
+    opportunity_extraction_reason: Optional[str] = Field(
+        None,
+        description="Reason for extraction status when available"
+    )
+    opportunities_extracted_count: int = Field(
+        0,
+        description="Number of extracted opportunities"
+    )
+    lookups_executed_count: int = Field(
+        0,
+        description="Number of credential lookups executed"
+    )
+    lookups_skipped_reason: Optional[str] = Field(
+        None,
+        description="Reason lookups were skipped"
+    )
+    credentials_status_counts: Dict[str, int] = Field(
+        default_factory=lambda: {"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+        description="Count of credentials outcomes by status"
+    )
 
 
 # =============================================================================
@@ -255,6 +315,30 @@ class BDContext(BaseModel):
     credentials_diagnostics: Dict[str, CredentialsLookupDiagnostics] = Field(
         default_factory=dict,
         description="Credentials diagnostics per opportunity title"
+    )
+    opportunity_extraction_status: OpportunityExtractionStatus = Field(
+        "No Opportunities",
+        description="Extraction status for current run"
+    )
+    opportunity_extraction_reason: Optional[str] = Field(
+        None,
+        description="Reason for extraction classification"
+    )
+    opportunities_extracted_count: int = Field(
+        0,
+        description="Count of extracted opportunities"
+    )
+    lookups_executed_count: int = Field(
+        0,
+        description="Count of credential lookups executed"
+    )
+    lookups_skipped_reason: Optional[str] = Field(
+        None,
+        description="Reason lookups were skipped"
+    )
+    credentials_status_counts: Dict[str, int] = Field(
+        default_factory=lambda: {"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+        description="Credentials status counts for run diagnostics"
     )
     final_report: Optional[MDReport] = Field(None, description="Final synthesized report")
     trace: List[str] = Field(default_factory=list, description="Execution trace log")

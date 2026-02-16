@@ -129,6 +129,21 @@ class TestSectionSplitting:
         assert "opportunities" in sections
         assert "actions" in sections
         assert "sources" in sections
+
+    def test_detects_opportunity_alias_sections(self, extractor):
+        """Should treat Deep Research Findings as opportunities section alias."""
+        markdown = """
+# Executive Summary
+Summary
+
+## Deep Research Findings
+1. Navy RFP for cyber modernization
+   Scope: CMMC assessment services
+   Value: $12M
+   Timeline: FY2026
+"""
+        sections = extractor._split_sections(markdown)
+        assert "opportunities" in sections
     
     def test_handles_empty_input(self, extractor):
         """Should handle empty input gracefully."""
@@ -242,6 +257,30 @@ class TestOpportunityExtraction:
         first_opp = result.opportunities[0]
         assert first_opp.cmmc_level is not None
         assert "Level 2" in first_opp.cmmc_level
+
+    def test_narrative_fallback_extracts_noncanonical_opportunities(self, extractor):
+        """Should parse opportunity-like narrative blocks when canonical section is absent."""
+        markdown = """
+# Executive Summary
+Defense report.
+
+## Deep Research Findings
+1. Navy contract opportunity for platform modernization
+   Scope: Program support with CMMC controls
+   Value: $8M
+   Timeline: FY2026
+
+2. Army solicitation for cybersecurity services
+   Scope: CUI handling and compliance
+   Value: $4M
+   Timeline: Q4 2026
+   CMMC Requirement: Level 2
+"""
+        result = extractor.extract(markdown)
+        assert len(result.opportunities) >= 2
+        assert result.extraction_diagnostics is not None
+        assert result.extraction_diagnostics.status == "Parsed"
+        assert result.extraction_diagnostics.extraction_method in ("section_structured", "narrative_fallback")
 
 
 # =============================================================================
@@ -357,6 +396,30 @@ class TestEdgeCases:
         result = extractor.extract(markdown)
         
         assert len(result.opportunities) <= 10
+
+    def test_marks_extraction_failed_when_signals_exist_but_no_blocks_parse(self, extractor):
+        """Should emit Extraction Failed diagnostics for opportunity-rich but unparsable text."""
+        markdown = """
+## Deep Research Findings
+The report references solicitation activity, contract value: $20M, and CMMC requirements.
+Multiple RFP notices and IDIQ programs are mentioned but not structured as opportunities.
+"""
+        result = extractor.extract(markdown)
+        assert len(result.opportunities) == 0
+        assert result.extraction_diagnostics is not None
+        assert result.extraction_diagnostics.status == "Extraction Failed"
+
+    def test_marks_no_opportunities_for_low_signal_text(self, extractor):
+        """Should emit No Opportunities diagnostics when no opportunity signals exist."""
+        markdown = """
+## Deep Research Findings
+General commentary about market sentiment and leadership updates.
+No procurement details were discussed.
+"""
+        result = extractor.extract(markdown)
+        assert len(result.opportunities) == 0
+        assert result.extraction_diagnostics is not None
+        assert result.extraction_diagnostics.status == "No Opportunities"
 
 
 if __name__ == "__main__":

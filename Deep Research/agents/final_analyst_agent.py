@@ -72,7 +72,13 @@ class FinalAnalystAgent:
         self,
         trigger: BDTrigger,
         research: DeepResearchOutput,
-        credentials: Dict[str, CredentialsResponse]
+        credentials: Dict[str, CredentialsResponse],
+        opportunity_extraction_status: str = "Parsed",
+        opportunity_extraction_reason: Optional[str] = None,
+        opportunities_extracted_count: int = 0,
+        lookups_executed_count: int = 0,
+        lookups_skipped_reason: Optional[str] = None,
+        credentials_status_counts: Optional[Dict[str, int]] = None
     ) -> MDReport:
         """Synthesize research and credentials into MD report.
         
@@ -86,8 +92,37 @@ class FinalAnalystAgent:
         """
         await self._ensure_kernel()
         
+        if credentials_status_counts is None:
+            credentials_status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
+            for response in credentials.values():
+                status = response.lookup_status if response.lookup_status in credentials_status_counts else "Lookup Failed"
+                credentials_status_counts[status] += 1
+
+        if opportunity_extraction_status != "Parsed" and lookups_executed_count == 0:
+            return self._fallback_report(
+                trigger,
+                research,
+                credentials,
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                opportunities_extracted_count=opportunities_extracted_count,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=credentials_status_counts
+            )
+
         # Build prompt variables
-        prompt_vars = self._build_prompt_variables(trigger, research, credentials)
+        prompt_vars = self._build_prompt_variables(
+            trigger,
+            research,
+            credentials,
+            opportunity_extraction_status=opportunity_extraction_status,
+            opportunity_extraction_reason=opportunity_extraction_reason,
+            opportunities_extracted_count=opportunities_extracted_count,
+            lookups_executed_count=lookups_executed_count,
+            lookups_skipped_reason=lookups_skipped_reason,
+            credentials_status_counts=credentials_status_counts
+        )
         
         # Fill template
         prompt = self._load_prompt()
@@ -110,18 +145,45 @@ class FinalAnalystAgent:
             
             # Parse JSON response
             response_text = str(result)
-            return self._parse_report(response_text, trigger, research, credentials)
+            return self._parse_report(
+                response_text,
+                trigger,
+                research,
+                credentials,
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                opportunities_extracted_count=opportunities_extracted_count,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=credentials_status_counts
+            )
             
         except Exception as e:
             logger.exception(f"Synthesis failed: {e}")
             # Return fallback report
-            return self._fallback_report(trigger, research, credentials)
+            return self._fallback_report(
+                trigger,
+                research,
+                credentials,
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                opportunities_extracted_count=opportunities_extracted_count,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=credentials_status_counts
+            )
     
     def _build_prompt_variables(
         self,
         trigger: BDTrigger,
         research: DeepResearchOutput,
-        credentials: Dict[str, CredentialsResponse]
+        credentials: Dict[str, CredentialsResponse],
+        opportunity_extraction_status: str,
+        opportunity_extraction_reason: Optional[str],
+        opportunities_extracted_count: int,
+        lookups_executed_count: int,
+        lookups_skipped_reason: Optional[str],
+        credentials_status_counts: Dict[str, int]
     ) -> Dict[str, str]:
         """Build variables for prompt template."""
         # Trigger summary
@@ -167,7 +229,18 @@ class FinalAnalystAgent:
             "trigger_summary": trigger_summary,
             "research_summary": research_summary,
             "opportunities_json": json.dumps(opps_data, indent=2),
-            "credentials_json": json.dumps(creds_data, indent=2)
+            "credentials_json": json.dumps(creds_data, indent=2),
+            "extraction_diagnostics_json": json.dumps(
+                {
+                    "opportunity_extraction_status": opportunity_extraction_status,
+                    "opportunity_extraction_reason": opportunity_extraction_reason,
+                    "opportunities_extracted_count": opportunities_extracted_count,
+                    "lookups_executed_count": lookups_executed_count,
+                    "lookups_skipped_reason": lookups_skipped_reason,
+                    "credentials_status_counts": credentials_status_counts,
+                },
+                indent=2
+            )
         }
     
     def _parse_report(
@@ -175,7 +248,13 @@ class FinalAnalystAgent:
         response_text: str,
         trigger: BDTrigger,
         research: DeepResearchOutput,
-        credentials: Dict[str, CredentialsResponse]
+        credentials: Dict[str, CredentialsResponse],
+        opportunity_extraction_status: str,
+        opportunity_extraction_reason: Optional[str],
+        opportunities_extracted_count: int,
+        lookups_executed_count: int,
+        lookups_skipped_reason: Optional[str],
+        credentials_status_counts: Dict[str, int]
     ) -> MDReport:
         """Parse LLM response into MDReport."""
         try:
@@ -240,12 +319,28 @@ class FinalAnalystAgent:
                 recommended_actions=data.get("recommended_actions", [])[:5],
                 generated_at=datetime.now(),
                 confidence_note=data.get("confidence_note", ""),
-                credentials_evidence=self._build_credentials_evidence(credentials)
+                credentials_evidence=self._build_credentials_evidence(credentials),
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                opportunities_extracted_count=opportunities_extracted_count,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=dict(credentials_status_counts)
             )
             
         except Exception as e:
             logger.warning(f"Failed to parse LLM response: {e}")
-            return self._fallback_report(trigger, research, credentials)
+            return self._fallback_report(
+                trigger,
+                research,
+                credentials,
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                opportunities_extracted_count=opportunities_extracted_count,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=credentials_status_counts
+            )
     
     def _find_opportunity(self, title: str, opportunities: list) -> Optional[Opportunity]:
         """Find original opportunity by title (fuzzy match)."""
@@ -285,7 +380,13 @@ class FinalAnalystAgent:
         self,
         trigger: BDTrigger,
         research: DeepResearchOutput,
-        credentials: Dict[str, CredentialsResponse]
+        credentials: Dict[str, CredentialsResponse],
+        opportunity_extraction_status: str = "Parsed",
+        opportunity_extraction_reason: Optional[str] = None,
+        opportunities_extracted_count: int = 0,
+        lookups_executed_count: int = 0,
+        lookups_skipped_reason: Optional[str] = None,
+        credentials_status_counts: Optional[Dict[str, int]] = None
     ) -> MDReport:
         """Generate fallback report when LLM fails."""
         # Build opportunities from research
@@ -309,48 +410,87 @@ class FinalAnalystAgent:
                 credentials_lookup_status=lookup_status
             ))
         
+        if credentials_status_counts is None:
+            credentials_status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
+            for response in credentials.values():
+                status = response.lookup_status if response.lookup_status in credentials_status_counts else "Lookup Failed"
+                credentials_status_counts[status] += 1
+        if lookups_executed_count == 0 and credentials:
+            lookups_executed_count = len(credentials)
+
         return MDReport(
             trigger_summary=f"{trigger.sector} research with {', '.join(trigger.signals)} signals",
-            executive_summary=self._build_three_block_summary(research, credentials),
+            executive_summary=self._build_three_block_summary(
+                research,
+                credentials,
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=credentials_status_counts
+            ),
             top_opportunities=top_opps,
             signals_detected=research.signals_detected[:5],
             recommended_actions=research.recommended_actions[:5],
             generated_at=datetime.now(),
             confidence_note="Report generated with fallback logic due to synthesis error.",
-            credentials_evidence=self._build_credentials_evidence(credentials)
+            credentials_evidence=self._build_credentials_evidence(credentials),
+            opportunity_extraction_status=opportunity_extraction_status,
+            opportunity_extraction_reason=opportunity_extraction_reason,
+            opportunities_extracted_count=opportunities_extracted_count,
+            lookups_executed_count=lookups_executed_count,
+            lookups_skipped_reason=lookups_skipped_reason,
+            credentials_status_counts=dict(credentials_status_counts)
         )
 
     def _build_three_block_summary(
         self,
         research: DeepResearchOutput,
-        credentials: Dict[str, CredentialsResponse]
+        credentials: Dict[str, CredentialsResponse],
+        opportunity_extraction_status: str,
+        opportunity_extraction_reason: Optional[str],
+        lookups_executed_count: int,
+        lookups_skipped_reason: Optional[str],
+        credentials_status_counts: Dict[str, int]
     ) -> str:
         """Build fixed-format summary with deep research + credentials + combined actions."""
         counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
-        for response in credentials.values():
-            if response.lookup_status in counts:
-                counts[response.lookup_status] += 1
-            else:
-                counts["Lookup Failed"] += 1
+        for key in counts:
+            counts[key] = credentials_status_counts.get(key, 0)
 
         deep_research_text = research.executive_summary or "No deep research summary was available."
-        credentials_lines = [
-            f"- Matched opportunities: {counts['Matched']}",
-            f"- No-match opportunities: {counts['No Match']}",
-            f"- Lookup failures: {counts['Lookup Failed']}",
-        ]
-        if counts["Lookup Failed"] > 0:
-            failed_titles = [title for title, resp in credentials.items() if resp.lookup_status == "Lookup Failed"]
-            credentials_lines.append(f"- Failed lookups: {', '.join(failed_titles[:5])}")
+        if lookups_executed_count == 0:
+            if opportunity_extraction_status == "Extraction Failed":
+                credentials_lines = [
+                    "- Lookups executed: 0",
+                    f"- Lookup skipped due to extraction failure: {lookups_skipped_reason or opportunity_extraction_reason or 'Opportunity parsing failed.'}",
+                ]
+            else:
+                credentials_lines = [
+                    "- Lookups executed: 0",
+                    "- No opportunities identified for credentials validation.",
+                ]
+        else:
+            credentials_lines = [
+                f"- Lookups executed: {lookups_executed_count}",
+                f"- Matched opportunities: {counts['Matched']}",
+                f"- No-match opportunities: {counts['No Match']}",
+                f"- Lookup failures: {counts['Lookup Failed']}",
+            ]
+            if counts["Lookup Failed"] > 0:
+                failed_titles = [title for title, resp in credentials.items() if resp.lookup_status == "Lookup Failed"]
+                credentials_lines.append(f"- Failed lookups: {', '.join(failed_titles[:5])}")
 
         combined_lines = []
         if research.recommended_actions:
             combined_lines.extend(f"- {action}" for action in research.recommended_actions[:3])
         else:
             combined_lines.append("- Continue targeted opportunity monitoring and refresh signals weekly.")
-        if counts["Lookup Failed"] > 0:
+        if lookups_executed_count == 0 and opportunity_extraction_status == "Extraction Failed":
+            combined_lines.append("- Re-run with a canonical opportunities section or improve opportunity extraction patterns before credentials validation.")
+        if counts["Lookup Failed"] > 0 and lookups_executed_count > 0:
             combined_lines.append("- Resolve credentials lookup failures before final MD-ready validation.")
-        if counts["No Match"] > 0:
+        if counts["No Match"] > 0 and lookups_executed_count > 0:
             combined_lines.append("- Prioritize opportunities with stronger internal proof or develop supporting credential narratives.")
 
         return "\n".join(

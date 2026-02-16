@@ -7,6 +7,7 @@ You are creating a BD research report based on:
 - Deep Research executive summary: {{$research_summary}}
 - Top opportunities extracted: {{$opportunities_json}}
 - Credentials matches for validation: {{$credentials_json}}
+- Pipeline extraction diagnostics: {{$extraction_diagnostics_json}}
 
 # Instructions
 Your task is to synthesize this data into a concise MD Report with the following structure:
@@ -31,6 +32,10 @@ Your task is to synthesize this data into a concise MD Report with the following
   - `Matched`: at least one credential match exists.
   - `No Match`: lookup succeeded but returned zero relevant credentials.
   - `Lookup Failed`: lookup did not complete (transport/auth/parsing/runtime issue).
+- If `lookups_executed_count` is 0 in extraction diagnostics, do NOT state `No Match` or `Lookup Failed` totals as if lookups were attempted.
+- When `lookups_executed_count` is 0:
+  - If extraction status is `Extraction Failed`, state that credentials lookup was skipped due to extraction failure and include the reason.
+  - If extraction status is `No Opportunities`, state that no opportunities were identified for credentials validation.
 - If status is `No Match` or `Lookup Failed`, set `validation_status` to "No Internal Data".
 - If status is `No Match`, state that no vetted internal credential matched this opportunity.
 - If status is `Lookup Failed`, state that validation failed due to lookup failure (do not describe it as a true no-match).

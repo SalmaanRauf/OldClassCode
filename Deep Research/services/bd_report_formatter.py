@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from typing import Dict, Any, Optional, List
 
-from models.bd_schemas import MDReport, CredentialMatch, MDReportOpportunity, CredentialsLookupDiagnostics
+from models.bd_schemas import MDReport, CredentialMatch, CredentialsLookupDiagnostics
 
 
 def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
@@ -50,6 +50,7 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
                         lines.append(f"     - {cred.title}")
             lines.append("")
 
+    lines.extend(_format_pipeline_diagnostics(report))
     lines.extend(_format_credentials_evidence(report))
 
     if report.signals_detected:
@@ -96,7 +97,12 @@ def _format_credentials_evidence(report: MDReport) -> List[str]:
             ordered_titles.append(title)
 
     if not ordered_titles:
-        lines.append("No credentials lookups were executed for this run.")
+        if report.lookups_executed_count == 0 and report.lookups_skipped_reason:
+            lines.append(f"No credentials lookups were executed for this run. Reason: {report.lookups_skipped_reason}")
+        elif report.lookups_executed_count == 0:
+            lines.append("No credentials lookups were executed for this run.")
+        else:
+            lines.append("No credentials evidence records were available.")
         lines.append("")
         return lines
 
@@ -156,4 +162,29 @@ def _format_credential_details(credentials: List[CredentialMatch]) -> List[str]:
         lines.append(f"    - Approach: {credential.approach or 'N/A'}")
         lines.append(f"    - Value Provided: {credential.value_provided or 'N/A'}")
         lines.append(f"    - URL: {credential.url or 'N/A'}")
+    return lines
+
+
+def _format_pipeline_diagnostics(report: MDReport) -> List[str]:
+    """Render deterministic pipeline diagnostics for operator visibility."""
+    lines: List[str] = ["### Pipeline Diagnostics", ""]
+    lines.append(f"- Opportunities Extracted: {report.opportunities_extracted_count}")
+    lines.append(f"- Extraction Status: {report.opportunity_extraction_status}")
+    if report.opportunity_extraction_reason:
+        lines.append(f"- Extraction Reason: {report.opportunity_extraction_reason}")
+    lines.append(f"- Lookups Executed: {report.lookups_executed_count}")
+    lines.append(
+        "- Lookup Status Counts: "
+        f"Matched={report.credentials_status_counts.get('Matched', 0)}, "
+        f"No Match={report.credentials_status_counts.get('No Match', 0)}, "
+        f"Lookup Failed={report.credentials_status_counts.get('Lookup Failed', 0)}"
+    )
+    if report.lookups_skipped_reason:
+        lines.append(f"- Lookups Skipped Reason: {report.lookups_skipped_reason}")
+    if report.opportunity_extraction_status == "Extraction Failed":
+        lines.append(
+            "- Remediation: Ensure the deep research output includes explicit opportunity sections "
+            "or improve extractor patterns before rerunning credentials validation."
+        )
+    lines.append("")
     return lines

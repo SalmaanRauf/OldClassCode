@@ -59,6 +59,12 @@ def _build_report() -> MDReport:
         recommended_actions=["Action 1"],
         generated_at=datetime.now(),
         confidence_note="High confidence.",
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason="Parsed 1 opportunities using narrative_fallback.",
+        opportunities_extracted_count=1,
+        lookups_executed_count=1,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 1, "No Match": 0, "Lookup Failed": 0},
         credentials_evidence=[
             CredentialsLookupDiagnostics(
                 opportunity_title="Program A",
@@ -96,3 +102,15 @@ def test_formatter_renders_full_credentials_evidence_without_truncation():
     assert "FULL QUERY TEXT :: include everything line1\nline2\nline3" in content
     assert 'FULL RAW RESPONSE :: {"matches":[{"title":"Defense CMMC Credential"}]}' in content
     assert "Title: Defense CMMC Credential" in content
+
+
+def test_formatter_includes_pipeline_diagnostics():
+    report = _build_report()
+    section = format_bd_report_as_section(report)
+
+    content = section["content"]
+    assert "### Pipeline Diagnostics" in content
+    assert "Opportunities Extracted: 1" in content
+    assert "Extraction Status: Parsed" in content
+    assert "Lookups Executed: 1" in content
+    assert "Lookup Status Counts: Matched=1, No Match=0, Lookup Failed=0" in content

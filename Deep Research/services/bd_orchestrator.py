@@ -21,6 +21,7 @@ from models.bd_schemas import (
     DeepResearchOutput,
     CredentialsResponse,
     CredentialsLookupDiagnostics,
+    OpportunityExtractionDiagnostics,
     MDReport,
     BDContext
 )
@@ -108,30 +109,59 @@ class BDOrchestrator:
             # Step 2: Extract opportunities
             await self._notify(progress_cb, "Extracting opportunities...")
             ctx.parsed_research = self.extractor.extract(ctx.deep_research_raw or "")
-            ctx.trace.append(f"Extracted {len(ctx.parsed_research.opportunities)} opportunities")
-            
-            # Step 3: Query credentials for top opportunities
-            await self._notify(progress_cb, "Validating with Credentials Agent...")
-            await self._ensure_credentials_agent()
-            
-            top_opportunities = ctx.parsed_research.opportunities[:5]
-            ctx.credentials_results = await self._lookup_credentials_parallel(
-                top_opportunities,
-                trigger.sector,
-                ctx
+            extraction_diag = ctx.parsed_research.extraction_diagnostics or self._classify_extraction(
+                ctx.parsed_research,
+                ctx.deep_research_raw or ""
+            )
+            ctx.opportunity_extraction_status = extraction_diag.status
+            ctx.opportunity_extraction_reason = extraction_diag.reason
+            ctx.opportunities_extracted_count = len(ctx.parsed_research.opportunities)
+            ctx.trace.append(
+                f"Extracted {ctx.opportunities_extracted_count} opportunities "
+                f"(status={ctx.opportunity_extraction_status})"
             )
 
-            ctx.credentials_diagnostics = self._collect_credentials_diagnostics(
-                top_opportunities,
-                trigger.sector,
-                ctx.credentials_results
-            )
-            status_counts = self._count_lookup_statuses(ctx.credentials_results)
+            # Step 3: Query credentials for top opportunities
+            top_opportunities = ctx.parsed_research.opportunities[:5]
+            status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
+            if ctx.opportunity_extraction_status == "Extraction Failed":
+                ctx.lookups_skipped_reason = (
+                    ctx.opportunity_extraction_reason
+                    or "Credentials lookup skipped because opportunity extraction failed."
+                )
+                ctx.credentials_results = {}
+                ctx.credentials_diagnostics = {}
+                await self._notify(progress_cb, "Skipping credentials lookup due to extraction failure.")
+                ctx.trace.append("Credentials lookup skipped due to extraction failure.")
+            elif not top_opportunities:
+                ctx.lookups_skipped_reason = "No opportunities identified for credentials validation."
+                ctx.credentials_results = {}
+                ctx.credentials_diagnostics = {}
+                await self._notify(progress_cb, "No opportunities found; skipping credentials lookup.")
+                ctx.trace.append("Credentials lookup skipped because no opportunities were identified.")
+            else:
+                await self._notify(progress_cb, "Validating with Credentials Agent...")
+                await self._ensure_credentials_agent()
+                ctx.credentials_results = await self._lookup_credentials_parallel(
+                    top_opportunities,
+                    trigger.sector,
+                    ctx
+                )
+                ctx.credentials_diagnostics = self._collect_credentials_diagnostics(
+                    top_opportunities,
+                    trigger.sector,
+                    ctx.credentials_results
+                )
+                status_counts = self._count_lookup_statuses(ctx.credentials_results)
+
+            ctx.lookups_executed_count = len(ctx.credentials_results)
+            ctx.credentials_status_counts = status_counts
             ctx.trace.append(
                 "Credentials: "
                 f"matched={status_counts['Matched']}, "
                 f"no_match={status_counts['No Match']}, "
-                f"failed={status_counts['Lookup Failed']}"
+                f"failed={status_counts['Lookup Failed']}, "
+                f"executed={ctx.lookups_executed_count}"
             )
             
             # Step 4: Synthesize final report
@@ -139,9 +169,16 @@ class BDOrchestrator:
             ctx.final_report = await self.final_analyst.synthesize(
                 trigger,
                 ctx.parsed_research,
-                ctx.credentials_results
+                ctx.credentials_results,
+                opportunity_extraction_status=ctx.opportunity_extraction_status,
+                opportunity_extraction_reason=ctx.opportunity_extraction_reason,
+                opportunities_extracted_count=ctx.opportunities_extracted_count,
+                lookups_executed_count=ctx.lookups_executed_count,
+                lookups_skipped_reason=ctx.lookups_skipped_reason,
+                credentials_status_counts=ctx.credentials_status_counts
             )
             self._attach_credentials_evidence(ctx.final_report, ctx.credentials_results, ctx.credentials_diagnostics)
+            self._attach_pipeline_diagnostics(ctx.final_report, ctx)
             ctx.trace.append("Synthesis complete")
             
             # Save trace
@@ -235,6 +272,47 @@ class BDOrchestrator:
         
         return results
 
+    def _classify_extraction(
+        self,
+        parsed_research: DeepResearchOutput,
+        raw_markdown: str
+    ) -> OpportunityExtractionDiagnostics:
+        """Classify extraction status when extractor diagnostics are missing."""
+        parsed_count = len(parsed_research.opportunities)
+        if parsed_count > 0:
+            return OpportunityExtractionDiagnostics(
+                status="Parsed",
+                reason=f"Parsed {parsed_count} opportunities.",
+                opportunities_extracted_count=parsed_count,
+                extraction_method="section_structured",
+                extraction_confidence="Medium",
+                candidate_signal_count=0
+            )
+
+        markdown = (raw_markdown or "").lower()
+        rich_signals = sum(
+            1 for token in ("solicitation", "rfp", "idiq", "contract", "cmmc", "value:", "timeline:", "$")
+            if token in markdown
+        )
+        if rich_signals >= 3:
+            return OpportunityExtractionDiagnostics(
+                status="Extraction Failed",
+                reason="Opportunity-like text present but no structured opportunities parsed.",
+                opportunities_extracted_count=0,
+                extraction_method="none",
+                extraction_confidence="Low",
+                candidate_signal_count=rich_signals
+            )
+
+        return OpportunityExtractionDiagnostics(
+            status="No Opportunities",
+            reason="No opportunity-like content detected.",
+            opportunities_extracted_count=0,
+            extraction_method="none",
+            extraction_confidence="Low",
+            candidate_signal_count=rich_signals
+        )
+
     def _count_lookup_statuses(self, results: Dict[str, CredentialsResponse]) -> Dict[str, int]:
         """Count lookup statuses for trace summaries."""
         counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
@@ -296,6 +374,15 @@ class BDOrchestrator:
             else:
                 # Preserve legacy validation labels while surfacing explicit status separately.
                 opp_report.validation_status = "No Internal Data"
+
+    def _attach_pipeline_diagnostics(self, report: MDReport, ctx: BDContext) -> None:
+        """Attach pipeline-level diagnostics for rendering and traceability."""
+        report.opportunity_extraction_status = ctx.opportunity_extraction_status
+        report.opportunity_extraction_reason = ctx.opportunity_extraction_reason
+        report.opportunities_extracted_count = ctx.opportunities_extracted_count
+        report.lookups_executed_count = ctx.lookups_executed_count
+        report.lookups_skipped_reason = ctx.lookups_skipped_reason
+        report.credentials_status_counts = dict(ctx.credentials_status_counts)
     
     def _save_trace(self, ctx: BDContext, duration: float):
         """Save execution trace to file."""
@@ -318,13 +405,18 @@ class BDOrchestrator:
                 },
                 "deep_research_length": len(ctx.deep_research_raw or ""),
                 "opportunities_extracted": len(ctx.parsed_research.opportunities) if ctx.parsed_research else 0,
+                "opportunity_extraction_status": ctx.opportunity_extraction_status,
+                "opportunity_extraction_reason": ctx.opportunity_extraction_reason,
+                "opportunities_extracted_count": ctx.opportunities_extracted_count,
+                "lookups_executed_count": ctx.lookups_executed_count,
+                "lookups_skipped_reason": ctx.lookups_skipped_reason,
                 "credentials_lookups": len(ctx.credentials_results),
                 "credentials_matched": sum(1 for r in ctx.credentials_results.values() if r.lookup_status == "Matched"),
                 "credentials_no_match": sum(1 for r in ctx.credentials_results.values() if r.lookup_status == "No Match"),
                 "credentials_lookup_failed": sum(
                     1 for r in ctx.credentials_results.values() if r.lookup_status == "Lookup Failed"
                 ),
-                "credentials_status_counts": self._count_lookup_statuses(ctx.credentials_results),
+                "credentials_status_counts": dict(ctx.credentials_status_counts),
                 "credentials_diagnostics": [
                     diag.model_dump() if hasattr(diag, "model_dump") else diag.__dict__
                     for diag in ctx.credentials_diagnostics.values()

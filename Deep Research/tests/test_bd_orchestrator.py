@@ -24,6 +24,7 @@ from models.bd_schemas import (
     DeepResearchOutput,
     CredentialsResponse,
     CredentialsLookupDiagnostics,
+    OpportunityExtractionDiagnostics,
     CredentialMatch,
     MDReport,
     MDReportOpportunity
@@ -194,6 +195,9 @@ class TestFullWorkflow:
         assert report.credentials_evidence
         assert report.credentials_evidence[0].opportunity_title == "CMMC Program"
         assert report.credentials_evidence[0].lookup_status == "Matched"
+        assert report.opportunity_extraction_status == "Parsed"
+        assert report.opportunities_extracted_count == 1
+        assert report.lookups_executed_count == 1
     
     @pytest.mark.asyncio
     async def test_progress_callback_receives_updates(
@@ -300,6 +304,37 @@ class TestParallelCredentials:
         report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
         assert report is not None
 
+    @pytest.mark.asyncio
+    async def test_skips_credentials_when_extraction_failed(
+        self, mock_credentials_agent, mock_final_analyst, sample_trigger
+    ):
+        """Should fail fast and skip credentials when extraction status is Extraction Failed."""
+        extractor = MagicMock(spec=OpportunityExtractor)
+        extractor.extract.return_value = DeepResearchOutput(
+            executive_summary="Narrative had opportunities but parse failed.",
+            opportunities=[],
+            extraction_diagnostics=OpportunityExtractionDiagnostics(
+                status="Extraction Failed",
+                reason="Signal-rich narrative could not be parsed into opportunity blocks.",
+                opportunities_extracted_count=0,
+                extraction_method="narrative_fallback",
+                extraction_confidence="Low",
+                candidate_signal_count=5
+            )
+        )
+        orchestrator = BDOrchestrator(
+            extractor=extractor,
+            credentials_agent=mock_credentials_agent,
+            final_analyst=mock_final_analyst
+        )
+
+        report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        mock_credentials_agent.find_credentials.assert_not_called()
+        assert report.opportunity_extraction_status == "Extraction Failed"
+        assert report.lookups_executed_count == 0
+        assert report.lookups_skipped_reason is not None
+
 
 # =============================================================================
 # Trace File Tests
@@ -334,6 +369,10 @@ class TestTraceFiles:
             assert "timestamp" in trace_data
             assert trace_data["trigger"]["sector"] == "Defense"
             assert "duration_seconds" in trace_data
+            assert trace_data["opportunity_extraction_status"] == "Parsed"
+            assert trace_data["opportunities_extracted_count"] == 1
+            assert trace_data["lookups_executed_count"] == 1
+            assert trace_data["lookups_skipped_reason"] is None
             assert "credentials_status_counts" in trace_data
             assert "credentials_diagnostics" in trace_data
             assert trace_data["credentials_status_counts"]["Matched"] == 1
@@ -372,6 +411,7 @@ class TestTraceFiles:
             
             assert len(trace_data["errors"]) > 0
             assert "Test error" in trace_data["errors"][0]
+            assert trace_data["lookups_executed_count"] == 1
             assert trace_data["credentials_status_counts"]["Lookup Failed"] == 1
             assert trace_data["credentials_lookup_failed"] == 1
             assert trace_data["credentials_diagnostics"][0]["lookup_status"] == "Lookup Failed"
