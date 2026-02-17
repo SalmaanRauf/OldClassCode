@@ -102,6 +102,11 @@ Opportunities:
 2. Prioritize relevance by: industry match > technology match > challenge similarity.
 3. Keep opportunity groupings separate by `opportunity_id`.
 4. Do not combine or pool matches across opportunities.
+5. Keep responses concise to avoid truncation:
+   - `client_challenge`, `approach`, and `value_provided` each max ~220 characters.
+6. Do NOT output markdown code fences.
+7. Do NOT truncate with ellipses (`...`).
+8. Return result objects for all listed opportunities.
 
 # Constraints
 - Never reveal client names.
@@ -443,6 +448,76 @@ class CredentialsAgent:
             )
             return response_map, batch_diagnostics
         except json.JSONDecodeError as e:
+            recovered_results = self._recover_batch_results(raw_response)
+            if recovered_results:
+                logger.warning(
+                    "Recovered %d partial batch results after JSON parse failure.",
+                    len(recovered_results),
+                )
+                response_map: Dict[str, CredentialsResponse] = {}
+                id_to_opp = {f"opp_{idx}": opp for idx, opp in enumerate(opportunities, 1)}
+                for entry in recovered_results:
+                    opp_id = entry.get("opportunity_id")
+                    opp = id_to_opp.get(opp_id)
+                    if opp is None:
+                        continue
+                    matches = self._coerce_matches(entry.get("matches", []), max_matches_per_opportunity)
+                    has_matches = len(matches) > 0
+                    status = "Matched" if has_matches else "No Match"
+                    diagnostics = CredentialsLookupDiagnostics(
+                        opportunity_title=opp.title,
+                        sector=sector,
+                        query_text=query_text,
+                        raw_response_text=raw_response,
+                        parse_outcome="batch_partial_recovery",
+                        lookup_status=status,
+                        duration_ms=duration_ms,
+                        match_count=len(matches),
+                    )
+                    response_map[opp.title] = CredentialsResponse(
+                        opportunity_title=opp.title,
+                        matches=matches,
+                        no_matches_found=entry.get("no_matches_found", not has_matches),
+                        lookup_status=status,
+                        diagnostics=diagnostics,
+                    )
+
+                for opp in opportunities:
+                    if opp.title in response_map:
+                        continue
+                    diagnostics = CredentialsLookupDiagnostics(
+                        opportunity_title=opp.title,
+                        sector=sector,
+                        query_text=query_text,
+                        raw_response_text=raw_response,
+                        parse_outcome="batch_partial_recovery_missing_opportunity",
+                        lookup_status="Lookup Failed",
+                        error_message="Batch response was truncated before this opportunity result completed.",
+                        duration_ms=duration_ms,
+                        match_count=0,
+                    )
+                    response_map[opp.title] = CredentialsResponse(
+                        opportunity_title=opp.title,
+                        matches=[],
+                        no_matches_found=True,
+                        lookup_status="Lookup Failed",
+                        failure_reason="Batch response was truncated before this opportunity result completed.",
+                        diagnostics=diagnostics,
+                    )
+
+                diagnostics = CredentialsBatchDiagnostics(
+                    invoked=True,
+                    lookup_count_requested=len(opportunities),
+                    lookup_count_returned=len(recovered_results),
+                    duration_ms=duration_ms,
+                    query_text=query_text,
+                    raw_response_text=raw_response,
+                    parse_outcome="batch_partial_recovery",
+                    error_type="JSONDecodeError",
+                    error_message=str(e),
+                )
+                return response_map, diagnostics
+
             diagnostics = CredentialsBatchDiagnostics(
                 invoked=True,
                 lookup_count_requested=len(opportunities),
@@ -463,6 +538,65 @@ class CredentialsAgent:
                 duration_ms,
                 raw_response=raw_response,
             ), diagnostics
+
+    def _recover_batch_results(self, raw_response: str) -> List[Dict[str, object]]:
+        """Recover fully-formed result objects from a partially truncated JSON payload."""
+        extracted = self._extract_json(raw_response)
+        if not extracted:
+            return []
+
+        results_idx = extracted.find('"results"')
+        if results_idx < 0:
+            return []
+        array_start = extracted.find("[", results_idx)
+        if array_start < 0:
+            return []
+
+        recovered: List[Dict[str, object]] = []
+        in_string = False
+        escape = False
+        object_depth = 0
+        object_start: Optional[int] = None
+
+        for idx in range(array_start + 1, len(extracted)):
+            ch = extracted[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+
+            if ch == "{":
+                if object_depth == 0:
+                    object_start = idx
+                object_depth += 1
+                continue
+
+            if ch == "}":
+                if object_depth > 0:
+                    object_depth -= 1
+                if object_depth == 0 and object_start is not None:
+                    candidate = extracted[object_start:idx + 1]
+                    try:
+                        parsed = json.loads(candidate)
+                        if isinstance(parsed, dict):
+                            recovered.append(parsed)
+                    except json.JSONDecodeError:
+                        pass
+                    object_start = None
+                continue
+
+            if ch == "]" and object_depth == 0:
+                break
+
+        return recovered
 
     def _coerce_matches(self, raw_matches: object, max_matches: int) -> List[CredentialMatch]:
         matches: List[CredentialMatch] = []

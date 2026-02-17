@@ -111,8 +111,8 @@ def test_formatter_renders_full_credentials_evidence_without_truncation():
     assert "### Credentials Evidence (Full I/O)" in content
     assert "Status: Matched" in content
     assert "Parse Outcome: json_parsed_with_matches" in content
-    assert "FULL QUERY TEXT :: include everything line1\nline2\nline3" in content
-    assert 'FULL RAW RESPONSE :: {"matches":[{"title":"Defense CMMC Credential"}]}' in content
+    assert "Full Query Text: See **Credentials Batch I/O (Full)** section." in content
+    assert "Full Raw Response Text: See **Credentials Batch I/O (Full)** section." in content
     assert "Title: Defense CMMC Credential" in content
 
 

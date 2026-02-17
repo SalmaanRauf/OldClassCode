@@ -413,6 +413,28 @@ class TestBatchLookup:
         assert batch_diag.parse_outcome == "batch_lookup_failed"
         assert batch_diag.error_type == "ContextFreeError"
 
+    @pytest.mark.asyncio
+    async def test_batch_partial_recovery_recovers_completed_objects(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        # Deliberately truncated after a complete opp_1 object and partial opp_2 object
+        mock_client.ask.return_value = (
+            '{"results":[{"opportunity_id":"opp_1","matches":[{"title":"Cred 1","client_challenge":"a",'
+            '"approach":"b","value_provided":"c","industry":"Defense","technologies_used":[],"url":"https://x"}],'
+            '"no_matches_found":false},{"opportunity_id":"opp_2","matches":[{"title":"Cred 2"'
+        )
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        assert responses["Opp 1"].lookup_status == "Matched"
+        assert responses["Opp 2"].lookup_status == "Lookup Failed"
+        assert responses["Opp 3"].lookup_status == "Lookup Failed"
+        assert batch_diag.parse_outcome == "batch_partial_recovery"
+        assert batch_diag.lookup_count_returned == 1
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

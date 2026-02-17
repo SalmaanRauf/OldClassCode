@@ -137,15 +137,19 @@ def _format_credentials_evidence(report: MDReport) -> List[str]:
         if evidence.lookup_status == "Lookup Failed":
             lines.append(f"- Failure Reason: {evidence.error_message or 'Unavailable'}")
 
-        lines.append("- Full Query Text:")
-        lines.append("```text")
-        lines.append(evidence.query_text if evidence.query_text else "(empty)")
-        lines.append("```")
+        if report.credentials_lookup_mode == "batched_single_call" and report.credentials_batch_diagnostics:
+            lines.append("- Full Query Text: See **Credentials Batch I/O (Full)** section.")
+            lines.append("- Full Raw Response Text: See **Credentials Batch I/O (Full)** section.")
+        else:
+            lines.append("- Full Query Text:")
+            lines.append("```text")
+            lines.append(evidence.query_text if evidence.query_text else "(empty)")
+            lines.append("```")
 
-        lines.append("- Full Raw Response Text:")
-        lines.append("```text")
-        lines.append(evidence.raw_response_text if evidence.raw_response_text else "(empty)")
-        lines.append("```")
+            lines.append("- Full Raw Response Text:")
+            lines.append("```text")
+            lines.append(evidence.raw_response_text if evidence.raw_response_text else "(empty)")
+            lines.append("```")
 
         lines.append("- Parsed Matches Summary:")
         if credentials:
