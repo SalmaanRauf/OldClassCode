@@ -15,7 +15,6 @@ from models.bd_schemas import (
     CredentialMatch,
     CredentialsLookupDiagnostics,
     CredentialsBatchDiagnostics,
-    OpportunitySelectionDiagnostics,
 )
 
 
@@ -67,20 +66,6 @@ def _build_report() -> MDReport:
         lookups_executed_count=1,
         lookups_skipped_reason=None,
         credentials_status_counts={"Matched": 1, "No Match": 0, "Lookup Failed": 0},
-        opportunity_selection_diagnostics=OpportunitySelectionDiagnostics(
-            invoked=True,
-            opportunities_input_count=10,
-            opportunities_after_hard_filters=6,
-            opportunities_selected_count=3,
-            selection_policy="strict_with_unknown_date_fallback",
-            cmmc_required=True,
-            time_window_days=100,
-            min_value_usd=1_000_000,
-            geography="CONUS",
-            rejection_counts={"out_of_window": 2, "below_min_value": 1},
-            fallback_used=False,
-            selected_titles=["Program A", "Program B", "Program C"],
-        ),
         credentials_lookup_mode="batched_single_call",
         opportunities_source="atlas_digest",
         credentials_batch_diagnostics=CredentialsBatchDiagnostics(
@@ -158,4 +143,3 @@ def test_formatter_includes_pipeline_diagnostics():
     assert "Credentials Lookup Mode: batched_single_call" in content
     assert "Opportunities Source: atlas_digest" in content
     assert "Lookup Status Counts: Matched=1, No Match=0, Lookup Failed=0" in content
-    assert "Opportunity Selection Diagnostics:" in content

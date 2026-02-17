@@ -12,10 +12,9 @@ from datetime import datetime
 
 import chainlit as cl
 
-from models.bd_schemas import MDReport, MDReportOpportunity
+from models.bd_schemas import BDTrigger, MDReport, MDReportOpportunity
 from services.bd_orchestrator import BDOrchestrator
 from services.opportunity_extractor import OpportunityExtractor
-from services.bd_trigger_builder import build_bd_trigger
 from agents.credentials_agent import CredentialsAgent
 from agents.final_analyst_agent import FinalAnalystAgent
 from pathlib import Path
@@ -170,17 +169,11 @@ async def handle_bd_research_input(research_text: str) -> bool:
     # Build trigger from session data
     trigger_data = cl.user_session.get(BD_TRIGGER_SESSION_KEY) or {}
     
-    session_params = dict(trigger_data)
-    if session_params.get("company_focus") and not session_params.get("company"):
-        session_params["company"] = session_params.get("company_focus")
-    signals = session_params.get("signals")
-    if isinstance(signals, list):
-        session_params["signals"] = ", ".join(str(signal) for signal in signals if str(signal).strip())
-
-    trigger = build_bd_trigger(
+    trigger = BDTrigger(
         sector=trigger_data.get("sector", "General"),
-        user_query=research_text,
-        session_params=session_params,
+        signals=trigger_data.get("signals", []),
+        company_focus=trigger_data.get("company_focus"),
+        time_window_days=30
     )
     
     # Run orchestration

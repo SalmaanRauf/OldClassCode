@@ -101,29 +101,6 @@ class OpportunityExtractionDiagnostics(BaseModel):
     )
 
 
-class OpportunitySelectionDiagnostics(BaseModel):
-    """Diagnostics for deterministic opportunity selection before credential lookups."""
-
-    invoked: bool = Field(False, description="Whether opportunity selector ran")
-    opportunities_input_count: int = Field(0, description="Input opportunities count")
-    opportunities_after_hard_filters: int = Field(0, description="Count after hard filters")
-    opportunities_selected_count: int = Field(0, description="Count selected for lookup")
-    selection_policy: str = Field(
-        "strict_with_unknown_date_fallback",
-        description="Selection policy identifier"
-    )
-    cmmc_required: bool = Field(False, description="Whether CMMC signal was required")
-    time_window_days: int = Field(30, description="Lookback window applied")
-    min_value_usd: Optional[int] = Field(None, description="Minimum value threshold applied")
-    geography: Optional[str] = Field(None, description="Geography filter applied")
-    rejection_counts: Dict[str, int] = Field(
-        default_factory=dict,
-        description="Rejection counts by reason"
-    )
-    fallback_used: bool = Field(False, description="Whether unknown-date fallback was used")
-    selected_titles: List[str] = Field(default_factory=list, description="Selected opportunity titles")
-
-
 class DeepResearchOutput(BaseModel):
     """Parsed output from Deep Research.
     
@@ -342,10 +319,6 @@ class MDReport(BaseModel):
         default_factory=lambda: {"Matched": 0, "No Match": 0, "Lookup Failed": 0},
         description="Count of credentials outcomes by status"
     )
-    opportunity_selection_diagnostics: Optional[OpportunitySelectionDiagnostics] = Field(
-        None,
-        description="Diagnostics from deterministic opportunity selection"
-    )
 
 
 # =============================================================================
@@ -408,10 +381,6 @@ class BDContext(BaseModel):
     credentials_status_counts: Dict[str, int] = Field(
         default_factory=lambda: {"Matched": 0, "No Match": 0, "Lookup Failed": 0},
         description="Credentials status counts for run diagnostics"
-    )
-    opportunity_selection_diagnostics: Optional[OpportunitySelectionDiagnostics] = Field(
-        None,
-        description="Deterministic opportunity selector diagnostics"
     )
     final_report: Optional[MDReport] = Field(None, description="Final synthesized report")
     trace: List[str] = Field(default_factory=list, description="Execution trace log")

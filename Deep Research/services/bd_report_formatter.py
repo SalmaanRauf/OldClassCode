@@ -223,30 +223,6 @@ def _format_pipeline_diagnostics(report: MDReport) -> List[str]:
     )
     if report.lookups_skipped_reason:
         lines.append(f"- Lookups Skipped Reason: {report.lookups_skipped_reason}")
-    if report.opportunity_selection_diagnostics:
-        diagnostics = report.opportunity_selection_diagnostics
-        lines.append("- Opportunity Selection Diagnostics:")
-        lines.append(
-            f"  - Policy: {diagnostics.selection_policy}; "
-            f"Input={diagnostics.opportunities_input_count}; "
-            f"After Filters={diagnostics.opportunities_after_hard_filters}; "
-            f"Selected={diagnostics.opportunities_selected_count}"
-        )
-        lines.append(
-            f"  - CMMC Required={diagnostics.cmmc_required}; "
-            f"Window={diagnostics.time_window_days} days; "
-            f"Min Value={diagnostics.min_value_usd if diagnostics.min_value_usd is not None else 'N/A'}; "
-            f"Geography={diagnostics.geography or 'N/A'}"
-        )
-        lines.append(
-            "  - Rejections: "
-            + ", ".join(
-                f"{reason}={count}" for reason, count in diagnostics.rejection_counts.items()
-            )
-        )
-        lines.append(f"  - Fallback Used: {diagnostics.fallback_used}")
-        if diagnostics.selected_titles:
-            lines.append(f"  - Selected Titles: {', '.join(diagnostics.selected_titles)}")
     if report.opportunity_extraction_status == "Extraction Failed":
         lines.append(
             "- Remediation: Ensure the deep research output includes explicit opportunity sections "

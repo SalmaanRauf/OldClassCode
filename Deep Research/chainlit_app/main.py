@@ -30,13 +30,11 @@ from tools.task_executor import task_executor
 from tools.response_formatter import response_formatter
 from services.company_profiles import load_company_profiles
 from services.prompt_generator import get_prompt_generator, ResearchParameters
-from services.bd_trigger_builder import build_bd_trigger
-from services.citation_quality import is_low_signal_url, rank_citations
 
 # BD Analysis enrichment (auto-runs after Deep Research)
 from services.bd_orchestrator import BDOrchestrator
 from services.bd_report_formatter import format_bd_report_as_section
-from models.bd_schemas import MDReport, MDReportOpportunity
+from models.bd_schemas import BDTrigger, MDReport, MDReportOpportunity
 
 setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -154,8 +152,6 @@ async def handle_error(error: Exception, context: str, user_message: str = "Sorr
 async def enrich_with_bd_analysis(
     deep_research_response: Dict[str, Any],
     sector: str,
-    user_query: str = "",
-    session_params: Optional[Dict[str, Any]] = None,
     progress_callback = None
 ) -> Dict[str, Any]:
     """Enrich Deep Research output with Credentials validation + ATLAS synthesis.
@@ -169,8 +165,6 @@ async def enrich_with_bd_analysis(
     Args:
         deep_research_response: Dict from run_deep_research()
         sector: Industry sector (from GUI form)
-        user_query: Original user query text
-        session_params: Optional research params captured from the form/session
         progress_callback: Optional async callback for progress updates
         
     Returns:
@@ -184,11 +178,11 @@ async def enrich_with_bd_analysis(
             logger.warning("Deep Research output too short for BD enrichment")
             return deep_research_response
         
-        # Build trigger from sector + query + form/session parameters
-        trigger = build_bd_trigger(
-            sector=sector,
-            user_query=user_query,
-            session_params=session_params or {},
+        # Build trigger from sector
+        trigger = BDTrigger(
+            sector=sector.replace("_", " ").title() if sector else "General",
+            signals=[],  # Will be inferred from research
+            time_window_days=30
         )
         
         # Progress update
@@ -280,20 +274,12 @@ async def present_enhanced_response(response: Dict[str, Any]) -> None:
         response_type = response.get("type", "unknown")
         
         # Define helper functions at the top so they're available for all response types
-        async def _send_sources(citations, heading="Sources", apply_quality_filter=False):
+        async def _send_sources(citations, heading="Sources"):
             if not citations:
                 return
-            citations_to_render = list(citations)
-            if apply_quality_filter:
-                ranked = rank_citations(citations_to_render)
-                filtered = [
-                    citation for citation in ranked
-                    if not is_low_signal_url(citation.get("url", ""), citation.get("title", ""))
-                ]
-                citations_to_render = filtered or ranked
             lines = [f"**{heading}:**"]
             # Show ALL sources - extremely high limit
-            for citation in citations_to_render[:1000]:  # 1000 should be more than enough
+            for citation in citations[:1000]:  # 1000 should be more than enough
                 title = citation.get("title", "Source")
                 url = citation.get("url", "#")
                 lines.append(f" [{title}]({url})")
@@ -325,7 +311,7 @@ async def present_enhanced_response(response: Dict[str, Any]) -> None:
             await cl.Message("\n".join(lines).strip()).send()
 
             if response.get("citations"):
-                await _send_sources(response.get("citations", []), apply_quality_filter=True)
+                await _send_sources(response.get("citations", []))
 
             metadata = response.get("metadata", {}) or {}
             meta_bits = []
@@ -1022,8 +1008,6 @@ async def on_message(message: cl.Message):
                 response = await enrich_with_bd_analysis(
                     response, 
                     sector=selected_industry,
-                    user_query=user_text,
-                    session_params=cl.user_session.get(RESEARCH_PARAMS_SESSION_KEY, {}),
                     progress_callback=bd_progress_update
                 )
                 
