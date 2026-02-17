@@ -310,9 +310,9 @@ class FinalAnalystAgent:
                 )
                 
                 # Build credential matches
-                cred_matches = []
+                llm_cred_matches = []
                 for cred_data in opp_data.get("credentials", []):
-                    cred_matches.append(CredentialMatch(
+                    llm_cred_matches.append(CredentialMatch(
                         title=cred_data.get("title", ""),
                         client_challenge="",
                         value_provided="",
@@ -322,8 +322,16 @@ class FinalAnalystAgent:
                 source_title = (original_opp.title if original_opp else opp_data.get("title", ""))
                 source_response = credentials.get(source_title, credentials.get(opp_data.get("title", ""), None))
                 lookup_status = source_response.lookup_status if source_response else "No Match"
-                if not cred_matches and source_response and source_response.matches:
-                    cred_matches = source_response.matches[:2]
+
+                if source_response:
+                    if lookup_status == "Matched" and source_response.matches:
+                        # Canonical source of truth is parsed Credentials Agent output.
+                        cred_matches = source_response.matches[:2]
+                    else:
+                        cred_matches = []
+                else:
+                    # Fallback only when a credentials source response is unavailable.
+                    cred_matches = llm_cred_matches[:2]
 
                 validation_status = opp_data.get("validation_status", "No Internal Data")
                 if validation_status not in ("Validated", "Partial", "No Internal Data"):

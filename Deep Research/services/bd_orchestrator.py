@@ -367,11 +367,11 @@ class BDOrchestrator:
             opp_report.credentials_lookup_status = cred_resp.lookup_status
 
             if cred_resp.lookup_status == "Matched":
-                if not opp_report.credentials:
-                    opp_report.credentials = cred_resp.matches[:2]
+                opp_report.credentials = cred_resp.matches[:2]
                 if opp_report.validation_status == "No Internal Data":
                     opp_report.validation_status = "Validated" if len(cred_resp.matches) >= 2 else "Partial"
             else:
+                opp_report.credentials = []
                 # Preserve legacy validation labels while surfacing explicit status separately.
                 opp_report.validation_status = "No Internal Data"
 

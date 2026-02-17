@@ -114,6 +114,10 @@ def test_formatter_renders_full_credentials_evidence_without_truncation():
     assert "Full Query Text: See **Credentials Batch I/O (Full)** section." in content
     assert "Full Raw Response Text: See **Credentials Batch I/O (Full)** section." in content
     assert "Title: Defense CMMC Credential" in content
+    assert "Industry: Defense" in content
+    assert "Client Challenge: Needed CMMC alignment" in content
+    assert "Approach: Control mapping and remediation" in content
+    assert "Value Provided: Passed readiness assessment" in content
 
 
 def test_formatter_renders_full_batch_io_once():

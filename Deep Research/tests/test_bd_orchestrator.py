@@ -331,6 +331,148 @@ class TestBatchedCredentials:
         assert report is not None
 
     @pytest.mark.asyncio
+    async def test_canonical_credentials_override_sparse_llm_and_clear_non_matches(
+        self, mock_extractor, sample_trigger
+    ):
+        """Matched opportunities should always use canonical credentials; non-matches should be cleared."""
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            opportunities=[
+                Opportunity(title="Opp Matched", scope="Matched scope", confidence="High"),
+                Opportunity(title="Opp No Match", scope="No-match scope", confidence="Medium"),
+            ]
+        )
+
+        credentials_agent = MagicMock(spec=CredentialsAgent)
+        credentials_agent.find_credentials_batch = AsyncMock(return_value=(
+            {
+                "Opp Matched": CredentialsResponse(
+                    opportunity_title="Opp Matched",
+                    matches=[
+                        CredentialMatch(
+                            title="Canonical Rich Credential",
+                            client_challenge="Needed deep compliance mapping",
+                            approach="Delivered control gap remediation roadmap",
+                            value_provided="Enabled bid readiness and reduced compliance risk",
+                            industry="Defense",
+                            technologies_used=["NIST 800-171", "CMMC"],
+                            url="https://ishare.protiviti.com/cred/rich",
+                        )
+                    ],
+                    no_matches_found=False,
+                    lookup_status="Matched",
+                    diagnostics=CredentialsLookupDiagnostics(
+                        opportunity_title="Opp Matched",
+                        sector="Defense",
+                        query_text="batch query",
+                        raw_response_text='{"results":[]}',
+                        parse_outcome="batch_json_parsed_with_matches",
+                        lookup_status="Matched",
+                        duration_ms=10.0,
+                        match_count=1,
+                    ),
+                ),
+                "Opp No Match": CredentialsResponse(
+                    opportunity_title="Opp No Match",
+                    matches=[],
+                    no_matches_found=True,
+                    lookup_status="No Match",
+                    diagnostics=CredentialsLookupDiagnostics(
+                        opportunity_title="Opp No Match",
+                        sector="Defense",
+                        query_text="batch query",
+                        raw_response_text='{"results":[]}',
+                        parse_outcome="batch_json_parsed_no_match",
+                        lookup_status="No Match",
+                        duration_ms=10.0,
+                        match_count=0,
+                    ),
+                ),
+            },
+            CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=2,
+                lookup_count_returned=2,
+                duration_ms=10.0,
+                query_text="batch query text",
+                raw_response_text='{"results":[]}',
+                parse_outcome="batch_json_parsed",
+            ),
+        ))
+
+        final_analyst = MagicMock(spec=FinalAnalystAgent)
+        final_analyst.synthesize = AsyncMock(return_value=MDReport(
+            trigger_summary="Defense credentials merge",
+            executive_summary="Summary",
+            top_opportunities=[
+                MDReportOpportunity(
+                    opportunity=Opportunity(
+                        title="Opp Matched",
+                        scope="Matched scope",
+                        confidence="High",
+                    ),
+                    credentials=[
+                        CredentialMatch(
+                            title="Sparse LLM Stub",
+                            client_challenge="",
+                            approach="",
+                            value_provided="",
+                            industry="",
+                            technologies_used=[],
+                            url="https://stub",
+                        )
+                    ],
+                    validation_status="Validated",
+                    credentials_lookup_status="Matched",
+                ),
+                MDReportOpportunity(
+                    opportunity=Opportunity(
+                        title="Opp No Match",
+                        scope="No-match scope",
+                        confidence="Medium",
+                    ),
+                    credentials=[
+                        CredentialMatch(
+                            title="Hallucinated LLM Stub",
+                            client_challenge="",
+                            approach="",
+                            value_provided="",
+                            industry="",
+                            technologies_used=[],
+                            url="https://stub-no-match",
+                        )
+                    ],
+                    validation_status="Validated",
+                    credentials_lookup_status="Matched",
+                ),
+            ],
+            signals_detected=[],
+            recommended_actions=[],
+            generated_at=datetime.now(),
+            confidence_note="",
+        ))
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            credentials_agent=credentials_agent,
+            final_analyst=final_analyst,
+        )
+
+        report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        matched = next(opp for opp in report.top_opportunities if opp.opportunity.title == "Opp Matched")
+        assert matched.credentials_lookup_status == "Matched"
+        assert len(matched.credentials) == 1
+        assert matched.credentials[0].title == "Canonical Rich Credential"
+        assert matched.credentials[0].client_challenge == "Needed deep compliance mapping"
+        assert matched.credentials[0].approach == "Delivered control gap remediation roadmap"
+        assert matched.credentials[0].value_provided == "Enabled bid readiness and reduced compliance risk"
+
+        no_match = next(opp for opp in report.top_opportunities if opp.opportunity.title == "Opp No Match")
+        assert no_match.credentials_lookup_status == "No Match"
+        assert no_match.credentials == []
+        assert no_match.validation_status == "No Internal Data"
+
+    @pytest.mark.asyncio
     async def test_skips_credentials_when_extraction_failed(
         self, mock_credentials_agent, mock_final_analyst, sample_trigger
     ):

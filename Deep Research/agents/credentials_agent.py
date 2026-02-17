@@ -12,6 +12,7 @@ Based on the Credentials Agent identity from NextSteps_POC.md:
 """
 import os
 import json
+import re
 import logging
 from time import perf_counter
 from typing import Optional, List, Dict, Tuple
@@ -280,24 +281,7 @@ class CredentialsAgent:
 
     def _build_query(self, opportunity: Opportunity, sector: str) -> str:
         """Build the query string from template and opportunity data."""
-        # Extract requirements (CMMC level, compliance, etc.)
-        requirements = []
-        if opportunity.cmmc_level:
-            requirements.append(f"CMMC {opportunity.cmmc_level}")
-        if opportunity.scope:
-            # Extract key technology terms from scope
-            scope_lower = opportunity.scope.lower()
-            if "cybersecurity" in scope_lower:
-                requirements.append("Cybersecurity")
-            if "cloud" in scope_lower:
-                requirements.append("Cloud")
-            if "compliance" in scope_lower:
-                requirements.append("Compliance")
-            if "risk" in scope_lower:
-                requirements.append("Risk Management")
-        
-        requirements_str = ", ".join(requirements) if requirements else "N/A"
-        
+        requirements_str = self._extract_requirements(opportunity)
         return CREDENTIALS_QUERY_TEMPLATE.format(
             title=opportunity.title,
             scope=opportunity.scope,
@@ -333,8 +317,9 @@ class CredentialsAgent:
 
     def _extract_requirements(self, opportunity: Opportunity) -> str:
         requirements: List[str] = []
-        if opportunity.cmmc_level:
-            requirements.append(f"CMMC {opportunity.cmmc_level}")
+        normalized_cmmc = self._normalize_cmmc_requirement(opportunity.cmmc_level)
+        if normalized_cmmc:
+            requirements.append(normalized_cmmc)
         if opportunity.scope:
             scope_lower = opportunity.scope.lower()
             if "cybersecurity" in scope_lower:
@@ -346,6 +331,41 @@ class CredentialsAgent:
             if "risk" in scope_lower:
                 requirements.append("Risk Management")
         return ", ".join(requirements) if requirements else "N/A"
+
+    def _normalize_cmmc_requirement(self, level: Optional[str]) -> Optional[str]:
+        """Normalize CMMC requirement text to canonical Level formatting."""
+        if level is None:
+            return None
+
+        raw = str(level).strip()
+        if not raw:
+            return None
+
+        level_match = re.match(r"(?i)^level\s+(\d+)(.*)$", raw)
+        if level_match:
+            suffix = level_match.group(2).strip()
+            return f"CMMC Level {level_match.group(1)}{f' {suffix}' if suffix else ''}"
+
+        numeric_match = re.match(r"^(\d+)(.*)$", raw)
+        if numeric_match:
+            suffix = numeric_match.group(2).strip()
+            return f"CMMC Level {numeric_match.group(1)}{f' {suffix}' if suffix else ''}"
+
+        cmmc_level_match = re.match(r"(?i)^cmmc\s+level\s+(\d+)(.*)$", raw)
+        if cmmc_level_match:
+            suffix = cmmc_level_match.group(2).strip()
+            return f"CMMC Level {cmmc_level_match.group(1)}{f' {suffix}' if suffix else ''}"
+
+        cmmc_numeric_match = re.match(r"(?i)^cmmc\s+(\d+)(.*)$", raw)
+        if cmmc_numeric_match:
+            suffix = cmmc_numeric_match.group(2).strip()
+            return f"CMMC Level {cmmc_numeric_match.group(1)}{f' {suffix}' if suffix else ''}"
+
+        cmmc_prefixed_match = re.match(r"(?i)^cmmc\s+(.*)$", raw)
+        if cmmc_prefixed_match:
+            return f"CMMC {cmmc_prefixed_match.group(1).strip()}"
+
+        return f"CMMC {raw}"
 
     def _parse_batch_response(
         self,

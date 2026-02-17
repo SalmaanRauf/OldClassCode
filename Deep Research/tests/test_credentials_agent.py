@@ -131,6 +131,46 @@ class TestQueryBuilding:
         assert "Basic Opportunity" in query
         assert "N/A" in query or "General consulting" in query
 
+    def test_normalizes_numeric_cmmc_level(self, agent):
+        """Numeric CMMC level should render as canonical 'CMMC Level X'."""
+        opp = Opportunity(
+            title="Numeric CMMC",
+            scope="General services",
+            cmmc_level="2",
+            confidence="Medium",
+        )
+        assert agent._extract_requirements(opp) == "CMMC Level 2"
+
+    def test_normalizes_level_prefixed_cmmc_level(self, agent):
+        """'Level X' should render as canonical 'CMMC Level X'."""
+        opp = Opportunity(
+            title="Level Prefixed CMMC",
+            scope="General services",
+            cmmc_level="Level 2",
+            confidence="Medium",
+        )
+        assert agent._extract_requirements(opp) == "CMMC Level 2"
+
+    def test_normalizes_cmmc_level_with_suffix(self, agent):
+        """Numeric levels with suffixes should preserve suffix while normalizing prefix."""
+        opp = Opportunity(
+            title="Suffixed CMMC",
+            scope="General services",
+            cmmc_level="2 (Self-Assessment)",
+            confidence="Medium",
+        )
+        assert agent._extract_requirements(opp) == "CMMC Level 2 (Self-Assessment)"
+
+    def test_normalizes_prefixed_numeric_cmmc_level(self, agent):
+        """'CMMC X' should normalize to 'CMMC Level X'."""
+        opp = Opportunity(
+            title="Prefixed Numeric CMMC",
+            scope="General services",
+            cmmc_level="CMMC 2",
+            confidence="Medium",
+        )
+        assert agent._extract_requirements(opp) == "CMMC Level 2"
+
 
 # =============================================================================
 # Response Parsing Tests

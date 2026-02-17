@@ -1,6 +1,7 @@
 """
 Tests for FinalAnalystAgent fallback summary contract.
 """
+import json
 
 import sys
 import os
@@ -78,3 +79,91 @@ def test_fallback_summary_for_extraction_failure_skips_no_match_language():
     assert "lookup skipped due to extraction failure" in summary.lower()
     assert "no-match opportunities" not in summary.lower()
     assert report.confidence_note == "Report generated with fallback logic after extraction gating."
+
+
+def test_parse_report_prefers_source_credentials_and_clears_non_match_stubs():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Defense", signals=["CMMC"])
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+        ]
+    )
+    credentials = {
+        "Opp 1": CredentialsResponse(
+            opportunity_title="Opp 1",
+            matches=[
+                CredentialMatch(
+                    title="Canonical Credential",
+                    client_challenge="Real challenge",
+                    approach="Real approach",
+                    value_provided="Real value",
+                    industry="Defense",
+                    technologies_used=["CMMC"],
+                    url="https://ishare.protiviti.com/cred/real",
+                )
+            ],
+            lookup_status="Matched",
+        ),
+        "Opp 2": CredentialsResponse(
+            opportunity_title="Opp 2",
+            matches=[],
+            lookup_status="No Match",
+        ),
+    }
+
+    response_text = json.dumps(
+        {
+            "trigger_summary": "Defense research",
+            "executive_summary": "Deep Research Findings\n...\nCredentials Agent Findings\n...\nCombined Report & Action Items\n...",
+            "top_opportunities": [
+                {
+                    "title": "Opp 1",
+                    "scope": "Scope 1",
+                    "validation_status": "Validated",
+                    "credentials": [
+                        {"title": "Sparse LLM Stub", "url": "https://stub"}
+                    ],
+                },
+                {
+                    "title": "Opp 2",
+                    "scope": "Scope 2",
+                    "validation_status": "Validated",
+                    "credentials": [
+                        {"title": "LLM No-Match Stub", "url": "https://stub-no-match"}
+                    ],
+                },
+            ],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials=credentials,
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=2,
+        lookups_executed_count=2,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 1, "No Match": 1, "Lookup Failed": 0},
+        credentials_lookup_mode="batched_single_call",
+        credentials_batch_diagnostics=None,
+    )
+
+    opp1 = next(opp for opp in report.top_opportunities if opp.opportunity.title == "Opp 1")
+    assert len(opp1.credentials) == 1
+    assert opp1.credentials[0].title == "Canonical Credential"
+    assert opp1.credentials[0].client_challenge == "Real challenge"
+    assert opp1.credentials[0].approach == "Real approach"
+    assert opp1.credentials[0].value_provided == "Real value"
+
+    opp2 = next(opp for opp in report.top_opportunities if opp.opportunity.title == "Opp 2")
+    assert opp2.credentials == []
+    assert opp2.credentials_lookup_status == "No Match"
+    assert opp2.validation_status == "No Internal Data"
