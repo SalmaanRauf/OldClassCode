@@ -331,6 +331,75 @@ class TestBatchedCredentials:
         assert report is not None
 
     @pytest.mark.asyncio
+    async def test_batch_timeout_fallback_serial_diagnostics_propagate(
+        self, mock_extractor, mock_final_analyst, sample_trigger
+    ):
+        """Should preserve status counts and diagnostics when batch lookup uses serial fallback."""
+        fallback_agent = MagicMock(spec=CredentialsAgent)
+        fallback_agent.find_credentials_batch = AsyncMock(return_value=(
+            {
+                "Opp 1": CredentialsResponse(
+                    opportunity_title="Opp 1",
+                    matches=[
+                        CredentialMatch(
+                            title="Cred 1",
+                            client_challenge="Challenge",
+                            value_provided="Value",
+                            url="https://ishare.protiviti.com/cred/1",
+                        )
+                    ],
+                    no_matches_found=False,
+                    lookup_status="Matched",
+                ),
+                "Opp 2": CredentialsResponse(
+                    opportunity_title="Opp 2",
+                    matches=[],
+                    no_matches_found=True,
+                    lookup_status="No Match",
+                ),
+                "Opp 3": CredentialsResponse(
+                    opportunity_title="Opp 3",
+                    matches=[],
+                    no_matches_found=True,
+                    lookup_status="Lookup Failed",
+                    failure_reason="Per-opportunity fallback lookup failed.",
+                ),
+            },
+            CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=3,
+                lookup_count_returned=3,
+                duration_ms=1200.0,
+                query_text="batch query text",
+                raw_response_text="",
+                parse_outcome="batch_timeout_fallback_serial",
+                error_type="ContextFreeError",
+                error_message="Batch credentials lookup timed out after retry; serial fallback executed.",
+            )
+        ))
+
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            opportunities=[
+                Opportunity(title=f"Opp {i}", scope="Test", confidence="Medium")
+                for i in range(1, 4)
+            ]
+        )
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            credentials_agent=fallback_agent,
+            final_analyst=mock_final_analyst
+        )
+
+        report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        assert report.credentials_batch_diagnostics is not None
+        assert report.credentials_batch_diagnostics.parse_outcome == "batch_timeout_fallback_serial"
+        assert report.credentials_status_counts["Matched"] == 1
+        assert report.credentials_status_counts["No Match"] == 1
+        assert report.credentials_status_counts["Lookup Failed"] == 1
+
+    @pytest.mark.asyncio
     async def test_canonical_credentials_override_sparse_llm_and_clear_non_matches(
         self, mock_extractor, sample_trigger
     ):

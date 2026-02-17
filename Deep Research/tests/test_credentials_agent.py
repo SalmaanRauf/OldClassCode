@@ -454,6 +454,110 @@ class TestBatchLookup:
         assert batch_diag.error_type == "ContextFreeError"
 
     @pytest.mark.asyncio
+    async def test_batch_timeout_then_retry_success(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.side_effect = [
+            ContextFreeError("Request timed out. Service may be unavailable."),
+            json.dumps(
+                {
+                    "results": [
+                        {
+                            "opportunity_id": "opp_1",
+                            "matches": [
+                                {
+                                    "title": "Credential A",
+                                    "client_challenge": "Challenge A",
+                                    "approach": "Approach A",
+                                    "value_provided": "Value A",
+                                    "industry": "Defense",
+                                    "technologies_used": ["CMMC"],
+                                    "url": "https://ishare.protiviti.com/cred/a",
+                                }
+                            ],
+                            "no_matches_found": False,
+                        },
+                        {
+                            "opportunity_id": "opp_2",
+                            "matches": [],
+                            "no_matches_found": True,
+                        },
+                        {
+                            "opportunity_id": "opp_3",
+                            "matches": [],
+                            "no_matches_found": True,
+                        },
+                    ]
+                }
+            ),
+        ]
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        assert mock_client.ask.call_count == 2
+        assert responses["Opp 1"].lookup_status == "Matched"
+        assert responses["Opp 2"].lookup_status == "No Match"
+        assert responses["Opp 3"].lookup_status == "No Match"
+        assert batch_diag.parse_outcome == "batch_json_parsed"
+
+    @pytest.mark.asyncio
+    async def test_batch_timeout_then_serial_fallback(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.side_effect = [
+            ContextFreeError("Request timed out. Service may be unavailable."),
+            ContextFreeError("Request timed out. Service may be unavailable."),
+            json.dumps({"matches": [{"title": "Cred 1", "client_challenge": "A", "approach": "B", "value_provided": "C", "industry": "Defense", "technologies_used": [], "url": "https://ishare.protiviti.com/cred/1"}], "no_matches_found": False}),
+            json.dumps({"matches": [], "no_matches_found": True}),
+            json.dumps({"matches": [{"title": "Cred 3", "client_challenge": "X", "approach": "Y", "value_provided": "Z", "industry": "Defense", "technologies_used": [], "url": "https://ishare.protiviti.com/cred/3"}], "no_matches_found": False}),
+        ]
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        assert mock_client.ask.call_count == 5
+        assert batch_diag.parse_outcome == "batch_timeout_fallback_serial"
+        assert batch_diag.lookup_count_returned == 3
+        assert "serial fallback" in (batch_diag.error_message or "").lower()
+        assert responses["Opp 1"].lookup_status == "Matched"
+        assert responses["Opp 2"].lookup_status == "No Match"
+        assert responses["Opp 3"].lookup_status == "Matched"
+        assert not all(resp.lookup_status == "Lookup Failed" for resp in responses.values())
+
+    @pytest.mark.asyncio
+    async def test_non_timeout_batch_error_unchanged(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.side_effect = ContextFreeError("Service unavailable")
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        assert all(resp.lookup_status == "Lookup Failed" for resp in responses.values())
+        assert batch_diag.parse_outcome == "batch_lookup_failed"
+        assert batch_diag.error_type == "ContextFreeError"
+
+    def test_batch_query_scope_truncation(self, agent):
+        long_scope = " ".join(["scope"] * 200)  # > 350 chars
+        opportunities = [
+            Opportunity(title="Opp 1", scope=long_scope, confidence="High"),
+        ]
+
+        query = agent._build_batch_query(opportunities, "Defense", 3)
+        scope_line = next(line for line in query.splitlines() if line.strip().startswith("scope:"))
+        rendered_scope = scope_line.split("scope:", 1)[1].strip()
+        assert len(rendered_scope) <= 353
+        assert rendered_scope.endswith("...")
+        assert "scope scope scope" in rendered_scope
+
+    @pytest.mark.asyncio
     async def test_batch_partial_recovery_recovers_completed_objects(self, agent, mock_client):
         opportunities = [
             Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),

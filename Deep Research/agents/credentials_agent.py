@@ -13,6 +13,7 @@ Based on the Credentials Agent identity from NextSteps_POC.md:
 import os
 import json
 import re
+import asyncio
 import logging
 from time import perf_counter
 from typing import Optional, List, Dict, Tuple
@@ -163,6 +164,7 @@ class CredentialsAgent:
         """
         self.client = contextfree_client
         self.gpt_endpoint = gpt_endpoint
+        self._batch_timeout_retry_backoff_seconds = 1.0
     
     @classmethod
     def from_env(cls) -> "CredentialsAgent":
@@ -256,28 +258,95 @@ class CredentialsAgent:
                 duration_ms=duration_ms,
                 max_matches_per_opportunity=max_matches_per_opportunity,
             )
-        except Exception as e:
-            duration_ms = (perf_counter() - start_time) * 1000
-            logger.error("Batch credentials lookup failed: %s", e)
-            diagnostics = CredentialsBatchDiagnostics(
-                invoked=True,
-                lookup_count_requested=len(requested),
-                lookup_count_returned=0,
-                duration_ms=duration_ms,
-                query_text=query,
-                raw_response_text="",
-                parse_outcome="batch_lookup_failed",
-                error_type=type(e).__name__,
-                error_message=str(e),
+        except Exception as first_error:
+            if not self._is_timeout_like_error(first_error):
+                duration_ms = (perf_counter() - start_time) * 1000
+                logger.error("Batch credentials lookup failed: %s", first_error)
+                diagnostics = CredentialsBatchDiagnostics(
+                    invoked=True,
+                    lookup_count_requested=len(requested),
+                    lookup_count_returned=0,
+                    duration_ms=duration_ms,
+                    query_text=query,
+                    raw_response_text="",
+                    parse_outcome="batch_lookup_failed",
+                    error_type=type(first_error).__name__,
+                    error_message=str(first_error),
+                )
+                return self._build_batch_failure_map(
+                    requested,
+                    sector,
+                    query,
+                    str(first_error),
+                    f"batch_lookup_failed:{type(first_error).__name__}",
+                    duration_ms,
+                ), diagnostics
+
+            logger.warning(
+                "Batch credentials lookup timed out. Retrying once in %.1fs.",
+                self._batch_timeout_retry_backoff_seconds,
             )
-            return self._build_batch_failure_map(
-                requested,
-                sector,
-                query,
-                str(e),
-                f"batch_lookup_failed:{type(e).__name__}",
-                duration_ms,
-            ), diagnostics
+            await asyncio.sleep(self._batch_timeout_retry_backoff_seconds)
+            try:
+                raw_response = await self.client.ask(query, self.gpt_endpoint)
+                duration_ms = (perf_counter() - start_time) * 1000
+                return self._parse_batch_response(
+                    raw_response=raw_response,
+                    opportunities=requested,
+                    sector=sector,
+                    query_text=query,
+                    duration_ms=duration_ms,
+                    max_matches_per_opportunity=max_matches_per_opportunity,
+                )
+            except Exception as second_error:
+                duration_ms = (perf_counter() - start_time) * 1000
+                if self._is_timeout_like_error(second_error):
+                    logger.warning(
+                        "Batch credentials lookup timed out after retry; executing serial fallback."
+                    )
+                    response_map: Dict[str, CredentialsResponse] = {}
+                    for opportunity in requested:
+                        response_map[opportunity.title] = await self.find_credentials(
+                            opportunity,
+                            sector=sector,
+                        )
+
+                    diagnostics = CredentialsBatchDiagnostics(
+                        invoked=True,
+                        lookup_count_requested=len(requested),
+                        lookup_count_returned=len(response_map),
+                        duration_ms=duration_ms,
+                        query_text=query,
+                        raw_response_text="",
+                        parse_outcome="batch_timeout_fallback_serial",
+                        error_type=type(second_error).__name__,
+                        error_message=(
+                            "Batch credentials lookup timed out after retry; "
+                            "serial fallback executed."
+                        ),
+                    )
+                    return response_map, diagnostics
+
+                logger.error("Batch credentials lookup failed after retry: %s", second_error)
+                diagnostics = CredentialsBatchDiagnostics(
+                    invoked=True,
+                    lookup_count_requested=len(requested),
+                    lookup_count_returned=0,
+                    duration_ms=duration_ms,
+                    query_text=query,
+                    raw_response_text="",
+                    parse_outcome="batch_lookup_failed",
+                    error_type=type(second_error).__name__,
+                    error_message=str(second_error),
+                )
+                return self._build_batch_failure_map(
+                    requested,
+                    sector,
+                    query,
+                    str(second_error),
+                    f"batch_lookup_failed:{type(second_error).__name__}",
+                    duration_ms,
+                ), diagnostics
 
     def _build_query(self, opportunity: Opportunity, sector: str) -> str:
         """Build the query string from template and opportunity data."""
@@ -300,11 +369,12 @@ class CredentialsAgent:
         for idx, opportunity in enumerate(opportunities, 1):
             opp_id = f"opp_{idx}"
             requirements = self._extract_requirements(opportunity)
+            truncated_scope = self._truncate_scope_for_batch(opportunity.scope)
             lines.extend(
                 [
                     f"- opportunity_id: {opp_id}",
                     f"  title: {opportunity.title}",
-                    f"  scope: {opportunity.scope}",
+                    f"  scope: {truncated_scope}",
                     f"  key_requirements: {requirements}",
                 ]
             )
@@ -314,6 +384,22 @@ class CredentialsAgent:
             max_matches=max_matches_per_opportunity,
             opportunities_block="\n".join(lines),
         )
+
+    def _truncate_scope_for_batch(self, scope: str, max_chars: int = 350) -> str:
+        text = (scope or "").strip()
+        if len(text) <= max_chars:
+            return text
+
+        truncated = text[: max_chars + 1]
+        if " " in truncated:
+            truncated = truncated.rsplit(" ", 1)[0]
+        truncated = truncated.rstrip()
+        if not truncated:
+            truncated = text[:max_chars].rstrip()
+        return f"{truncated}..."
+
+    def _is_timeout_like_error(self, error: Exception) -> bool:
+        return isinstance(error, ContextFreeError) and "timed out" in str(error).lower()
 
     def _extract_requirements(self, opportunity: Opportunity) -> str:
         requirements: List[str] = []
