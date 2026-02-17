@@ -2,6 +2,7 @@
 Tests for FinalAnalystAgent fallback summary contract.
 """
 import json
+from datetime import datetime
 
 import sys
 import os
@@ -167,3 +168,31 @@ def test_parse_report_prefers_source_credentials_and_clears_non_match_stubs():
     assert opp2.credentials == []
     assert opp2.credentials_lookup_status == "No Match"
     assert opp2.validation_status == "No Internal Data"
+
+
+def test_sanitize_recommended_actions_rewrites_past_timeline_targets():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    actions = [
+        "Initiate direct outreach to contracting officers (Q3 2024).",
+        "Align proposal teams by 2025.",
+    ]
+
+    sanitized = agent._sanitize_recommended_actions(actions, today=datetime(2026, 2, 17))
+
+    assert "within the next 30-90 days" in sanitized[0]
+    assert "Q3 2024" not in sanitized[0]
+    assert "within the next 30-90 days" in sanitized[1]
+    assert "2025" not in sanitized[1]
+
+
+def test_sanitize_recommended_actions_preserves_non_dated_and_future():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    actions = [
+        "Build targeted bid support materials using matched credentials.",
+        "Complete partner outreach in Q4 2027.",
+    ]
+
+    sanitized = agent._sanitize_recommended_actions(actions, today=datetime(2026, 2, 17))
+
+    assert sanitized[0] == actions[0]
+    assert sanitized[1] == actions[1]

@@ -145,7 +145,11 @@ class OpportunityDigestor:
                     incumbent=item.get("incumbent"),
                     cmmc_level=item.get("cmmc_level"),
                     confidence=confidence,
-                    citations=[],
+                    citations=(
+                        [item.get("source_url").strip()]
+                        if isinstance(item.get("source_url"), str) and item.get("source_url").strip()
+                        else []
+                    ),
                 )
             )
             if len(opportunities) >= max_opportunities:

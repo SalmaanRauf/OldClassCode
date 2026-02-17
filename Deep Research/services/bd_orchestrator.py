@@ -27,6 +27,7 @@ from models.bd_schemas import (
 )
 from services.opportunity_extractor import OpportunityExtractor
 from services.opportunity_digestor import OpportunityDigestor
+from services.opportunity_selector import select_top_opportunities
 from agents.credentials_agent import CredentialsAgent
 from agents.final_analyst_agent import FinalAnalystAgent
 
@@ -162,8 +163,39 @@ class BDOrchestrator:
                 f"(status={ctx.opportunity_extraction_status})"
             )
 
+            # Deterministic opportunity selection before credentials lookup
+            top_opportunities, selection_diagnostics = select_top_opportunities(
+                opportunities=ctx.parsed_research.opportunities,
+                trigger=ctx.trigger,
+                reference_date=datetime.now(),
+                top_n=3,
+            )
+            if top_opportunities:
+                selected_titles = {opportunity.title for opportunity in top_opportunities}
+                remaining = [
+                    opportunity
+                    for opportunity in ctx.parsed_research.opportunities
+                    if opportunity.title not in selected_titles
+                ]
+                ctx.parsed_research.opportunities = top_opportunities + remaining
+            ctx.opportunity_selection_diagnostics = selection_diagnostics
+            ctx.trace.append(
+                "Opportunity selection: "
+                f"input={selection_diagnostics.opportunities_input_count}, "
+                f"after_filters={selection_diagnostics.opportunities_after_hard_filters}, "
+                f"selected={selection_diagnostics.opportunities_selected_count}, "
+                f"fallback_used={selection_diagnostics.fallback_used}"
+            )
+            if selection_diagnostics.rejection_counts:
+                ctx.trace.append(
+                    "Opportunity rejections: "
+                    + ", ".join(
+                        f"{reason}={count}"
+                        for reason, count in selection_diagnostics.rejection_counts.items()
+                    )
+                )
+
             # Step 3: Query credentials for top opportunities (single batched call)
-            top_opportunities = ctx.parsed_research.opportunities[:3]
             status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
             if ctx.opportunity_extraction_status == "Extraction Failed":
                 ctx.lookups_skipped_reason = (
@@ -386,6 +418,7 @@ class BDOrchestrator:
         report.credentials_lookup_mode = ctx.credentials_lookup_mode
         report.credentials_batch_diagnostics = ctx.credentials_batch_diagnostics
         report.opportunities_source = ctx.opportunities_source
+        report.opportunity_selection_diagnostics = ctx.opportunity_selection_diagnostics
     
     def _save_trace(self, ctx: BDContext, duration: float):
         """Save execution trace to file."""
@@ -404,7 +437,9 @@ class BDOrchestrator:
                     "sector": ctx.trigger.sector,
                     "signals": ctx.trigger.signals,
                     "company_focus": ctx.trigger.company_focus,
-                    "geography": ctx.trigger.geography
+                    "geography": ctx.trigger.geography,
+                    "time_window_days": ctx.trigger.time_window_days,
+                    "min_value_usd": ctx.trigger.min_value_usd,
                 },
                 "deep_research_length": len(ctx.deep_research_raw or ""),
                 "opportunities_extracted": len(ctx.parsed_research.opportunities) if ctx.parsed_research else 0,
@@ -428,6 +463,14 @@ class BDOrchestrator:
                     else (ctx.credentials_batch_diagnostics.__dict__ if ctx.credentials_batch_diagnostics else None)
                 ),
                 "opportunity_digest_diagnostics": ctx.opportunity_digest_diagnostics,
+                "opportunity_selection_diagnostics": (
+                    ctx.opportunity_selection_diagnostics.model_dump()
+                    if ctx.opportunity_selection_diagnostics and hasattr(ctx.opportunity_selection_diagnostics, "model_dump")
+                    else (
+                        ctx.opportunity_selection_diagnostics.__dict__
+                        if ctx.opportunity_selection_diagnostics else None
+                    )
+                ),
                 "credentials_diagnostics": [
                     diag.model_dump() if hasattr(diag, "model_dump") else diag.__dict__
                     for diag in ctx.credentials_diagnostics.values()

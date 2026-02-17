@@ -4,7 +4,7 @@ Integration tests for BDOrchestrator.
 Uses mocked components to test the full workflow without live API calls.
 """
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from datetime import datetime
 from pathlib import Path
 import json
@@ -27,6 +27,7 @@ from models.bd_schemas import (
     CredentialsLookupDiagnostics,
     CredentialsBatchDiagnostics,
     OpportunityExtractionDiagnostics,
+    OpportunitySelectionDiagnostics,
     CredentialMatch,
     MDReport,
     MDReportOpportunity
@@ -215,6 +216,7 @@ class TestFullWorkflow:
         assert report.lookups_executed_count == 1
         assert report.credentials_batch_diagnostics is not None
         assert report.credentials_lookup_mode == "batched_single_call"
+        assert report.opportunity_selection_diagnostics is not None
     
     @pytest.mark.asyncio
     async def test_progress_callback_receives_updates(
@@ -288,6 +290,54 @@ class TestBatchedCredentials:
         
         # Should have called credentials agent once with top 3
         mock_credentials_agent.find_credentials_batch.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_selector_drives_batched_lookup_and_diagnostics_persist(
+        self, mock_extractor, mock_credentials_agent, mock_final_analyst, sample_trigger
+    ):
+        opportunities = [
+            Opportunity(title=f"Opportunity {i}", scope="Test scope", confidence="High")
+            for i in range(1, 6)
+        ]
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            executive_summary="Multiple opportunities",
+            opportunities=opportunities,
+        )
+
+        selected = [opportunities[3], opportunities[1], opportunities[4]]
+        selection_diagnostics = OpportunitySelectionDiagnostics(
+            invoked=True,
+            opportunities_input_count=5,
+            opportunities_after_hard_filters=4,
+            opportunities_selected_count=3,
+            selection_policy="strict_with_unknown_date_fallback",
+            cmmc_required=True,
+            time_window_days=sample_trigger.time_window_days,
+            min_value_usd=sample_trigger.min_value_usd,
+            geography=sample_trigger.geography,
+            rejection_counts={"out_of_window": 1},
+            fallback_used=True,
+            selected_titles=[opp.title for opp in selected],
+        )
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            credentials_agent=mock_credentials_agent,
+            final_analyst=mock_final_analyst
+        )
+
+        with patch(
+            "services.bd_orchestrator.select_top_opportunities",
+            return_value=(selected, selection_diagnostics),
+        ) as mock_selector:
+            report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        mock_selector.assert_called_once()
+        lookup_args = mock_credentials_agent.find_credentials_batch.call_args.args
+        assert lookup_args[0] == selected
+        assert report.opportunity_selection_diagnostics is not None
+        assert report.opportunity_selection_diagnostics.selection_policy == "strict_with_unknown_date_fallback"
+        assert report.opportunity_selection_diagnostics.selected_titles == [opp.title for opp in selected]
     
     @pytest.mark.asyncio
     async def test_handles_credentials_failure_gracefully(

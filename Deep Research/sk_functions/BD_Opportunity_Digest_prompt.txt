@@ -19,12 +19,14 @@ Convert the provided Deep Research report into a strict JSON list of concrete op
    - `agency` (optional)
    - `scope` (required)
    - `estimated_value` (optional)
-   - `timeline` (optional)
+   - `timeline` (optional, include explicit posting/release date when present in source)
    - `incumbent` (optional)
    - `cmmc_level` (optional)
    - `confidence` (`High`, `Medium`, or `Low`)
+   - `source_url` (optional direct source URL)
 4. Never fabricate details. If a field is unknown, omit it or set null.
 5. Keep only opportunities relevant to the trigger sector/context.
+6. Prefer direct solicitation/article/report URLs for `source_url`; avoid generic home/search/login/portal-return pages.
 
 # Output Contract
 Return ONLY valid JSON:
@@ -38,7 +40,8 @@ Return ONLY valid JSON:
       "timeline": "string or null",
       "incumbent": "string or null",
       "cmmc_level": "string or null",
-      "confidence": "High | Medium | Low"
+      "confidence": "High | Medium | Low",
+      "source_url": "string or null"
     }
   ]
 }

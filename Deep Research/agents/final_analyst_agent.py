@@ -8,6 +8,7 @@ The agent follows the existing kernel_setup.py pattern with ATLASClient.
 """
 import os
 import json
+import re
 import logging
 from datetime import datetime
 from typing import Optional, Dict, Any
@@ -242,6 +243,7 @@ class FinalAnalystAgent:
         
         return {
             "trigger_summary": trigger_summary,
+            "current_date_iso": datetime.now().date().isoformat(),
             "research_summary": research_summary,
             "opportunities_json": json.dumps(opps_data, indent=2),
             "credentials_json": json.dumps(creds_data, indent=2),
@@ -302,6 +304,7 @@ class FinalAnalystAgent:
             
             # Build top opportunities
             top_opps = []
+            today = datetime.now()
             for opp_data in data.get("top_opportunities", [])[:3]:
                 # Find matching original opportunity
                 original_opp = self._find_opportunity(
@@ -357,12 +360,17 @@ class FinalAnalystAgent:
                     credentials_lookup_status=lookup_status
                 ))
             
+            recommended_actions = self._sanitize_recommended_actions(
+                data.get("recommended_actions", [])[:5],
+                today=today,
+            )
+
             return MDReport(
                 trigger_summary=data.get("trigger_summary", ""),
                 executive_summary=data.get("executive_summary", ""),
                 top_opportunities=top_opps,
                 signals_detected=data.get("signals_detected", [])[:5],
-                recommended_actions=data.get("recommended_actions", [])[:5],
+                recommended_actions=recommended_actions,
                 generated_at=datetime.now(),
                 confidence_note=data.get("confidence_note", ""),
                 credentials_evidence=self._build_credentials_evidence(credentials),
@@ -479,6 +487,11 @@ class FinalAnalystAgent:
         if lookups_executed_count == 0 and credentials:
             lookups_executed_count = len(credentials)
 
+        recommended_actions = self._sanitize_recommended_actions(
+            research.recommended_actions[:5],
+            today=datetime.now(),
+        )
+
         return MDReport(
             trigger_summary=f"{trigger.sector} research with {', '.join(trigger.signals)} signals",
             executive_summary=self._build_three_block_summary(
@@ -488,11 +501,12 @@ class FinalAnalystAgent:
                 opportunity_extraction_reason=opportunity_extraction_reason,
                 lookups_executed_count=lookups_executed_count,
                 lookups_skipped_reason=lookups_skipped_reason,
-                credentials_status_counts=credentials_status_counts
+                credentials_status_counts=credentials_status_counts,
+                sanitized_actions=recommended_actions,
             ),
             top_opportunities=top_opps,
             signals_detected=research.signals_detected[:5],
-            recommended_actions=research.recommended_actions[:5],
+            recommended_actions=recommended_actions,
             generated_at=datetime.now(),
             confidence_note=self._fallback_confidence_note(fallback_reason),
             credentials_evidence=self._build_credentials_evidence(credentials),
@@ -521,7 +535,8 @@ class FinalAnalystAgent:
         opportunity_extraction_reason: Optional[str],
         lookups_executed_count: int,
         lookups_skipped_reason: Optional[str],
-        credentials_status_counts: Dict[str, int]
+        credentials_status_counts: Dict[str, int],
+        sanitized_actions: Optional[list[str]] = None,
     ) -> str:
         """Build fixed-format summary with deep research + credentials + combined actions."""
         counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
@@ -552,8 +567,9 @@ class FinalAnalystAgent:
                 credentials_lines.append(f"- Failed lookups: {', '.join(failed_titles[:5])}")
 
         combined_lines = []
-        if research.recommended_actions:
-            combined_lines.extend(f"- {action}" for action in research.recommended_actions[:3])
+        actions = sanitized_actions if sanitized_actions is not None else research.recommended_actions
+        if actions:
+            combined_lines.extend(f"- {action}" for action in actions[:3])
         else:
             combined_lines.append("- Continue targeted opportunity monitoring and refresh signals weekly.")
         if lookups_executed_count == 0 and opportunity_extraction_status == "Extraction Failed":
@@ -601,6 +617,77 @@ class FinalAnalystAgent:
                 )
             )
         return evidence
+
+    def _sanitize_recommended_actions(
+        self,
+        actions: list[str],
+        today: datetime
+    ) -> list[str]:
+        """Normalize past-dated recommendations to a present/future execution window."""
+        sanitized: list[str] = []
+        for action in actions:
+            sanitized.append(self._sanitize_single_action(action, today))
+        return sanitized
+
+    def _sanitize_single_action(self, action: str, today: datetime) -> str:
+        if not action:
+            return action
+
+        original_action = action
+        current_quarter = ((today.month - 1) // 3) + 1
+
+        quarter_patterns = [
+            re.compile(r"(?i)\bQ(?P<quarter>[1-4])\s*(?:FY)?\s*(?P<year>20\d{2})\b"),
+            re.compile(r"(?i)\bFY(?P<year>20\d{2})\s*Q(?P<quarter>[1-4])\b"),
+            re.compile(r"(?i)\b(?P<year>20\d{2})\s*Q(?P<quarter>[1-4])\b"),
+        ]
+
+        def replace_past_quarter(match: re.Match) -> str:
+            year = int(match.group("year"))
+            quarter = int(match.group("quarter"))
+            if year < today.year or (year == today.year and quarter < current_quarter):
+                return "within the next 30-90 days"
+            return match.group(0)
+
+        for pattern in quarter_patterns:
+            action = pattern.sub(replace_past_quarter, action)
+
+        month_date_pattern = re.compile(
+            r"(?i)\b("
+            r"jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+            r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|"
+            r"nov(?:ember)?|dec(?:ember)?"
+            r")\s+\d{1,2},?\s+20\d{2}\b"
+        )
+
+        def replace_past_month_date(match: re.Match) -> str:
+            token = match.group(0)
+            parsed_date = self._try_parse_month_date(token)
+            if parsed_date and parsed_date.date() < today.date():
+                return "within the next 30-90 days"
+            return token
+
+        action = month_date_pattern.sub(replace_past_month_date, action)
+
+        year_pattern = re.compile(r"(?i)\b(?:in|by|during|for)\s+(20\d{2})\b")
+
+        def replace_past_year(match: re.Match) -> str:
+            year = int(match.group(1))
+            if year < today.year:
+                return "within the next 30-90 days"
+            return match.group(0)
+
+        action = year_pattern.sub(replace_past_year, action)
+
+        return action if action != original_action else original_action
+
+    def _try_parse_month_date(self, token: str) -> Optional[datetime]:
+        for fmt in ("%B %d, %Y", "%b %d, %Y", "%B %d %Y", "%b %d %Y"):
+            try:
+                return datetime.strptime(token, fmt)
+            except ValueError:
+                continue
+        return None
     
     def _get_fallback_prompt(self) -> str:
         """Fallback prompt if file not found."""

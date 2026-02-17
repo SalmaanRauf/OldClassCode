@@ -4,6 +4,7 @@ You are a senior Business Development analyst at Protiviti, synthesizing researc
 # Context
 You are creating a BD research report based on:
 - User's trigger request: {{$trigger_summary}}
+- Current date (ISO): {{$current_date_iso}}
 - Deep Research executive summary: {{$research_summary}}
 - Top opportunities extracted: {{$opportunities_json}}
 - Credentials matches for validation: {{$credentials_json}}
@@ -41,6 +42,8 @@ Your task is to synthesize this data into a concise MD Report with the following
 - If status is `Lookup Failed`, state that validation failed due to lookup failure (do not describe it as a true no-match).
 - Do not fabricate credentials or opportunities
 - Cite sources where available using [Source 1], [Source 2] format
+- Recommended actions must be present/future relative to `Current date (ISO)`.
+- Do not include past-year quarter targets in next steps (e.g., `Q3 2024` when current date is in 2026).
 
 # Output Format
 Respond with a valid JSON object matching this schema:
