@@ -14,14 +14,15 @@ import os
 import json
 import logging
 from time import perf_counter
-from typing import Optional, List
+from typing import Optional, List, Dict, Tuple
 
 from services.contextfree_client import ContextFreeClient, ContextFreeError
 from models.bd_schemas import (
     Opportunity,
     CredentialMatch,
     CredentialsResponse,
-    CredentialsLookupDiagnostics
+    CredentialsLookupDiagnostics,
+    CredentialsBatchDiagnostics,
 )
 
 logger = logging.getLogger(__name__)
@@ -80,6 +81,54 @@ If no relevant credentials exist, respond with:
 {{
     "matches": [],
     "no_matches_found": true
+}}
+"""
+
+BATCH_CREDENTIALS_QUERY_TEMPLATE = """
+# Role
+You are Protiviti's Credentials Agent, an expert at finding relevant internal credentials.
+
+# Context
+I need to validate multiple opportunities with Protiviti's internal experience.
+
+Sector/Industry: {sector}
+Max matches per opportunity: {max_matches}
+
+Opportunities:
+{opportunities_block}
+
+# Instructions
+1. For each opportunity, search up to {max_matches} credentials most relevant to that specific opportunity.
+2. Prioritize relevance by: industry match > technology match > challenge similarity.
+3. Keep opportunity groupings separate by `opportunity_id`.
+4. Do not combine or pool matches across opportunities.
+
+# Constraints
+- Never reveal client names.
+- Only return approved, vetted credentials.
+- Do not provide database queries or counts.
+- Do not fabricate credentials.
+
+# Output Format
+Respond ONLY with valid JSON:
+{{
+  "results": [
+    {{
+      "opportunity_id": "opp_1",
+      "matches": [
+        {{
+          "title": "Credential title",
+          "client_challenge": "Problem description",
+          "approach": "How it was approached",
+          "value_provided": "Value delivered",
+          "industry": "Industry sector",
+          "technologies_used": ["tech1", "tech2"],
+          "url": "https://ishare.protiviti.com/..."
+        }}
+      ],
+      "no_matches_found": false
+    }}
+  ]
 }}
 """
 
@@ -170,7 +219,60 @@ class CredentialsAgent:
                 error=e,
                 duration_ms=(perf_counter() - start_time) * 1000
             )
-    
+
+    async def find_credentials_batch(
+        self,
+        opportunities: List[Opportunity],
+        sector: str,
+        max_matches_per_opportunity: int = 3
+    ) -> Tuple[Dict[str, CredentialsResponse], CredentialsBatchDiagnostics]:
+        """Run one batched credentials lookup for multiple opportunities."""
+        requested = opportunities[:3]
+        start_time = perf_counter()
+        if not requested:
+            diagnostics = CredentialsBatchDiagnostics(
+                invoked=False,
+                lookup_count_requested=0,
+                lookup_count_returned=0,
+                parse_outcome="no_opportunities",
+            )
+            return {}, diagnostics
+
+        query = self._build_batch_query(requested, sector, max_matches_per_opportunity)
+        try:
+            raw_response = await self.client.ask(query, self.gpt_endpoint)
+            duration_ms = (perf_counter() - start_time) * 1000
+            return self._parse_batch_response(
+                raw_response=raw_response,
+                opportunities=requested,
+                sector=sector,
+                query_text=query,
+                duration_ms=duration_ms,
+                max_matches_per_opportunity=max_matches_per_opportunity,
+            )
+        except Exception as e:
+            duration_ms = (perf_counter() - start_time) * 1000
+            logger.error("Batch credentials lookup failed: %s", e)
+            diagnostics = CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=len(requested),
+                lookup_count_returned=0,
+                duration_ms=duration_ms,
+                query_text=query,
+                raw_response_text="",
+                parse_outcome="batch_lookup_failed",
+                error_type=type(e).__name__,
+                error_message=str(e),
+            )
+            return self._build_batch_failure_map(
+                requested,
+                sector,
+                query,
+                str(e),
+                f"batch_lookup_failed:{type(e).__name__}",
+                duration_ms,
+            ), diagnostics
+
     def _build_query(self, opportunity: Opportunity, sector: str) -> str:
         """Build the query string from template and opportunity data."""
         # Extract requirements (CMMC level, compliance, etc.)
@@ -197,6 +299,229 @@ class CredentialsAgent:
             sector=sector,
             requirements=requirements_str
         )
+
+    def _build_batch_query(
+        self,
+        opportunities: List[Opportunity],
+        sector: str,
+        max_matches_per_opportunity: int
+    ) -> str:
+        """Build a single batch query for up to three opportunities."""
+        lines = []
+        for idx, opportunity in enumerate(opportunities, 1):
+            opp_id = f"opp_{idx}"
+            requirements = self._extract_requirements(opportunity)
+            lines.extend(
+                [
+                    f"- opportunity_id: {opp_id}",
+                    f"  title: {opportunity.title}",
+                    f"  scope: {opportunity.scope}",
+                    f"  key_requirements: {requirements}",
+                ]
+            )
+
+        return BATCH_CREDENTIALS_QUERY_TEMPLATE.format(
+            sector=sector,
+            max_matches=max_matches_per_opportunity,
+            opportunities_block="\n".join(lines),
+        )
+
+    def _extract_requirements(self, opportunity: Opportunity) -> str:
+        requirements: List[str] = []
+        if opportunity.cmmc_level:
+            requirements.append(f"CMMC {opportunity.cmmc_level}")
+        if opportunity.scope:
+            scope_lower = opportunity.scope.lower()
+            if "cybersecurity" in scope_lower:
+                requirements.append("Cybersecurity")
+            if "cloud" in scope_lower:
+                requirements.append("Cloud")
+            if "compliance" in scope_lower:
+                requirements.append("Compliance")
+            if "risk" in scope_lower:
+                requirements.append("Risk Management")
+        return ", ".join(requirements) if requirements else "N/A"
+
+    def _parse_batch_response(
+        self,
+        raw_response: str,
+        opportunities: List[Opportunity],
+        sector: str,
+        query_text: str,
+        duration_ms: float,
+        max_matches_per_opportunity: int
+    ) -> Tuple[Dict[str, CredentialsResponse], CredentialsBatchDiagnostics]:
+        id_to_opp = {f"opp_{idx}": opp for idx, opp in enumerate(opportunities, 1)}
+        if not raw_response or not raw_response.strip():
+            diagnostics = CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=len(opportunities),
+                lookup_count_returned=0,
+                duration_ms=duration_ms,
+                query_text=query_text,
+                raw_response_text=raw_response or "",
+                parse_outcome="empty_response",
+            )
+            return self._build_batch_failure_map(
+                opportunities,
+                sector,
+                query_text,
+                "Batch credentials response was empty.",
+                "batch_empty_response",
+                duration_ms,
+            ), diagnostics
+
+        try:
+            payload = json.loads(self._extract_json(raw_response))
+            results = payload.get("results", [])
+            if not isinstance(results, list):
+                raise json.JSONDecodeError("results must be a list", raw_response, 0)
+
+            response_map: Dict[str, CredentialsResponse] = {}
+            returned = 0
+            for entry in results:
+                if not isinstance(entry, dict):
+                    continue
+                opp_id = entry.get("opportunity_id")
+                opp = id_to_opp.get(opp_id)
+                if opp is None:
+                    continue
+                returned += 1
+                matches = self._coerce_matches(entry.get("matches", []), max_matches_per_opportunity)
+                has_matches = len(matches) > 0
+                status = "Matched" if has_matches else "No Match"
+                parse_outcome = "batch_json_parsed_with_matches" if has_matches else "batch_json_parsed_no_match"
+                diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_title=opp.title,
+                    sector=sector,
+                    query_text=query_text,
+                    raw_response_text=raw_response,
+                    parse_outcome=parse_outcome,
+                    lookup_status=status,
+                    duration_ms=duration_ms,
+                    match_count=len(matches),
+                )
+                response_map[opp.title] = CredentialsResponse(
+                    opportunity_title=opp.title,
+                    matches=matches,
+                    no_matches_found=entry.get("no_matches_found", not has_matches),
+                    lookup_status=status,
+                    diagnostics=diagnostics,
+                )
+
+            for opp in opportunities:
+                if opp.title in response_map:
+                    continue
+                diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_title=opp.title,
+                    sector=sector,
+                    query_text=query_text,
+                    raw_response_text=raw_response,
+                    parse_outcome="batch_missing_opportunity_result",
+                    lookup_status="Lookup Failed",
+                    error_message="Missing result for opportunity in batch response.",
+                    duration_ms=duration_ms,
+                    match_count=0,
+                )
+                response_map[opp.title] = CredentialsResponse(
+                    opportunity_title=opp.title,
+                    matches=[],
+                    no_matches_found=True,
+                    lookup_status="Lookup Failed",
+                    failure_reason="Missing result for opportunity in batch response.",
+                    diagnostics=diagnostics,
+                )
+
+            batch_diagnostics = CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=len(opportunities),
+                lookup_count_returned=returned,
+                duration_ms=duration_ms,
+                query_text=query_text,
+                raw_response_text=raw_response,
+                parse_outcome="batch_json_parsed",
+            )
+            return response_map, batch_diagnostics
+        except json.JSONDecodeError as e:
+            diagnostics = CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=len(opportunities),
+                lookup_count_returned=0,
+                duration_ms=duration_ms,
+                query_text=query_text,
+                raw_response_text=raw_response,
+                parse_outcome="batch_json_parse_error",
+                error_type="JSONDecodeError",
+                error_message=str(e),
+            )
+            return self._build_batch_failure_map(
+                opportunities,
+                sector,
+                query_text,
+                "Could not parse batch credentials response as JSON.",
+                "batch_json_parse_error",
+                duration_ms,
+                raw_response=raw_response,
+            ), diagnostics
+
+    def _coerce_matches(self, raw_matches: object, max_matches: int) -> List[CredentialMatch]:
+        matches: List[CredentialMatch] = []
+        if not isinstance(raw_matches, list):
+            return matches
+        for match_data in raw_matches:
+            if not isinstance(match_data, dict):
+                continue
+            try:
+                matches.append(
+                    CredentialMatch(
+                        title=match_data.get("title", "Unknown"),
+                        client_challenge=match_data.get("client_challenge", ""),
+                        approach=match_data.get("approach", ""),
+                        value_provided=match_data.get("value_provided", ""),
+                        industry=match_data.get("industry", ""),
+                        technologies_used=match_data.get("technologies_used", []),
+                        emd=match_data.get("emd"),
+                        url=match_data.get("url", ""),
+                    )
+                )
+            except Exception as e:
+                logger.warning("Failed to parse batch credential match: %s", e)
+            if len(matches) >= max_matches:
+                break
+        return matches
+
+    def _build_batch_failure_map(
+        self,
+        opportunities: List[Opportunity],
+        sector: str,
+        query_text: str,
+        failure_reason: str,
+        parse_outcome: str,
+        duration_ms: float,
+        raw_response: str = "",
+    ) -> Dict[str, CredentialsResponse]:
+        results: Dict[str, CredentialsResponse] = {}
+        for opp in opportunities:
+            diagnostics = CredentialsLookupDiagnostics(
+                opportunity_title=opp.title,
+                sector=sector,
+                query_text=query_text,
+                raw_response_text=raw_response,
+                parse_outcome=parse_outcome,
+                lookup_status="Lookup Failed",
+                error_message=failure_reason,
+                duration_ms=duration_ms,
+                match_count=0,
+            )
+            results[opp.title] = CredentialsResponse(
+                opportunity_title=opp.title,
+                matches=[],
+                no_matches_found=True,
+                lookup_status="Lookup Failed",
+                failure_reason=failure_reason,
+                diagnostics=diagnostics,
+            )
+        return results
     
     def _parse_response(
         self,

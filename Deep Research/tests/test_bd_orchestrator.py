@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.bd_orchestrator import BDOrchestrator
 from services.opportunity_extractor import OpportunityExtractor
+from services.opportunity_digestor import OpportunityDigestor
 from agents.credentials_agent import CredentialsAgent
 from agents.final_analyst_agent import FinalAnalystAgent
 from models.bd_schemas import (
@@ -24,6 +25,7 @@ from models.bd_schemas import (
     DeepResearchOutput,
     CredentialsResponse,
     CredentialsLookupDiagnostics,
+    CredentialsBatchDiagnostics,
     OpportunityExtractionDiagnostics,
     CredentialMatch,
     MDReport,
@@ -112,19 +114,32 @@ def mock_credentials_agent():
         duration_ms=10.0,
         match_count=1
     )
-    agent.find_credentials = AsyncMock(return_value=CredentialsResponse(
-        opportunity_title="CMMC Program",
-        matches=[
-            CredentialMatch(
-                title="CMMC Assessment for Defense Contractor",
-                client_challenge="Needed CMMC certification",
-                value_provided="Achieved certification",
-                url="https://ishare.protiviti.com/cred/123"
+    agent.find_credentials_batch = AsyncMock(return_value=(
+        {
+            "CMMC Program": CredentialsResponse(
+                opportunity_title="CMMC Program",
+                matches=[
+                    CredentialMatch(
+                        title="CMMC Assessment for Defense Contractor",
+                        client_challenge="Needed CMMC certification",
+                        value_provided="Achieved certification",
+                        url="https://ishare.protiviti.com/cred/123"
+                    )
+                ],
+                no_matches_found=False,
+                lookup_status="Matched",
+                diagnostics=diagnostics
             )
-        ],
-        no_matches_found=False,
-        lookup_status="Matched",
-        diagnostics=diagnostics
+        },
+        CredentialsBatchDiagnostics(
+            invoked=True,
+            lookup_count_requested=1,
+            lookup_count_returned=1,
+            duration_ms=10.0,
+            query_text="batch query text",
+            raw_response_text='{"results":[{"opportunity_id":"opp_1"}]}',
+            parse_outcome="batch_json_parsed",
+        )
     ))
     return agent
 
@@ -185,7 +200,7 @@ class TestFullWorkflow:
         
         # Verify each step was called
         mock_extractor.extract.assert_called_once_with(SAMPLE_DEEP_RESEARCH)
-        mock_credentials_agent.find_credentials.assert_called()
+        mock_credentials_agent.find_credentials_batch.assert_called_once()
         mock_final_analyst.synthesize.assert_called_once()
         
         # Verify report
@@ -198,6 +213,8 @@ class TestFullWorkflow:
         assert report.opportunity_extraction_status == "Parsed"
         assert report.opportunities_extracted_count == 1
         assert report.lookups_executed_count == 1
+        assert report.credentials_batch_diagnostics is not None
+        assert report.credentials_lookup_mode == "batched_single_call"
     
     @pytest.mark.asyncio
     async def test_progress_callback_receives_updates(
@@ -241,11 +258,11 @@ class TestFullWorkflow:
 
 
 # =============================================================================
-# Parallel Credentials Lookup Tests
+# Batched Credentials Lookup Tests
 # =============================================================================
 
-class TestParallelCredentials:
-    """Test parallel credentials lookup."""
+class TestBatchedCredentials:
+    """Test single-call batched credentials lookup."""
     
     @pytest.mark.asyncio
     async def test_queries_multiple_opportunities(
@@ -269,8 +286,8 @@ class TestParallelCredentials:
         
         await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
         
-        # Should have called credentials agent 3 times
-        assert mock_credentials_agent.find_credentials.call_count == 3
+        # Should have called credentials agent once with top 3
+        mock_credentials_agent.find_credentials_batch.assert_called_once()
     
     @pytest.mark.asyncio
     async def test_handles_credentials_failure_gracefully(
@@ -279,13 +296,22 @@ class TestParallelCredentials:
         """Should continue if some credentials lookups fail."""
         # Setup credentials agent to fail on some calls
         failing_agent = MagicMock(spec=CredentialsAgent)
-        failing_agent.find_credentials = AsyncMock(
-            side_effect=[
-                CredentialsResponse(opportunity_title="Opp 1", matches=[], no_matches_found=True, lookup_status="No Match"),
-                Exception("API Error"),
-                CredentialsResponse(opportunity_title="Opp 3", matches=[], no_matches_found=True, lookup_status="No Match")
-            ]
-        )
+        failing_agent.find_credentials_batch = AsyncMock(return_value=(
+            {
+                "Opp 1": CredentialsResponse(opportunity_title="Opp 1", matches=[], no_matches_found=True, lookup_status="No Match"),
+                "Opp 2": CredentialsResponse(opportunity_title="Opp 2", matches=[], no_matches_found=True, lookup_status="Lookup Failed", failure_reason="API Error"),
+                "Opp 3": CredentialsResponse(opportunity_title="Opp 3", matches=[], no_matches_found=True, lookup_status="No Match"),
+            },
+            CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=3,
+                lookup_count_returned=3,
+                duration_ms=10.0,
+                query_text="batch query text",
+                raw_response_text='{"results":[]}',
+                parse_outcome="batch_json_parsed",
+            )
+        ))
         
         mock_extractor.extract.return_value = DeepResearchOutput(
             opportunities=[
@@ -330,10 +356,52 @@ class TestParallelCredentials:
 
         report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
 
-        mock_credentials_agent.find_credentials.assert_not_called()
+        mock_credentials_agent.find_credentials_batch.assert_not_called()
         assert report.opportunity_extraction_status == "Extraction Failed"
         assert report.lookups_executed_count == 0
         assert report.lookups_skipped_reason is not None
+
+    @pytest.mark.asyncio
+    async def test_uses_atlas_digest_when_enabled(
+        self, mock_credentials_agent, mock_final_analyst, sample_trigger
+    ):
+        """Should prefer ATLAS-digested opportunities when enabled and available."""
+        extractor = MagicMock(spec=OpportunityExtractor)
+        extractor.extract.return_value = DeepResearchOutput(
+            executive_summary="Narrative report",
+            opportunities=[],
+            extraction_diagnostics=OpportunityExtractionDiagnostics(
+                status="Extraction Failed",
+                reason="No structured blocks.",
+                opportunities_extracted_count=0,
+                extraction_method="section_structured",
+                extraction_confidence="Low",
+                candidate_signal_count=5,
+            ),
+        )
+
+        digestor = MagicMock(spec=OpportunityDigestor)
+        digestor.digest = AsyncMock(return_value=(
+            [
+                Opportunity(title="Digest Opp 1", scope="Scope 1", confidence="High"),
+                Opportunity(title="Digest Opp 2", scope="Scope 2", confidence="Medium"),
+            ],
+            {"status": "Succeeded", "parse_outcome": "json_parsed_with_opportunities"},
+        ))
+
+        orchestrator = BDOrchestrator(
+            extractor=extractor,
+            opportunity_digestor=digestor,
+            credentials_agent=mock_credentials_agent,
+            final_analyst=mock_final_analyst,
+            use_atlas_digestion=True,
+        )
+
+        report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        digestor.digest.assert_called_once()
+        mock_credentials_agent.find_credentials_batch.assert_called_once()
+        assert report.opportunity_extraction_status == "Parsed"
 
 
 # =============================================================================
@@ -380,6 +448,8 @@ class TestTraceFiles:
             assert trace_data["credentials_status_counts"]["Lookup Failed"] == 0
             assert len(trace_data["credentials_diagnostics"]) == 1
             assert trace_data["credentials_diagnostics"][0]["query_text"] == "full query text"
+            assert trace_data["credentials_batch_diagnostics"]["parse_outcome"] == "batch_json_parsed"
+            assert trace_data["credentials_lookup_mode"] == "batched_single_call"
     
     @pytest.mark.asyncio
     async def test_trace_includes_errors(
@@ -388,7 +458,39 @@ class TestTraceFiles:
         """Trace should include any errors encountered."""
         # Setup failing credentials agent
         failing_agent = MagicMock(spec=CredentialsAgent)
-        failing_agent.find_credentials = AsyncMock(side_effect=Exception("Test error"))
+        failing_agent.find_credentials_batch = AsyncMock(return_value=(
+            {
+                "Test": CredentialsResponse(
+                    opportunity_title="Test",
+                    matches=[],
+                    no_matches_found=True,
+                    lookup_status="Lookup Failed",
+                    failure_reason="Test error",
+                    diagnostics=CredentialsLookupDiagnostics(
+                        opportunity_title="Test",
+                        sector="Defense",
+                        query_text="batch query",
+                        raw_response_text="",
+                        parse_outcome="batch_lookup_failed:Exception",
+                        lookup_status="Lookup Failed",
+                        error_message="Test error",
+                        duration_ms=1.0,
+                        match_count=0,
+                    ),
+                )
+            },
+            CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=1,
+                lookup_count_returned=0,
+                duration_ms=1.0,
+                query_text="batch query",
+                raw_response_text="",
+                parse_outcome="batch_lookup_failed",
+                error_type="Exception",
+                error_message="Test error",
+            )
+        ))
         
         mock_extractor.extract.return_value = DeepResearchOutput(
             opportunities=[Opportunity(title="Test", scope="Test", confidence="Low")]
@@ -409,8 +511,7 @@ class TestTraceFiles:
             trace_files = list(traces_dir.glob("bd_run_*.json"))
             trace_data = json.loads(trace_files[0].read_text())
             
-            assert len(trace_data["errors"]) > 0
-            assert "Test error" in trace_data["errors"][0]
+            assert trace_data["credentials_batch_diagnostics"]["error_message"] == "Test error"
             assert trace_data["lookups_executed_count"] == 1
             assert trace_data["credentials_status_counts"]["Lookup Failed"] == 1
             assert trace_data["credentials_lookup_failed"] == 1
@@ -442,13 +543,13 @@ class TestEdgeCases:
         
         # Should still produce a report
         assert report is not None
-        mock_credentials_agent.find_credentials.assert_not_called()
+        mock_credentials_agent.find_credentials_batch.assert_not_called()
     
     @pytest.mark.asyncio
-    async def test_limits_opportunities_to_five(
+    async def test_limits_opportunities_to_top_three(
         self, mock_credentials_agent, mock_final_analyst, sample_trigger
     ):
-        """Should only query credentials for top 5 opportunities."""
+        """Should only query credentials for top 3 opportunities in one batch call."""
         many_opps_extractor = MagicMock(spec=OpportunityExtractor)
         many_opps_extractor.extract.return_value = DeepResearchOutput(
             opportunities=[
@@ -465,8 +566,11 @@ class TestEdgeCases:
         
         await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
         
-        # Should only call 5 times (top 5)
-        assert mock_credentials_agent.find_credentials.call_count == 5
+        # Should only call once with top 3 opportunities
+        mock_credentials_agent.find_credentials_batch.assert_called_once()
+        call_args = mock_credentials_agent.find_credentials_batch.call_args
+        sent_opps = call_args.args[0]
+        assert len(sent_opps) == 3
 
 
 if __name__ == "__main__":

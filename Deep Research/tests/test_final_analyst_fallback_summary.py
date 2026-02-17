@@ -77,3 +77,4 @@ def test_fallback_summary_for_extraction_failure_skips_no_match_language():
     summary = report.executive_summary
     assert "lookup skipped due to extraction failure" in summary.lower()
     assert "no-match opportunities" not in summary.lower()
+    assert report.confidence_note == "Report generated with fallback logic after extraction gating."

@@ -18,6 +18,7 @@ from models.bd_schemas import (
     DeepResearchOutput,
     CredentialsResponse,
     CredentialsLookupDiagnostics,
+    CredentialsBatchDiagnostics,
     MDReport,
     MDReportOpportunity,
     Opportunity,
@@ -78,7 +79,9 @@ class FinalAnalystAgent:
         opportunities_extracted_count: int = 0,
         lookups_executed_count: int = 0,
         lookups_skipped_reason: Optional[str] = None,
-        credentials_status_counts: Optional[Dict[str, int]] = None
+        credentials_status_counts: Optional[Dict[str, int]] = None,
+        credentials_lookup_mode: str = "batched_single_call",
+        credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
     ) -> MDReport:
         """Synthesize research and credentials into MD report.
         
@@ -108,7 +111,10 @@ class FinalAnalystAgent:
                 opportunities_extracted_count=opportunities_extracted_count,
                 lookups_executed_count=lookups_executed_count,
                 lookups_skipped_reason=lookups_skipped_reason,
-                credentials_status_counts=credentials_status_counts
+                credentials_status_counts=credentials_status_counts,
+                credentials_lookup_mode=credentials_lookup_mode,
+                credentials_batch_diagnostics=credentials_batch_diagnostics,
+                fallback_reason="extraction_skip",
             )
 
         # Build prompt variables
@@ -121,7 +127,9 @@ class FinalAnalystAgent:
             opportunities_extracted_count=opportunities_extracted_count,
             lookups_executed_count=lookups_executed_count,
             lookups_skipped_reason=lookups_skipped_reason,
-            credentials_status_counts=credentials_status_counts
+            credentials_status_counts=credentials_status_counts,
+            credentials_lookup_mode=credentials_lookup_mode,
+            credentials_batch_diagnostics=credentials_batch_diagnostics,
         )
         
         # Fill template
@@ -155,7 +163,9 @@ class FinalAnalystAgent:
                 opportunities_extracted_count=opportunities_extracted_count,
                 lookups_executed_count=lookups_executed_count,
                 lookups_skipped_reason=lookups_skipped_reason,
-                credentials_status_counts=credentials_status_counts
+                credentials_status_counts=credentials_status_counts,
+                credentials_lookup_mode=credentials_lookup_mode,
+                credentials_batch_diagnostics=credentials_batch_diagnostics,
             )
             
         except Exception as e:
@@ -170,7 +180,10 @@ class FinalAnalystAgent:
                 opportunities_extracted_count=opportunities_extracted_count,
                 lookups_executed_count=lookups_executed_count,
                 lookups_skipped_reason=lookups_skipped_reason,
-                credentials_status_counts=credentials_status_counts
+                credentials_status_counts=credentials_status_counts,
+                credentials_lookup_mode=credentials_lookup_mode,
+                credentials_batch_diagnostics=credentials_batch_diagnostics,
+                fallback_reason="synthesis_error",
             )
     
     def _build_prompt_variables(
@@ -183,7 +196,9 @@ class FinalAnalystAgent:
         opportunities_extracted_count: int,
         lookups_executed_count: int,
         lookups_skipped_reason: Optional[str],
-        credentials_status_counts: Dict[str, int]
+        credentials_status_counts: Dict[str, int],
+        credentials_lookup_mode: str,
+        credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics]
     ) -> Dict[str, str]:
         """Build variables for prompt template."""
         # Trigger summary
@@ -199,9 +214,9 @@ class FinalAnalystAgent:
         # Research summary
         research_summary = research.executive_summary or "No executive summary available"
         
-        # Opportunities JSON (top 5)
+        # Opportunities JSON (top 3 for batched credentials parity)
         opps_data = []
-        for opp in research.opportunities[:5]:
+        for opp in research.opportunities[:3]:
             opps_data.append({
                 "title": opp.title,
                 "agency": opp.agency,
@@ -238,9 +253,30 @@ class FinalAnalystAgent:
                     "lookups_executed_count": lookups_executed_count,
                     "lookups_skipped_reason": lookups_skipped_reason,
                     "credentials_status_counts": credentials_status_counts,
+                    "credentials_lookup_mode": credentials_lookup_mode,
+                    "credentials_batch_diagnostics": self._batch_diagnostics_for_prompt(
+                        credentials_batch_diagnostics
+                    ),
                 },
                 indent=2
             )
+        }
+
+    def _batch_diagnostics_for_prompt(
+        self,
+        diagnostics: Optional[CredentialsBatchDiagnostics]
+    ) -> Optional[Dict[str, object]]:
+        """Keep prompt diagnostics compact by excluding full I/O payload text."""
+        if diagnostics is None:
+            return None
+        return {
+            "invoked": diagnostics.invoked,
+            "lookup_count_requested": diagnostics.lookup_count_requested,
+            "lookup_count_returned": diagnostics.lookup_count_returned,
+            "duration_ms": diagnostics.duration_ms,
+            "parse_outcome": diagnostics.parse_outcome,
+            "error_type": diagnostics.error_type,
+            "error_message": diagnostics.error_message,
         }
     
     def _parse_report(
@@ -254,7 +290,9 @@ class FinalAnalystAgent:
         opportunities_extracted_count: int,
         lookups_executed_count: int,
         lookups_skipped_reason: Optional[str],
-        credentials_status_counts: Dict[str, int]
+        credentials_status_counts: Dict[str, int],
+        credentials_lookup_mode: str = "batched_single_call",
+        credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
     ) -> MDReport:
         """Parse LLM response into MDReport."""
         try:
@@ -325,7 +363,9 @@ class FinalAnalystAgent:
                 opportunities_extracted_count=opportunities_extracted_count,
                 lookups_executed_count=lookups_executed_count,
                 lookups_skipped_reason=lookups_skipped_reason,
-                credentials_status_counts=dict(credentials_status_counts)
+                credentials_status_counts=dict(credentials_status_counts),
+                credentials_lookup_mode=credentials_lookup_mode,
+                credentials_batch_diagnostics=credentials_batch_diagnostics,
             )
             
         except Exception as e:
@@ -339,7 +379,10 @@ class FinalAnalystAgent:
                 opportunities_extracted_count=opportunities_extracted_count,
                 lookups_executed_count=lookups_executed_count,
                 lookups_skipped_reason=lookups_skipped_reason,
-                credentials_status_counts=credentials_status_counts
+                credentials_status_counts=credentials_status_counts,
+                credentials_lookup_mode=credentials_lookup_mode,
+                credentials_batch_diagnostics=credentials_batch_diagnostics,
+                fallback_reason="parse_error",
             )
     
     def _find_opportunity(self, title: str, opportunities: list) -> Optional[Opportunity]:
@@ -386,9 +429,19 @@ class FinalAnalystAgent:
         opportunities_extracted_count: int = 0,
         lookups_executed_count: int = 0,
         lookups_skipped_reason: Optional[str] = None,
-        credentials_status_counts: Optional[Dict[str, int]] = None
+        credentials_status_counts: Optional[Dict[str, int]] = None,
+        credentials_lookup_mode: str = "batched_single_call",
+        credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
+        fallback_reason: str = "synthesis_error",
     ) -> MDReport:
         """Generate fallback report when LLM fails."""
+        if (
+            fallback_reason == "synthesis_error"
+            and opportunity_extraction_status != "Parsed"
+            and lookups_executed_count == 0
+        ):
+            fallback_reason = "extraction_skip"
+
         # Build opportunities from research
         top_opps = []
         for opp in research.opportunities[:3]:
@@ -433,15 +486,24 @@ class FinalAnalystAgent:
             signals_detected=research.signals_detected[:5],
             recommended_actions=research.recommended_actions[:5],
             generated_at=datetime.now(),
-            confidence_note="Report generated with fallback logic due to synthesis error.",
+            confidence_note=self._fallback_confidence_note(fallback_reason),
             credentials_evidence=self._build_credentials_evidence(credentials),
             opportunity_extraction_status=opportunity_extraction_status,
             opportunity_extraction_reason=opportunity_extraction_reason,
             opportunities_extracted_count=opportunities_extracted_count,
             lookups_executed_count=lookups_executed_count,
             lookups_skipped_reason=lookups_skipped_reason,
-            credentials_status_counts=dict(credentials_status_counts)
+            credentials_status_counts=dict(credentials_status_counts),
+            credentials_lookup_mode=credentials_lookup_mode,
+            credentials_batch_diagnostics=credentials_batch_diagnostics,
         )
+
+    def _fallback_confidence_note(self, fallback_reason: str) -> str:
+        if fallback_reason == "extraction_skip":
+            return "Report generated with fallback logic after extraction gating."
+        if fallback_reason == "parse_error":
+            return "Report generated with fallback logic due to synthesis parse error."
+        return "Report generated with fallback logic due to synthesis error."
 
     def _build_three_block_summary(
         self,

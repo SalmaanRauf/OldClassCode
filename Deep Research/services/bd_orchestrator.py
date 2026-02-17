@@ -4,10 +4,9 @@ BD Orchestrator for coordinating the full BD research workflow.
 Orchestrates the sequence:
 1. Run Deep Research (or use provided output)
 2. Extract opportunities from Deep Research output
-3. Query Credentials Agent for each opportunity (parallel)
-4. Synthesize final MD Report via Final Analyst
-
-Uses asyncio for parallel credential lookups.
+3. Optionally normalize opportunities via ATLAS digestor
+4. Query Credentials Agent once for top opportunities (batched)
+5. Synthesize final MD Report via Final Analyst
 """
 import asyncio
 import json
@@ -21,11 +20,13 @@ from models.bd_schemas import (
     DeepResearchOutput,
     CredentialsResponse,
     CredentialsLookupDiagnostics,
+    CredentialsBatchDiagnostics,
     OpportunityExtractionDiagnostics,
     MDReport,
     BDContext
 )
 from services.opportunity_extractor import OpportunityExtractor
+from services.opportunity_digestor import OpportunityDigestor
 from agents.credentials_agent import CredentialsAgent
 from agents.final_analyst_agent import FinalAnalystAgent
 
@@ -52,22 +53,28 @@ class BDOrchestrator:
     def __init__(
         self,
         extractor: Optional[OpportunityExtractor] = None,
+        opportunity_digestor: Optional[OpportunityDigestor] = None,
         credentials_agent: Optional[CredentialsAgent] = None,
         final_analyst: Optional[FinalAnalystAgent] = None,
-        traces_dir: Optional[Path] = None
+        traces_dir: Optional[Path] = None,
+        use_atlas_digestion: bool = False
     ):
         """Initialize orchestrator with optional custom components.
         
         Args:
             extractor: OpportunityExtractor instance (or None to create)
+            opportunity_digestor: OpportunityDigestor instance (or None to create)
             credentials_agent: CredentialsAgent instance (or None to create from env)
             final_analyst: FinalAnalystAgent instance (or None to create)
             traces_dir: Directory for saving trace files (or None to skip)
+            use_atlas_digestion: Whether to normalize opportunities with ATLAS
         """
         self.extractor = extractor or OpportunityExtractor()
+        self.opportunity_digestor = opportunity_digestor or OpportunityDigestor()
         self.credentials_agent = credentials_agent
         self.final_analyst = final_analyst or FinalAnalystAgent()
         self.traces_dir = traces_dir
+        self.use_atlas_digestion = use_atlas_digestion
     
     async def _ensure_credentials_agent(self):
         """Lazy-load credentials agent if not provided."""
@@ -109,6 +116,40 @@ class BDOrchestrator:
             # Step 2: Extract opportunities
             await self._notify(progress_cb, "Extracting opportunities...")
             ctx.parsed_research = self.extractor.extract(ctx.deep_research_raw or "")
+            ctx.opportunities_source = (
+                "deterministic_extractor"
+                if ctx.parsed_research.opportunities
+                else "none"
+            )
+
+            if self.use_atlas_digestion:
+                await self._notify(progress_cb, "Normalizing opportunities with ATLAS...")
+                digested_opportunities, digest_details = await self.opportunity_digestor.digest(
+                    ctx.trigger,
+                    ctx.deep_research_raw or "",
+                )
+                ctx.opportunity_digest_diagnostics = digest_details
+                if digested_opportunities:
+                    candidate_signals = 0
+                    if ctx.parsed_research.extraction_diagnostics:
+                        candidate_signals = ctx.parsed_research.extraction_diagnostics.candidate_signal_count
+                    ctx.parsed_research.opportunities = digested_opportunities
+                    ctx.parsed_research.extraction_diagnostics = OpportunityExtractionDiagnostics(
+                        status="Parsed",
+                        reason=f"Parsed {len(digested_opportunities)} opportunities using atlas_digest.",
+                        opportunities_extracted_count=len(digested_opportunities),
+                        extraction_method="atlas_digest",
+                        extraction_confidence="High",
+                        candidate_signal_count=candidate_signals,
+                    )
+                    ctx.opportunities_source = "atlas_digest"
+                    ctx.trace.append(
+                        f"ATLAS digest normalized {len(digested_opportunities)} opportunities."
+                    )
+                else:
+                    reason = digest_details.get("reason") if digest_details else "No reason provided."
+                    ctx.trace.append(f"ATLAS digest returned no opportunities: {reason}")
+
             extraction_diag = ctx.parsed_research.extraction_diagnostics or self._classify_extraction(
                 ctx.parsed_research,
                 ctx.deep_research_raw or ""
@@ -121,8 +162,8 @@ class BDOrchestrator:
                 f"(status={ctx.opportunity_extraction_status})"
             )
 
-            # Step 3: Query credentials for top opportunities
-            top_opportunities = ctx.parsed_research.opportunities[:5]
+            # Step 3: Query credentials for top opportunities (single batched call)
+            top_opportunities = ctx.parsed_research.opportunities[:3]
             status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
             if ctx.opportunity_extraction_status == "Extraction Failed":
                 ctx.lookups_skipped_reason = (
@@ -142,10 +183,13 @@ class BDOrchestrator:
             else:
                 await self._notify(progress_cb, "Validating with Credentials Agent...")
                 await self._ensure_credentials_agent()
-                ctx.credentials_results = await self._lookup_credentials_parallel(
+                (
+                    ctx.credentials_results,
+                    ctx.credentials_batch_diagnostics,
+                ) = await self.credentials_agent.find_credentials_batch(
                     top_opportunities,
                     trigger.sector,
-                    ctx
+                    max_matches_per_opportunity=3,
                 )
                 ctx.credentials_diagnostics = self._collect_credentials_diagnostics(
                     top_opportunities,
@@ -153,8 +197,12 @@ class BDOrchestrator:
                     ctx.credentials_results
                 )
                 status_counts = self._count_lookup_statuses(ctx.credentials_results)
+                ctx.trace.append("Executed single batched credentials lookup.")
 
-            ctx.lookups_executed_count = len(ctx.credentials_results)
+            if ctx.credentials_batch_diagnostics and ctx.credentials_batch_diagnostics.invoked:
+                ctx.lookups_executed_count = len(top_opportunities)
+            else:
+                ctx.lookups_executed_count = len(ctx.credentials_results)
             ctx.credentials_status_counts = status_counts
             ctx.trace.append(
                 "Credentials: "
@@ -175,7 +223,9 @@ class BDOrchestrator:
                 opportunities_extracted_count=ctx.opportunities_extracted_count,
                 lookups_executed_count=ctx.lookups_executed_count,
                 lookups_skipped_reason=ctx.lookups_skipped_reason,
-                credentials_status_counts=ctx.credentials_status_counts
+                credentials_status_counts=ctx.credentials_status_counts,
+                credentials_lookup_mode=ctx.credentials_lookup_mode,
+                credentials_batch_diagnostics=ctx.credentials_batch_diagnostics,
             )
             self._attach_credentials_evidence(ctx.final_report, ctx.credentials_results, ctx.credentials_diagnostics)
             self._attach_pipeline_diagnostics(ctx.final_report, ctx)
@@ -222,56 +272,6 @@ class BDOrchestrator:
         )
         return ""
     
-    async def _lookup_credentials_parallel(
-        self,
-        opportunities: List[Any],
-        sector: str,
-        ctx: BDContext
-    ) -> Dict[str, CredentialsResponse]:
-        """Query credentials for multiple opportunities in parallel."""
-        if not opportunities:
-            return {}
-        
-        results: Dict[str, CredentialsResponse] = {}
-        
-        # Create tasks for parallel execution
-        tasks = [
-            self.credentials_agent.find_credentials(opp, sector)
-            for opp in opportunities
-        ]
-        
-        # Execute in parallel with error handling
-        responses = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Process results
-        for opp, response in zip(opportunities, responses):
-            if isinstance(response, Exception):
-                ctx.errors.append(f"Credentials lookup failed for {opp.title}: {response}")
-                diagnostics = CredentialsLookupDiagnostics(
-                    opportunity_title=opp.title,
-                    sector=sector,
-                    query_text="",
-                    raw_response_text="",
-                    parse_outcome="lookup_failed_in_parallel",
-                    lookup_status="Lookup Failed",
-                    error_type=type(response).__name__,
-                    error_message=str(response),
-                    duration_ms=0.0,
-                    match_count=0
-                )
-                results[opp.title] = CredentialsResponse(
-                    opportunity_title=opp.title,
-                    matches=[],
-                    no_matches_found=True,
-                    lookup_status="Lookup Failed",
-                    failure_reason=str(response),
-                    diagnostics=diagnostics
-                )
-            else:
-                results[opp.title] = response
-        
-        return results
-
     def _classify_extraction(
         self,
         parsed_research: DeepResearchOutput,
@@ -383,6 +383,9 @@ class BDOrchestrator:
         report.lookups_executed_count = ctx.lookups_executed_count
         report.lookups_skipped_reason = ctx.lookups_skipped_reason
         report.credentials_status_counts = dict(ctx.credentials_status_counts)
+        report.credentials_lookup_mode = ctx.credentials_lookup_mode
+        report.credentials_batch_diagnostics = ctx.credentials_batch_diagnostics
+        report.opportunities_source = ctx.opportunities_source
     
     def _save_trace(self, ctx: BDContext, duration: float):
         """Save execution trace to file."""
@@ -410,6 +413,8 @@ class BDOrchestrator:
                 "opportunities_extracted_count": ctx.opportunities_extracted_count,
                 "lookups_executed_count": ctx.lookups_executed_count,
                 "lookups_skipped_reason": ctx.lookups_skipped_reason,
+                "opportunities_source": ctx.opportunities_source,
+                "credentials_lookup_mode": ctx.credentials_lookup_mode,
                 "credentials_lookups": len(ctx.credentials_results),
                 "credentials_matched": sum(1 for r in ctx.credentials_results.values() if r.lookup_status == "Matched"),
                 "credentials_no_match": sum(1 for r in ctx.credentials_results.values() if r.lookup_status == "No Match"),
@@ -417,6 +422,12 @@ class BDOrchestrator:
                     1 for r in ctx.credentials_results.values() if r.lookup_status == "Lookup Failed"
                 ),
                 "credentials_status_counts": dict(ctx.credentials_status_counts),
+                "credentials_batch_diagnostics": (
+                    ctx.credentials_batch_diagnostics.model_dump()
+                    if ctx.credentials_batch_diagnostics and hasattr(ctx.credentials_batch_diagnostics, "model_dump")
+                    else (ctx.credentials_batch_diagnostics.__dict__ if ctx.credentials_batch_diagnostics else None)
+                ),
+                "opportunity_digest_diagnostics": ctx.opportunity_digest_diagnostics,
                 "credentials_diagnostics": [
                     diag.model_dump() if hasattr(diag, "model_dump") else diag.__dict__
                     for diag in ctx.credentials_diagnostics.values()

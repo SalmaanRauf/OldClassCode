@@ -217,6 +217,20 @@ class CredentialsLookupDiagnostics(BaseModel):
     match_count: int = Field(0, description="Number of parsed credential matches")
 
 
+class CredentialsBatchDiagnostics(BaseModel):
+    """Run-level diagnostics for a single batched credentials lookup."""
+
+    invoked: bool = Field(False, description="Whether batch lookup was attempted")
+    lookup_count_requested: int = Field(0, description="Number of opportunities requested in the batch")
+    lookup_count_returned: int = Field(0, description="Number of opportunity result groups returned by the model")
+    duration_ms: float = Field(0.0, description="Batch lookup duration in milliseconds")
+    query_text: str = Field("", description="Full batched prompt sent to credentials agent")
+    raw_response_text: str = Field("", description="Full raw response returned by credentials agent")
+    parse_outcome: str = Field("", description="Batch parse outcome classification")
+    error_type: Optional[str] = Field(None, description="Error type when batch lookup fails")
+    error_message: Optional[str] = Field(None, description="Error message when batch lookup fails")
+
+
 try:  # pragma: no cover - harmless when pydantic is unavailable
     CredentialsResponse.model_rebuild()
 except Exception:
@@ -269,6 +283,18 @@ class MDReport(BaseModel):
         default_factory=list,
         description="Full credentials diagnostics to render in UI/report"
     )
+    credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = Field(
+        None,
+        description="Full batched credentials lookup diagnostics"
+    )
+    credentials_lookup_mode: str = Field(
+        "batched_single_call",
+        description="Lookup execution mode used for credentials validation"
+    )
+    opportunities_source: str = Field(
+        "none",
+        description="Source used for parsed opportunities (atlas_digest/deterministic_extractor/none)"
+    )
     opportunity_extraction_status: OpportunityExtractionStatus = Field(
         "No Opportunities",
         description="Extraction status for the pipeline run"
@@ -315,6 +341,22 @@ class BDContext(BaseModel):
     credentials_diagnostics: Dict[str, CredentialsLookupDiagnostics] = Field(
         default_factory=dict,
         description="Credentials diagnostics per opportunity title"
+    )
+    credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = Field(
+        None,
+        description="Run-level diagnostics for batched credentials lookup"
+    )
+    credentials_lookup_mode: str = Field(
+        "batched_single_call",
+        description="Lookup execution mode used for this run"
+    )
+    opportunities_source: str = Field(
+        "none",
+        description="Source used for parsed opportunities"
+    )
+    opportunity_digest_diagnostics: Optional[Dict[str, object]] = Field(
+        None,
+        description="ATLAS opportunity digestion diagnostics"
     )
     opportunity_extraction_status: OpportunityExtractionStatus = Field(
         "No Opportunities",

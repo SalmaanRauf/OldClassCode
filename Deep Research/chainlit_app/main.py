@@ -195,7 +195,10 @@ async def enrich_with_bd_analysis(
         except Exception as trace_err:
             logger.warning(f"Could not prepare BD traces directory '{BD_TRACES_DIR}': {trace_err}")
 
-        orchestrator = BDOrchestrator(traces_dir=BD_TRACES_DIR)
+        orchestrator = BDOrchestrator(
+            traces_dir=BD_TRACES_DIR,
+            use_atlas_digestion=AppConfig.ENABLE_BD_ATLAS_DIGESTION
+        )
         
         async def bd_progress(msg: str):
             if progress_callback:

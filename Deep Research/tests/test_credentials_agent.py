@@ -315,5 +315,104 @@ class TestNoMatchesDetection:
             assert result.no_matches_found == True, f"Failed for: {phrase}"
 
 
+# =============================================================================
+# Batch Lookup Tests
+# =============================================================================
+
+class TestBatchLookup:
+    """Test single-call batched credentials lookup."""
+
+    @pytest.mark.asyncio
+    async def test_batch_happy_path(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="CMMC compliance support", confidence="High"),
+            Opportunity(title="Opp 2", scope="Risk and cybersecurity program", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Cloud compliance modernization", confidence="Medium"),
+        ]
+        mock_client.ask.return_value = json.dumps(
+            {
+                "results": [
+                    {
+                        "opportunity_id": "opp_1",
+                        "matches": [
+                            {
+                                "title": "Credential A",
+                                "client_challenge": "Challenge A",
+                                "approach": "Approach A",
+                                "value_provided": "Value A",
+                                "industry": "Defense",
+                                "technologies_used": ["CMMC"],
+                                "url": "https://ishare.protiviti.com/cred/a",
+                            }
+                        ],
+                        "no_matches_found": False,
+                    },
+                    {
+                        "opportunity_id": "opp_2",
+                        "matches": [],
+                        "no_matches_found": True,
+                    },
+                    {
+                        "opportunity_id": "opp_3",
+                        "matches": [
+                            {
+                                "title": "Credential C",
+                                "client_challenge": "Challenge C",
+                                "approach": "Approach C",
+                                "value_provided": "Value C",
+                                "industry": "Technology",
+                                "technologies_used": ["Cloud"],
+                                "url": "https://ishare.protiviti.com/cred/c",
+                            }
+                        ],
+                        "no_matches_found": False,
+                    },
+                ]
+            }
+        )
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        mock_client.ask.assert_called_once()
+        assert len(responses) == 3
+        assert responses["Opp 1"].lookup_status == "Matched"
+        assert responses["Opp 2"].lookup_status == "No Match"
+        assert responses["Opp 3"].lookup_status == "Matched"
+        assert batch_diag.invoked is True
+        assert batch_diag.lookup_count_requested == 3
+        assert batch_diag.lookup_count_returned == 3
+        assert batch_diag.parse_outcome == "batch_json_parsed"
+
+    @pytest.mark.asyncio
+    async def test_batch_malformed_json_sets_lookup_failed_for_all(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.return_value = "{invalid"
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        assert all(resp.lookup_status == "Lookup Failed" for resp in responses.values())
+        assert batch_diag.parse_outcome == "batch_json_parse_error"
+        assert batch_diag.lookup_count_requested == 3
+
+    @pytest.mark.asyncio
+    async def test_batch_transport_error_sets_lookup_failed_for_all(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.side_effect = ContextFreeError("Service unavailable")
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        assert all(resp.lookup_status == "Lookup Failed" for resp in responses.values())
+        assert batch_diag.parse_outcome == "batch_lookup_failed"
+        assert batch_diag.error_type == "ContextFreeError"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

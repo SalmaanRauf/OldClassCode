@@ -14,6 +14,7 @@ from models.bd_schemas import (
     Opportunity,
     CredentialMatch,
     CredentialsLookupDiagnostics,
+    CredentialsBatchDiagnostics,
 )
 
 
@@ -65,6 +66,17 @@ def _build_report() -> MDReport:
         lookups_executed_count=1,
         lookups_skipped_reason=None,
         credentials_status_counts={"Matched": 1, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="batched_single_call",
+        opportunities_source="atlas_digest",
+        credentials_batch_diagnostics=CredentialsBatchDiagnostics(
+            invoked=True,
+            lookup_count_requested=3,
+            lookup_count_returned=3,
+            duration_ms=42.5,
+            query_text="BATCH QUERY FULL TEXT line1\nline2",
+            raw_response_text='{"results":[{"opportunity_id":"opp_1"}]}',
+            parse_outcome="batch_json_parsed",
+        ),
         credentials_evidence=[
             CredentialsLookupDiagnostics(
                 opportunity_title="Program A",
@@ -104,6 +116,17 @@ def test_formatter_renders_full_credentials_evidence_without_truncation():
     assert "Title: Defense CMMC Credential" in content
 
 
+def test_formatter_renders_full_batch_io_once():
+    report = _build_report()
+    section = format_bd_report_as_section(report)
+
+    content = section["content"]
+    assert "### Credentials Batch I/O (Full)" in content
+    assert "BATCH QUERY FULL TEXT line1\nline2" in content
+    assert '{"results":[{"opportunity_id":"opp_1"}]}' in content
+    assert "Lookup Count Requested: 3" in content
+
+
 def test_formatter_includes_pipeline_diagnostics():
     report = _build_report()
     section = format_bd_report_as_section(report)
@@ -113,4 +136,6 @@ def test_formatter_includes_pipeline_diagnostics():
     assert "Opportunities Extracted: 1" in content
     assert "Extraction Status: Parsed" in content
     assert "Lookups Executed: 1" in content
+    assert "Credentials Lookup Mode: batched_single_call" in content
+    assert "Opportunities Source: atlas_digest" in content
     assert "Lookup Status Counts: Matched=1, No Match=0, Lookup Failed=0" in content

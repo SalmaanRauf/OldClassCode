@@ -39,6 +39,7 @@ class Config:
 
     # Feature flags
     ENABLE_DEEP_RESEARCH = os.getenv("ENABLE_DEEP_RESEARCH", "false").lower() in ("1", "true", "yes")
+    ENABLE_BD_ATLAS_DIGESTION = os.getenv("ENABLE_BD_ATLAS_DIGESTION", "true").lower() in ("1", "true", "yes")
 
     # --- Operational settings (timeouts, limits) ---
     # Timeout for independent GWBS scope fetches (seconds)
