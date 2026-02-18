@@ -157,6 +157,9 @@ def test_parse_report_prefers_source_credentials_and_clears_non_match_stubs():
         credentials_batch_diagnostics=None,
     )
 
+    assert report.synthesis_status == "synthesized"
+    assert report.synthesis_fallback_reason is None
+
     opp1 = next(opp for opp in report.top_opportunities if opp.opportunity.title == "Opp 1")
     assert len(opp1.credentials) == 1
     assert opp1.credentials[0].title == "Canonical Credential"
@@ -177,6 +180,8 @@ def test_fallback_report_defaults_to_serial_lookup_mode():
 
     report = agent._fallback_report(trigger, research, credentials={})
     assert report.credentials_lookup_mode == "serial_per_opportunity"
+    assert report.synthesis_status == "fallback"
+    assert report.synthesis_fallback_reason in {"synthesis_error", "extraction_skip"}
 
 
 def test_sanitize_recommended_actions_rewrites_stale_year_range():

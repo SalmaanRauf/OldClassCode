@@ -137,6 +137,7 @@ def test_formatter_includes_pipeline_diagnostics():
 
     content = section["content"]
     assert "### Pipeline Diagnostics" in content
+    assert "Synthesis Status: synthesized" in content
     assert "Opportunities Extracted: 1" in content
     assert "Extraction Status: Parsed" in content
     assert "Lookups Executed: 1" in content

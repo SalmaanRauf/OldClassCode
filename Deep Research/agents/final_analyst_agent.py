@@ -185,6 +185,7 @@ class FinalAnalystAgent:
                 credentials_lookup_mode=credentials_lookup_mode,
                 credentials_batch_diagnostics=credentials_batch_diagnostics,
                 fallback_reason="synthesis_error",
+                fallback_error_message=str(e),
             )
     
     def _build_prompt_variables(
@@ -373,6 +374,9 @@ class FinalAnalystAgent:
                 ),
                 generated_at=datetime.now(),
                 confidence_note=data.get("confidence_note", ""),
+                synthesis_status="synthesized",
+                synthesis_fallback_reason=None,
+                synthesis_error_message=None,
                 credentials_evidence=self._build_credentials_evidence(credentials),
                 opportunity_extraction_status=opportunity_extraction_status,
                 opportunity_extraction_reason=opportunity_extraction_reason,
@@ -399,6 +403,7 @@ class FinalAnalystAgent:
                 credentials_lookup_mode=credentials_lookup_mode,
                 credentials_batch_diagnostics=credentials_batch_diagnostics,
                 fallback_reason="parse_error",
+                fallback_error_message=str(e),
             )
     
     def _find_opportunity(self, title: str, opportunities: list) -> Optional[Opportunity]:
@@ -449,6 +454,7 @@ class FinalAnalystAgent:
         credentials_lookup_mode: str = "serial_per_opportunity",
         credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
         fallback_reason: str = "synthesis_error",
+        fallback_error_message: Optional[str] = None,
     ) -> MDReport:
         """Generate fallback report when LLM fails."""
         if (
@@ -506,6 +512,9 @@ class FinalAnalystAgent:
             ),
             generated_at=datetime.now(),
             confidence_note=self._fallback_confidence_note(fallback_reason),
+            synthesis_status="fallback",
+            synthesis_fallback_reason=fallback_reason,
+            synthesis_error_message=fallback_error_message,
             credentials_evidence=self._build_credentials_evidence(credentials),
             opportunity_extraction_status=opportunity_extraction_status,
             opportunity_extraction_reason=opportunity_extraction_reason,

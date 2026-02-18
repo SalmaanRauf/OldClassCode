@@ -606,6 +606,27 @@ class TestBatchLookup:
         assert batch_diag.parse_outcome == "batch_lookup_failed"
         assert batch_diag.error_type == "ContextFreeError"
 
+    @pytest.mark.asyncio
+    async def test_batch_network_resolution_error_retries_then_fallback(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.side_effect = [
+            ContextFreeError("Request failed: [Errno 11001] getaddrinfo failed"),
+            ContextFreeError("Request failed: [Errno 11001] getaddrinfo failed"),
+            json.dumps({"matches": [], "no_matches_found": True}),
+            json.dumps({"matches": [], "no_matches_found": True}),
+            json.dumps({"matches": [], "no_matches_found": True}),
+        ]
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+
+        assert mock_client.ask.call_count == 5
+        assert batch_diag.parse_outcome == "batch_timeout_fallback_serial"
+        assert all(resp.lookup_status == "No Match" for resp in responses.values())
+
     def test_batch_query_scope_truncation(self, agent):
         long_scope = " ".join(["scope"] * 200)  # > 350 chars
         opportunities = [

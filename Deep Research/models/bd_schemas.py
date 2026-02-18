@@ -283,6 +283,18 @@ class MDReport(BaseModel):
     recommended_actions: List[str] = Field(default_factory=list, description="3-5 actionable next steps")
     generated_at: datetime = Field(default_factory=datetime.now, description="Report generation timestamp")
     confidence_note: str = Field("", description="Overall confidence assessment")
+    synthesis_status: Literal["synthesized", "fallback"] = Field(
+        "synthesized",
+        description="Whether final analyst synthesis succeeded or returned fallback output"
+    )
+    synthesis_fallback_reason: Optional[str] = Field(
+        None,
+        description="Fallback reason when synthesis_status is fallback"
+    )
+    synthesis_error_message: Optional[str] = Field(
+        None,
+        description="Underlying synthesis/parse error when available"
+    )
     credentials_evidence: List[CredentialsLookupDiagnostics] = Field(
         default_factory=list,
         description="Full credentials diagnostics to render in UI/report"
@@ -385,6 +397,18 @@ class BDContext(BaseModel):
     credentials_status_counts: Dict[str, int] = Field(
         default_factory=lambda: {"Matched": 0, "No Match": 0, "Lookup Failed": 0},
         description="Credentials status counts for run diagnostics"
+    )
+    synthesis_status: Optional[str] = Field(
+        None,
+        description="Synthesis outcome status from FinalAnalystAgent"
+    )
+    synthesis_fallback_reason: Optional[str] = Field(
+        None,
+        description="Fallback reason if synthesis returned fallback report"
+    )
+    synthesis_error_message: Optional[str] = Field(
+        None,
+        description="Synthesis error details when available"
     )
     final_report: Optional[MDReport] = Field(None, description="Final synthesized report")
     trace: List[str] = Field(default_factory=list, description="Execution trace log")

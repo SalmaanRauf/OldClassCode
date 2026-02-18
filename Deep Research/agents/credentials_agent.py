@@ -400,7 +400,23 @@ class CredentialsAgent:
         return f"{truncated}..."
 
     def _is_timeout_like_error(self, error: Exception) -> bool:
-        return isinstance(error, ContextFreeError) and "timed out" in str(error).lower()
+        if not isinstance(error, ContextFreeError):
+            return False
+        message = str(error).lower()
+        retryable_markers = (
+            "timed out",
+            "timeout",
+            "getaddrinfo failed",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "network is unreachable",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "bad gateway",
+            "gateway timeout",
+        )
+        return any(marker in message for marker in retryable_markers)
 
     def _extract_requirements(self, opportunity: Opportunity) -> str:
         requirements: List[str] = []

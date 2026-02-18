@@ -254,7 +254,23 @@ class BDOrchestrator:
             )
             self._attach_credentials_evidence(ctx.final_report, ctx.credentials_results, ctx.credentials_diagnostics)
             self._attach_pipeline_diagnostics(ctx.final_report, ctx)
-            ctx.trace.append("Synthesis complete")
+            ctx.synthesis_status = ctx.final_report.synthesis_status
+            ctx.synthesis_fallback_reason = ctx.final_report.synthesis_fallback_reason
+            ctx.synthesis_error_message = ctx.final_report.synthesis_error_message
+            ctx.trace.append(f"Synthesis complete (status={ctx.synthesis_status})")
+            if ctx.synthesis_status == "fallback":
+                ctx.trace.append(
+                    "Synthesis fallback reason: "
+                    f"{ctx.synthesis_fallback_reason or 'unknown'}"
+                )
+                if ctx.synthesis_error_message:
+                    ctx.trace.append(f"Synthesis fallback error: {ctx.synthesis_error_message}")
+                if ctx.synthesis_fallback_reason in {"synthesis_error", "parse_error"}:
+                    ctx.errors.append(
+                        "Synthesis fallback: "
+                        f"{ctx.synthesis_fallback_reason} - "
+                        f"{ctx.synthesis_error_message or 'No error message'}"
+                    )
             
             # Save trace
             duration = (datetime.now() - start_time).total_seconds()
@@ -293,7 +309,20 @@ class BDOrchestrator:
         if response.diagnostics and response.diagnostics.error_message:
             message_parts.append(response.diagnostics.error_message)
         combined = " ".join(message_parts).lower()
-        return "timed out" in combined
+        retryable_markers = (
+            "timed out",
+            "timeout",
+            "getaddrinfo failed",
+            "temporary failure in name resolution",
+            "name or service not known",
+            "network is unreachable",
+            "connection reset",
+            "connection aborted",
+            "connection refused",
+            "bad gateway",
+            "gateway timeout",
+        )
+        return any(marker in combined for marker in retryable_markers)
     
     async def _notify(self, cb: Optional[ProgressCallback], message: str):
         """Send progress notification if callback provided."""
@@ -437,6 +466,12 @@ class BDOrchestrator:
         report.credentials_lookup_mode = ctx.credentials_lookup_mode
         report.credentials_batch_diagnostics = ctx.credentials_batch_diagnostics
         report.opportunities_source = ctx.opportunities_source
+        if ctx.synthesis_status:
+            report.synthesis_status = ctx.synthesis_status
+        if ctx.synthesis_fallback_reason:
+            report.synthesis_fallback_reason = ctx.synthesis_fallback_reason
+        if ctx.synthesis_error_message:
+            report.synthesis_error_message = ctx.synthesis_error_message
     
     def _save_trace(self, ctx: BDContext, duration: float):
         """Save execution trace to file."""
@@ -473,6 +508,9 @@ class BDOrchestrator:
                     1 for r in ctx.credentials_results.values() if r.lookup_status == "Lookup Failed"
                 ),
                 "credentials_status_counts": dict(ctx.credentials_status_counts),
+                "synthesis_status": ctx.synthesis_status,
+                "synthesis_fallback_reason": ctx.synthesis_fallback_reason,
+                "synthesis_error_message": ctx.synthesis_error_message,
                 "credentials_batch_diagnostics": (
                     ctx.credentials_batch_diagnostics.model_dump()
                     if ctx.credentials_batch_diagnostics and hasattr(ctx.credentials_batch_diagnostics, "model_dump")

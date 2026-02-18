@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 from models.schemas import Briefing, Citation
 from tools.task_executor import ExecutionResult, TaskResult
 from services.intent_resolver import IntentType, TaskType
+from services.source_quality import rank_and_filter_citations
 
 logger = logging.getLogger(__name__)
 
@@ -247,11 +248,11 @@ class ResponseFormatter:
             if citation.url not in seen_urls:
                 formatted_citations.append({
                     "title": citation.title or citation.url,
-                    "url": citation.url
+                    "url": str(citation.url)
                 })
-                seen_urls.add(citation.url)
-        
-        return formatted_citations
+                seen_urls.add(str(citation.url))
+
+        return rank_and_filter_citations(formatted_citations, limit=50)
 
     def _serialize_gwbs_sections(self, briefing: Briefing) -> List[Dict[str, Any]]:
         serialized: List[Dict[str, Any]] = []

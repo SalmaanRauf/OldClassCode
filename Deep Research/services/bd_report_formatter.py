@@ -209,6 +209,11 @@ def _format_credential_details(credentials: List[CredentialMatch]) -> List[str]:
 def _format_pipeline_diagnostics(report: MDReport) -> List[str]:
     """Render deterministic pipeline diagnostics for operator visibility."""
     lines: List[str] = ["### Pipeline Diagnostics", ""]
+    lines.append(f"- Synthesis Status: {report.synthesis_status}")
+    if report.synthesis_fallback_reason:
+        lines.append(f"- Synthesis Fallback Reason: {report.synthesis_fallback_reason}")
+    if report.synthesis_error_message:
+        lines.append(f"- Synthesis Error: {report.synthesis_error_message}")
     lines.append(f"- Opportunities Extracted: {report.opportunities_extracted_count}")
     lines.append(f"- Extraction Status: {report.opportunity_extraction_status}")
     if report.opportunity_extraction_reason:
