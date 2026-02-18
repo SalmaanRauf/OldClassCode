@@ -9,8 +9,9 @@ The agent follows the existing kernel_setup.py pattern with ATLASClient.
 import os
 import json
 import logging
-from datetime import datetime
-from typing import Optional, Dict, Any
+import re
+from datetime import datetime, date
+from typing import Optional, Dict, Any, List
 from pathlib import Path
 
 from models.bd_schemas import (
@@ -207,6 +208,8 @@ class FinalAnalystAgent:
             trigger_parts.append(f"Signals: {', '.join(trigger.signals)}")
         if trigger.company_focus:
             trigger_parts.append(f"Company: {trigger.company_focus}")
+        if trigger.user_prompt_context:
+            trigger_parts.append(f"User Prompt Context: {trigger.user_prompt_context}")
         if trigger.geography:
             trigger_parts.append(f"Geography: {trigger.geography}")
         trigger_summary = "; ".join(trigger_parts)
@@ -245,6 +248,8 @@ class FinalAnalystAgent:
             "research_summary": research_summary,
             "opportunities_json": json.dumps(opps_data, indent=2),
             "credentials_json": json.dumps(creds_data, indent=2),
+            "user_prompt_context": self._sanitize_prompt_context(trigger.user_prompt_context, max_chars=600),
+            "current_date_iso": datetime.now().date().isoformat(),
             "extraction_diagnostics_json": json.dumps(
                 {
                     "opportunity_extraction_status": opportunity_extraction_status,
@@ -362,7 +367,10 @@ class FinalAnalystAgent:
                 executive_summary=data.get("executive_summary", ""),
                 top_opportunities=top_opps,
                 signals_detected=data.get("signals_detected", [])[:5],
-                recommended_actions=data.get("recommended_actions", [])[:5],
+                recommended_actions=self._sanitize_recommended_actions(
+                    data.get("recommended_actions", [])[:5],
+                    today=datetime.now().date(),
+                ),
                 generated_at=datetime.now(),
                 confidence_note=data.get("confidence_note", ""),
                 credentials_evidence=self._build_credentials_evidence(credentials),
@@ -492,7 +500,10 @@ class FinalAnalystAgent:
             ),
             top_opportunities=top_opps,
             signals_detected=research.signals_detected[:5],
-            recommended_actions=research.recommended_actions[:5],
+            recommended_actions=self._sanitize_recommended_actions(
+                research.recommended_actions[:5],
+                today=datetime.now().date(),
+            ),
             generated_at=datetime.now(),
             confidence_note=self._fallback_confidence_note(fallback_reason),
             credentials_evidence=self._build_credentials_evidence(credentials),
@@ -553,7 +564,11 @@ class FinalAnalystAgent:
 
         combined_lines = []
         if research.recommended_actions:
-            combined_lines.extend(f"- {action}" for action in research.recommended_actions[:3])
+            sanitized_actions = self._sanitize_recommended_actions(
+                research.recommended_actions[:3],
+                today=datetime.now().date(),
+            )
+            combined_lines.extend(f"- {action}" for action in sanitized_actions)
         else:
             combined_lines.append("- Continue targeted opportunity monitoring and refresh signals weekly.")
         if lookups_executed_count == 0 and opportunity_extraction_status == "Extraction Failed":
@@ -575,6 +590,92 @@ class FinalAnalystAgent:
                 *combined_lines
             ]
         )
+
+    def _sanitize_prompt_context(self, value: Optional[str], max_chars: int = 600) -> str:
+        text = re.sub(r"\s+", " ", (value or "").strip())
+        if not text:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        truncated = text[: max_chars + 1]
+        if " " in truncated:
+            truncated = truncated.rsplit(" ", 1)[0]
+        return truncated.rstrip()
+
+    def _sanitize_recommended_actions(self, actions: List[str], today: date) -> List[str]:
+        sanitized: List[str] = []
+        current_quarter = ((today.month - 1) // 3) + 1
+        month_lookup = {
+            "jan": 1, "january": 1,
+            "feb": 2, "february": 2,
+            "mar": 3, "march": 3,
+            "apr": 4, "april": 4,
+            "may": 5,
+            "jun": 6, "june": 6,
+            "jul": 7, "july": 7,
+            "aug": 8, "august": 8,
+            "sep": 9, "sept": 9, "september": 9,
+            "oct": 10, "october": 10,
+            "nov": 11, "november": 11,
+            "dec": 12, "december": 12,
+        }
+
+        quarter_range_pattern = re.compile(r"\bQ([1-4])\s*[-–]\s*Q([1-4])\s+(\d{4})\b", re.IGNORECASE)
+        single_quarter_pattern = re.compile(r"\bQ([1-4])\s+(\d{4})\b", re.IGNORECASE)
+        month_year_pattern = re.compile(
+            r"\b("
+            r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
+            r"Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?"
+            r")\s+(\d{4})\b",
+            re.IGNORECASE,
+        )
+
+        for action in actions:
+            text = str(action or "").strip()
+            if not text:
+                continue
+
+            stale_ranges: List[tuple[int, int]] = []
+
+            def add_range(start: int, end: int) -> None:
+                for existing_start, existing_end in stale_ranges:
+                    if start < existing_end and existing_start < end:
+                        return
+                stale_ranges.append((start, end))
+
+            for match in quarter_range_pattern.finditer(text):
+                start_q = int(match.group(1))
+                year = int(match.group(3))
+                if year < today.year or (year == today.year and start_q < current_quarter):
+                    add_range(match.start(), match.end())
+
+            for match in single_quarter_pattern.finditer(text):
+                quarter = int(match.group(1))
+                year = int(match.group(2))
+                if year < today.year or (year == today.year and quarter < current_quarter):
+                    add_range(match.start(), match.end())
+
+            for match in month_year_pattern.finditer(text):
+                month_token = match.group(1).lower()
+                year = int(match.group(2))
+                month = month_lookup.get(month_token, month_lookup.get(month_token[:3], 0))
+                if year < today.year or (year == today.year and month and month < today.month):
+                    add_range(match.start(), match.end())
+
+            for match in re.finditer(r"\b(19|20)\d{2}\b", text):
+                year = int(match.group(0))
+                if year < today.year:
+                    add_range(match.start(), match.end())
+
+            if stale_ranges:
+                replacement = "within the next 30-90 days"
+                for start, end in sorted(stale_ranges, key=lambda x: x[0], reverse=True):
+                    text = f"{text[:start]}{replacement}{text[end:]}"
+                text = re.sub(r"\s{2,}", " ", text).strip()
+
+            sanitized.append(text)
+
+        return sanitized
 
     def _build_credentials_evidence(
         self,

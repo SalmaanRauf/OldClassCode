@@ -37,6 +37,10 @@ class BDTrigger(BaseModel):
     sector: str = Field(..., description="Industry sector to focus on")
     signals: List[str] = Field(default_factory=list, description="Signals to detect")
     company_focus: Optional[str] = Field(None, description="Specific company focus")
+    user_prompt_context: Optional[str] = Field(
+        None,
+        description="Sanitized snippet of the original user prompt for synthesis context anchoring"
+    )
     geography: Optional[str] = Field(None, description="Geographic filter")
     time_window_days: int = Field(30, ge=1, le=365, description="Lookback window in days")
     min_value_usd: Optional[int] = Field(None, ge=0, description="Minimum opportunity value")

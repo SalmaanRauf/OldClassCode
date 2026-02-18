@@ -2,6 +2,7 @@
 Tests for FinalAnalystAgent fallback summary contract.
 """
 import json
+from datetime import date
 
 import sys
 import os
@@ -176,3 +177,100 @@ def test_fallback_report_defaults_to_serial_lookup_mode():
 
     report = agent._fallback_report(trigger, research, credentials={})
     assert report.credentials_lookup_mode == "serial_per_opportunity"
+
+
+def test_sanitize_recommended_actions_rewrites_stale_year_range():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    actions = ["Initiate capture planning (Q2-Q3 2024)"]
+
+    sanitized = agent._sanitize_recommended_actions(actions, today=date(2026, 2, 18))
+
+    assert sanitized == ["Initiate capture planning (within the next 30-90 days)"]
+
+
+def test_sanitize_recommended_actions_rewrites_stale_quarter_same_year():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    actions = ["Coordinate proposal sprint by Q1 2026"]
+
+    sanitized = agent._sanitize_recommended_actions(actions, today=date(2026, 8, 1))
+
+    assert sanitized == ["Coordinate proposal sprint by within the next 30-90 days"]
+
+
+def test_sanitize_recommended_actions_keeps_current_or_future_quarter():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    actions = [
+        "Prepare submission in Q1 2026",
+        "Engage partners in Q3 2026",
+    ]
+
+    sanitized = agent._sanitize_recommended_actions(actions, today=date(2026, 2, 18))
+
+    assert sanitized == actions
+
+
+def test_fallback_report_sanitizes_stale_recommended_actions():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Defense", signals=["CMMC"])
+    research = DeepResearchOutput(
+        executive_summary="Summary",
+        recommended_actions=["Build proposal library (Q2-Q3 2024)"],
+    )
+
+    report = agent._fallback_report(trigger, research, credentials={})
+
+    assert report.recommended_actions == ["Build proposal library (within the next 30-90 days)"]
+    assert "Q2-Q3 2024" not in report.executive_summary
+
+
+def test_build_prompt_variables_includes_current_date_and_prompt_context():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(
+        sector="Defense",
+        signals=["CMMC"],
+        user_prompt_context="  Research\nHanwha  opportunities   with CMMC   ",
+    )
+    research = DeepResearchOutput(executive_summary="Summary")
+
+    prompt_vars = agent._build_prompt_variables(
+        trigger=trigger,
+        research=research,
+        credentials={},
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=0,
+        lookups_executed_count=0,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    assert prompt_vars["current_date_iso"] == date.today().isoformat()
+    assert prompt_vars["user_prompt_context"] == "Research Hanwha opportunities with CMMC"
+
+
+def test_build_prompt_variables_truncates_prompt_context():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(
+        sector="Defense",
+        user_prompt_context=("A " * 500).strip(),
+    )
+    research = DeepResearchOutput(executive_summary="Summary")
+
+    prompt_vars = agent._build_prompt_variables(
+        trigger=trigger,
+        research=research,
+        credentials={},
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=0,
+        lookups_executed_count=0,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    assert len(prompt_vars["user_prompt_context"]) <= 600
+    assert "\n" not in prompt_vars["user_prompt_context"]

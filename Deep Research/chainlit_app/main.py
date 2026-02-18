@@ -34,7 +34,8 @@ from services.prompt_generator import get_prompt_generator, ResearchParameters
 # BD Analysis enrichment (auto-runs after Deep Research)
 from services.bd_orchestrator import BDOrchestrator
 from services.bd_report_formatter import format_bd_report_as_section
-from models.bd_schemas import BDTrigger, MDReport, MDReportOpportunity
+from services.bd_trigger_context import build_trigger_for_bd_enrichment
+from models.bd_schemas import MDReport, MDReportOpportunity
 
 setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -147,11 +148,14 @@ async def handle_error(error: Exception, context: str, user_message: str = "Sorr
     # Log additional details for debugging
     logger.debug(f"Error details: {type(error).__name__}: {str(error)}")
 
+
 # --- BD Analysis enrichment helpers ---
 
 async def enrich_with_bd_analysis(
     deep_research_response: Dict[str, Any],
     sector: str,
+    user_query: str,
+    session_params: Optional[Dict[str, Any]] = None,
     progress_callback = None
 ) -> Dict[str, Any]:
     """Enrich Deep Research output with Credentials validation + ATLAS synthesis.
@@ -165,6 +169,8 @@ async def enrich_with_bd_analysis(
     Args:
         deep_research_response: Dict from run_deep_research()
         sector: Industry sector (from GUI form)
+        user_query: Original user prompt text
+        session_params: Optional research form parameters from session
         progress_callback: Optional async callback for progress updates
         
     Returns:
@@ -178,11 +184,10 @@ async def enrich_with_bd_analysis(
             logger.warning("Deep Research output too short for BD enrichment")
             return deep_research_response
         
-        # Build trigger from sector
-        trigger = BDTrigger(
-            sector=sector.replace("_", " ").title() if sector else "General",
-            signals=[],  # Will be inferred from research
-            time_window_days=30
+        trigger = build_trigger_for_bd_enrichment(
+            sector=sector,
+            user_query=user_query,
+            session_params=session_params or {},
         )
         
         # Progress update
@@ -1008,6 +1013,8 @@ async def on_message(message: cl.Message):
                 response = await enrich_with_bd_analysis(
                     response, 
                     sector=selected_industry,
+                    user_query=user_text,
+                    session_params=cl.user_session.get(RESEARCH_PARAMS_SESSION_KEY, {}),
                     progress_callback=bd_progress_update
                 )
                 
