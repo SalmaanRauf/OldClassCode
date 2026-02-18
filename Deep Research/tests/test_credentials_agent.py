@@ -254,6 +254,68 @@ class TestResponseParsing:
         assert result.diagnostics.parse_outcome == "json_parse_error"
         assert result.diagnostics.error_type == "JSONDecodeError"
 
+    def test_single_parse_drops_invalid_url_match(self, agent):
+        """Should drop invalid URL matches while preserving valid matches."""
+        raw = json.dumps(
+            {
+                "matches": [
+                    {
+                        "title": "Invalid URL Credential",
+                        "client_challenge": "Challenge",
+                        "approach": "Approach",
+                        "value_provided": "Value",
+                        "industry": "Defense",
+                        "technologies_used": [],
+                        "url": "not-a-real-url",
+                    },
+                    {
+                        "title": "Valid URL Credential",
+                        "client_challenge": "Challenge 2",
+                        "approach": "Approach 2",
+                        "value_provided": "Value 2",
+                        "industry": "Defense",
+                        "technologies_used": [],
+                        "url": "https://roberthalf.sharepoint.com/sites/iShare-Client-Credentials/SitePages/Credential-Details.aspx?itemid=821",
+                    },
+                ],
+                "no_matches_found": False,
+            }
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity")
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 1
+        assert result.matches[0].title == "Valid URL Credential"
+        assert result.diagnostics is not None
+        assert result.diagnostics.parse_outcome == "json_parsed_with_matches_filtered_invalid_url"
+
+    def test_single_parse_all_invalid_urls_results_no_match(self, agent):
+        """Should return No Match when all parsed matches are filtered for invalid URLs."""
+        raw = json.dumps(
+            {
+                "matches": [
+                    {
+                        "title": "Invalid Credential A",
+                        "client_challenge": "Challenge",
+                        "approach": "Approach",
+                        "value_provided": "Value",
+                        "industry": "Defense",
+                        "technologies_used": [],
+                        "url": "Hyp/NearSeriesAdjustNIST",
+                    }
+                ],
+                "no_matches_found": False,
+            }
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity")
+        assert result.lookup_status == "No Match"
+        assert result.no_matches_found is True
+        assert len(result.matches) == 0
+        assert result.diagnostics is not None
+        assert result.diagnostics.parse_outcome == "json_parsed_all_matches_filtered_invalid_url"
+        assert "filtered_invalid_url_count=1" in (result.diagnostics.error_message or "")
+
 
 # =============================================================================
 # Integration Tests (with mocks)
@@ -567,7 +629,7 @@ class TestBatchLookup:
         # Deliberately truncated after a complete opp_1 object and partial opp_2 object
         mock_client.ask.return_value = (
             '{"results":[{"opportunity_id":"opp_1","matches":[{"title":"Cred 1","client_challenge":"a",'
-            '"approach":"b","value_provided":"c","industry":"Defense","technologies_used":[],"url":"https://x"}],'
+            '"approach":"b","value_provided":"c","industry":"Defense","technologies_used":[],"url":"https://ishare.protiviti.com/cred/x"}],'
             '"no_matches_found":false},{"opportunity_id":"opp_2","matches":[{"title":"Cred 2"'
         )
 
@@ -578,6 +640,115 @@ class TestBatchLookup:
         assert responses["Opp 3"].lookup_status == "Lookup Failed"
         assert batch_diag.parse_outcome == "batch_partial_recovery"
         assert batch_diag.lookup_count_returned == 1
+
+    @pytest.mark.asyncio
+    async def test_batch_parse_drops_invalid_url_match(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.return_value = json.dumps(
+            {
+                "results": [
+                    {
+                        "opportunity_id": "opp_1",
+                        "matches": [
+                            {
+                                "title": "Invalid Credential",
+                                "client_challenge": "Challenge",
+                                "approach": "Approach",
+                                "value_provided": "Value",
+                                "industry": "Defense",
+                                "technologies_used": [],
+                                "url": "invalid-url",
+                            }
+                        ],
+                        "no_matches_found": False,
+                    },
+                    {
+                        "opportunity_id": "opp_2",
+                        "matches": [],
+                        "no_matches_found": True,
+                    },
+                    {
+                        "opportunity_id": "opp_3",
+                        "matches": [],
+                        "no_matches_found": True,
+                    },
+                ]
+            }
+        )
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+        assert responses["Opp 1"].lookup_status == "No Match"
+        assert responses["Opp 1"].matches == []
+        assert responses["Opp 1"].diagnostics is not None
+        assert responses["Opp 1"].diagnostics.parse_outcome == "batch_json_parsed_all_matches_filtered_invalid_url"
+        assert "filtered_invalid_url_count=1" in (responses["Opp 1"].diagnostics.error_message or "")
+        assert batch_diag.parse_outcome == "batch_json_parsed"
+
+    @pytest.mark.asyncio
+    async def test_batch_parse_mixed_valid_invalid_retains_valid(self, agent, mock_client):
+        opportunities = [
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+            Opportunity(title="Opp 3", scope="Scope 3", confidence="Low"),
+        ]
+        mock_client.ask.return_value = json.dumps(
+            {
+                "results": [
+                    {
+                        "opportunity_id": "opp_1",
+                        "matches": [
+                            {
+                                "title": "Invalid Credential",
+                                "client_challenge": "Challenge",
+                                "approach": "Approach",
+                                "value_provided": "Value",
+                                "industry": "Defense",
+                                "technologies_used": [],
+                                "url": "invalid-url",
+                            },
+                            {
+                                "title": "Valid Credential",
+                                "client_challenge": "Challenge 2",
+                                "approach": "Approach 2",
+                                "value_provided": "Value 2",
+                                "industry": "Defense",
+                                "technologies_used": [],
+                                "url": "https://ishare.protiviti.com/cred/1",
+                            },
+                        ],
+                        "no_matches_found": False,
+                    },
+                    {
+                        "opportunity_id": "opp_2",
+                        "matches": [],
+                        "no_matches_found": True,
+                    },
+                    {
+                        "opportunity_id": "opp_3",
+                        "matches": [],
+                        "no_matches_found": True,
+                    },
+                ]
+            }
+        )
+
+        responses, batch_diag = await agent.find_credentials_batch(opportunities, "Defense")
+        assert responses["Opp 1"].lookup_status == "Matched"
+        assert len(responses["Opp 1"].matches) == 1
+        assert responses["Opp 1"].matches[0].title == "Valid Credential"
+        assert responses["Opp 1"].diagnostics is not None
+        assert responses["Opp 1"].diagnostics.parse_outcome == "batch_json_parsed_with_matches_filtered_invalid_url"
+        assert batch_diag.parse_outcome == "batch_json_parsed"
+
+    def test_valid_sharepoint_and_ishare_urls_pass(self, agent):
+        assert agent._is_valid_credential_url(
+            "https://roberthalf.sharepoint.com/sites/iShare-Client-Credentials/SitePages/Credential-Details.aspx?itemid=821"
+        )
+        assert agent._is_valid_credential_url("https://ishare.protiviti.com/cred/123")
 
 
 if __name__ == "__main__":

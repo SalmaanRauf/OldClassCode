@@ -18,6 +18,7 @@ from pathlib import Path
 from models.bd_schemas import (
     BDTrigger,
     DeepResearchOutput,
+    Opportunity,
     CredentialsResponse,
     CredentialsLookupDiagnostics,
     CredentialsBatchDiagnostics,
@@ -57,7 +58,8 @@ class BDOrchestrator:
         credentials_agent: Optional[CredentialsAgent] = None,
         final_analyst: Optional[FinalAnalystAgent] = None,
         traces_dir: Optional[Path] = None,
-        use_atlas_digestion: bool = False
+        use_atlas_digestion: bool = False,
+        credentials_lookup_mode: str = "serial_per_opportunity",
     ):
         """Initialize orchestrator with optional custom components.
         
@@ -68,6 +70,7 @@ class BDOrchestrator:
             final_analyst: FinalAnalystAgent instance (or None to create)
             traces_dir: Directory for saving trace files (or None to skip)
             use_atlas_digestion: Whether to normalize opportunities with ATLAS
+            credentials_lookup_mode: serial_per_opportunity (default) or batched_single_call
         """
         self.extractor = extractor or OpportunityExtractor()
         self.opportunity_digestor = opportunity_digestor or OpportunityDigestor()
@@ -75,6 +78,14 @@ class BDOrchestrator:
         self.final_analyst = final_analyst or FinalAnalystAgent()
         self.traces_dir = traces_dir
         self.use_atlas_digestion = use_atlas_digestion
+        allowed_lookup_modes = {"serial_per_opportunity", "batched_single_call"}
+        if credentials_lookup_mode not in allowed_lookup_modes:
+            logger.warning(
+                "Unknown credentials_lookup_mode '%s'; defaulting to serial_per_opportunity.",
+                credentials_lookup_mode,
+            )
+            credentials_lookup_mode = "serial_per_opportunity"
+        self.credentials_lookup_mode = credentials_lookup_mode
     
     async def _ensure_credentials_agent(self):
         """Lazy-load credentials agent if not provided."""
@@ -101,6 +112,7 @@ class BDOrchestrator:
         
         # Initialize context
         ctx = BDContext(trigger=trigger)
+        ctx.credentials_lookup_mode = self.credentials_lookup_mode
         
         try:
             # Step 1: Get Deep Research output
@@ -162,7 +174,7 @@ class BDOrchestrator:
                 f"(status={ctx.opportunity_extraction_status})"
             )
 
-            # Step 3: Query credentials for top opportunities (single batched call)
+            # Step 3: Query credentials for top opportunities
             top_opportunities = ctx.parsed_research.opportunities[:3]
             status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
             if ctx.opportunity_extraction_status == "Extraction Failed":
@@ -183,23 +195,36 @@ class BDOrchestrator:
             else:
                 await self._notify(progress_cb, "Validating with Credentials Agent...")
                 await self._ensure_credentials_agent()
-                (
-                    ctx.credentials_results,
-                    ctx.credentials_batch_diagnostics,
-                ) = await self.credentials_agent.find_credentials_batch(
-                    top_opportunities,
-                    trigger.sector,
-                    max_matches_per_opportunity=3,
-                )
+                if ctx.credentials_lookup_mode == "batched_single_call":
+                    (
+                        ctx.credentials_results,
+                        ctx.credentials_batch_diagnostics,
+                    ) = await self.credentials_agent.find_credentials_batch(
+                        top_opportunities,
+                        trigger.sector,
+                        max_matches_per_opportunity=3,
+                    )
+                    ctx.trace.append("Executed single batched credentials lookup.")
+                else:
+                    ctx.credentials_results = {}
+                    for opportunity in top_opportunities:
+                        ctx.credentials_results[opportunity.title] = await self._lookup_single_with_retry(
+                            opportunity,
+                            trigger.sector,
+                        )
+                    ctx.credentials_batch_diagnostics = None
+                    ctx.trace.append("Executed serial credentials lookups (top 3).")
+
                 ctx.credentials_diagnostics = self._collect_credentials_diagnostics(
                     top_opportunities,
                     trigger.sector,
                     ctx.credentials_results
                 )
                 status_counts = self._count_lookup_statuses(ctx.credentials_results)
-                ctx.trace.append("Executed single batched credentials lookup.")
 
-            if ctx.credentials_batch_diagnostics and ctx.credentials_batch_diagnostics.invoked:
+            if ctx.lookups_skipped_reason:
+                ctx.lookups_executed_count = 0
+            elif top_opportunities:
                 ctx.lookups_executed_count = len(top_opportunities)
             else:
                 ctx.lookups_executed_count = len(ctx.credentials_results)
@@ -243,6 +268,32 @@ class BDOrchestrator:
             logger.exception(f"BD Orchestration failed: {e}")
             self._save_trace(ctx, (datetime.now() - start_time).total_seconds())
             raise
+
+    async def _lookup_single_with_retry(
+        self,
+        opportunity: Opportunity,
+        sector: str,
+    ) -> CredentialsResponse:
+        """Lookup one opportunity and retry once if it fails due to timeout-like failure."""
+        response = await self.credentials_agent.find_credentials(opportunity, sector=sector)
+        if self._is_timeout_lookup_failure(response):
+            logger.warning(
+                "Retrying serial credentials lookup after timeout-like failure for '%s'.",
+                opportunity.title,
+            )
+            response = await self.credentials_agent.find_credentials(opportunity, sector=sector)
+        return response
+
+    def _is_timeout_lookup_failure(self, response: Optional[CredentialsResponse]) -> bool:
+        if not response or response.lookup_status != "Lookup Failed":
+            return False
+        message_parts: List[str] = []
+        if response.failure_reason:
+            message_parts.append(response.failure_reason)
+        if response.diagnostics and response.diagnostics.error_message:
+            message_parts.append(response.diagnostics.error_message)
+        combined = " ".join(message_parts).lower()
+        return "timed out" in combined
     
     async def _notify(self, cb: Optional[ProgressCallback], message: str):
         """Send progress notification if callback provided."""

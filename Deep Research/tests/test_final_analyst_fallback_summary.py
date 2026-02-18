@@ -167,3 +167,12 @@ def test_parse_report_prefers_source_credentials_and_clears_non_match_stubs():
     assert opp2.credentials == []
     assert opp2.credentials_lookup_status == "No Match"
     assert opp2.validation_status == "No Internal Data"
+
+
+def test_fallback_report_defaults_to_serial_lookup_mode():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Defense", signals=["CMMC"])
+    research = DeepResearchOutput(executive_summary="Summary")
+
+    report = agent._fallback_report(trigger, research, credentials={})
+    assert report.credentials_lookup_mode == "serial_per_opportunity"

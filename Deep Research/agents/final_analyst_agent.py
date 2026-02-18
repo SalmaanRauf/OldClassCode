@@ -80,7 +80,7 @@ class FinalAnalystAgent:
         lookups_executed_count: int = 0,
         lookups_skipped_reason: Optional[str] = None,
         credentials_status_counts: Optional[Dict[str, int]] = None,
-        credentials_lookup_mode: str = "batched_single_call",
+        credentials_lookup_mode: str = "serial_per_opportunity",
         credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
     ) -> MDReport:
         """Synthesize research and credentials into MD report.
@@ -291,7 +291,7 @@ class FinalAnalystAgent:
         lookups_executed_count: int,
         lookups_skipped_reason: Optional[str],
         credentials_status_counts: Dict[str, int],
-        credentials_lookup_mode: str = "batched_single_call",
+        credentials_lookup_mode: str = "serial_per_opportunity",
         credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
     ) -> MDReport:
         """Parse LLM response into MDReport."""
@@ -438,7 +438,7 @@ class FinalAnalystAgent:
         lookups_executed_count: int = 0,
         lookups_skipped_reason: Optional[str] = None,
         credentials_status_counts: Optional[Dict[str, int]] = None,
-        credentials_lookup_mode: str = "batched_single_call",
+        credentials_lookup_mode: str = "serial_per_opportunity",
         credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
         fallback_reason: str = "synthesis_error",
     ) -> MDReport:

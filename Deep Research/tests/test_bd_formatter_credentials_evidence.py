@@ -143,3 +143,15 @@ def test_formatter_includes_pipeline_diagnostics():
     assert "Credentials Lookup Mode: batched_single_call" in content
     assert "Opportunities Source: atlas_digest" in content
     assert "Lookup Status Counts: Matched=1, No Match=0, Lookup Failed=0" in content
+
+
+def test_serial_mode_omits_batch_io_section():
+    report = _build_report()
+    report.credentials_lookup_mode = "serial_per_opportunity"
+    report.credentials_batch_diagnostics = None
+    section = format_bd_report_as_section(report)
+
+    content = section["content"]
+    assert "### Credentials Batch I/O (Full)" not in content
+    assert "Full Query Text: See **Credentials Batch I/O (Full)** section." not in content
+    assert "Full Raw Response Text: See **Credentials Batch I/O (Full)** section." not in content

@@ -15,6 +15,7 @@ import json
 import re
 import asyncio
 import logging
+from urllib.parse import urlparse
 from time import perf_counter
 from typing import Optional, List, Dict, Tuple
 
@@ -498,10 +499,20 @@ class CredentialsAgent:
                 if opp is None:
                     continue
                 returned += 1
-                matches = self._coerce_matches(entry.get("matches", []), max_matches_per_opportunity)
+                matches, filtered_invalid_url_count = self._coerce_matches(
+                    entry.get("matches", []),
+                    max_matches_per_opportunity,
+                )
                 has_matches = len(matches) > 0
                 status = "Matched" if has_matches else "No Match"
-                parse_outcome = "batch_json_parsed_with_matches" if has_matches else "batch_json_parsed_no_match"
+                if has_matches and filtered_invalid_url_count > 0:
+                    parse_outcome = "batch_json_parsed_with_matches_filtered_invalid_url"
+                elif has_matches:
+                    parse_outcome = "batch_json_parsed_with_matches"
+                elif filtered_invalid_url_count > 0:
+                    parse_outcome = "batch_json_parsed_all_matches_filtered_invalid_url"
+                else:
+                    parse_outcome = "batch_json_parsed_no_match"
                 diagnostics = CredentialsLookupDiagnostics(
                     opportunity_title=opp.title,
                     sector=sector,
@@ -509,6 +520,11 @@ class CredentialsAgent:
                     raw_response_text=raw_response,
                     parse_outcome=parse_outcome,
                     lookup_status=status,
+                    error_message=(
+                        f"filtered_invalid_url_count={filtered_invalid_url_count}"
+                        if filtered_invalid_url_count > 0 and not has_matches
+                        else None
+                    ),
                     duration_ms=duration_ms,
                     match_count=len(matches),
                 )
@@ -567,16 +583,32 @@ class CredentialsAgent:
                     opp = id_to_opp.get(opp_id)
                     if opp is None:
                         continue
-                    matches = self._coerce_matches(entry.get("matches", []), max_matches_per_opportunity)
+                    matches, filtered_invalid_url_count = self._coerce_matches(
+                        entry.get("matches", []),
+                        max_matches_per_opportunity,
+                    )
                     has_matches = len(matches) > 0
                     status = "Matched" if has_matches else "No Match"
+                    if has_matches and filtered_invalid_url_count > 0:
+                        parse_outcome = "batch_json_parsed_with_matches_filtered_invalid_url"
+                    elif has_matches:
+                        parse_outcome = "batch_partial_recovery"
+                    elif filtered_invalid_url_count > 0:
+                        parse_outcome = "batch_json_parsed_all_matches_filtered_invalid_url"
+                    else:
+                        parse_outcome = "batch_partial_recovery"
                     diagnostics = CredentialsLookupDiagnostics(
                         opportunity_title=opp.title,
                         sector=sector,
                         query_text=query_text,
                         raw_response_text=raw_response,
-                        parse_outcome="batch_partial_recovery",
+                        parse_outcome=parse_outcome,
                         lookup_status=status,
+                        error_message=(
+                            f"filtered_invalid_url_count={filtered_invalid_url_count}"
+                            if filtered_invalid_url_count > 0 and not has_matches
+                            else None
+                        ),
                         duration_ms=duration_ms,
                         match_count=len(matches),
                     )
@@ -704,12 +736,16 @@ class CredentialsAgent:
 
         return recovered
 
-    def _coerce_matches(self, raw_matches: object, max_matches: int) -> List[CredentialMatch]:
+    def _coerce_matches(self, raw_matches: object, max_matches: int) -> Tuple[List[CredentialMatch], int]:
         matches: List[CredentialMatch] = []
+        filtered_invalid_url_count = 0
         if not isinstance(raw_matches, list):
-            return matches
+            return matches, filtered_invalid_url_count
         for match_data in raw_matches:
             if not isinstance(match_data, dict):
+                continue
+            if not self._is_valid_credential_url(match_data.get("url", "")):
+                filtered_invalid_url_count += 1
                 continue
             try:
                 matches.append(
@@ -728,7 +764,7 @@ class CredentialsAgent:
                 logger.warning("Failed to parse batch credential match: %s", e)
             if len(matches) >= max_matches:
                 break
-        return matches
+        return matches, filtered_invalid_url_count
 
     def _build_batch_failure_map(
         self,
@@ -801,7 +837,13 @@ class CredentialsAgent:
             data = json.loads(json_str)
             
             matches = []
+            filtered_invalid_url_count = 0
             for match_data in data.get("matches", []):
+                if not isinstance(match_data, dict):
+                    continue
+                if not self._is_valid_credential_url(match_data.get("url", "")):
+                    filtered_invalid_url_count += 1
+                    continue
                 try:
                     match = CredentialMatch(
                         title=match_data.get("title", "Unknown"),
@@ -820,9 +862,16 @@ class CredentialsAgent:
 
             has_matches = len(matches) > 0
             lookup_status = "Matched" if has_matches else "No Match"
-            parse_outcome = "json_parsed_with_matches" if has_matches else "json_parsed_no_matches"
+            if has_matches and filtered_invalid_url_count > 0:
+                parse_outcome = "json_parsed_with_matches_filtered_invalid_url"
+            elif has_matches:
+                parse_outcome = "json_parsed_with_matches"
+            elif filtered_invalid_url_count > 0:
+                parse_outcome = "json_parsed_all_matches_filtered_invalid_url"
+            else:
+                parse_outcome = "json_parsed_no_matches"
 
-            if data.get("no_matches_found", False):
+            if data.get("no_matches_found", False) and filtered_invalid_url_count == 0:
                 parse_outcome = "json_explicit_no_match"
 
             diagnostics = CredentialsLookupDiagnostics(
@@ -832,6 +881,11 @@ class CredentialsAgent:
                 raw_response_text=raw,
                 parse_outcome=parse_outcome,
                 lookup_status=lookup_status,
+                error_message=(
+                    f"filtered_invalid_url_count={filtered_invalid_url_count}"
+                    if filtered_invalid_url_count > 0 and not has_matches
+                    else None
+                ),
                 duration_ms=duration_ms,
                 match_count=len(matches)
             )
@@ -947,3 +1001,27 @@ class CredentialsAgent:
             return text[start:end]
         
         return text
+
+    def _is_valid_credential_url(self, url: object) -> bool:
+        if not isinstance(url, str):
+            return False
+        raw = url.strip()
+        if not raw:
+            return False
+
+        parsed = urlparse(raw)
+        if parsed.scheme not in {"http", "https"}:
+            return False
+        if not parsed.netloc:
+            return False
+
+        host = parsed.netloc.lower()
+        if host not in {"roberthalf.sharepoint.com", "ishare.protiviti.com"}:
+            return False
+
+        if host == "roberthalf.sharepoint.com":
+            path = (parsed.path or "").lower()
+            if "credential-details.aspx" not in path:
+                return False
+
+        return True

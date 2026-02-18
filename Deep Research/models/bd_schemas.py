@@ -288,7 +288,7 @@ class MDReport(BaseModel):
         description="Full batched credentials lookup diagnostics"
     )
     credentials_lookup_mode: str = Field(
-        "batched_single_call",
+        "serial_per_opportunity",
         description="Lookup execution mode used for credentials validation"
     )
     opportunities_source: str = Field(
@@ -347,7 +347,7 @@ class BDContext(BaseModel):
         description="Run-level diagnostics for batched credentials lookup"
     )
     credentials_lookup_mode: str = Field(
-        "batched_single_call",
+        "serial_per_opportunity",
         description="Lookup execution mode used for this run"
     )
     opportunities_source: str = Field(

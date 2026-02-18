@@ -56,7 +56,8 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
             lines.append("")
 
     lines.extend(_format_pipeline_diagnostics(report))
-    lines.extend(_format_credentials_batch_io(report))
+    if report.credentials_lookup_mode == "batched_single_call" and report.credentials_batch_diagnostics:
+        lines.extend(_format_credentials_batch_io(report))
     lines.extend(_format_credentials_evidence(report))
 
     if report.signals_detected:
