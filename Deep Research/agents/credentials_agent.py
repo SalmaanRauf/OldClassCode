@@ -771,7 +771,9 @@ class CredentialsAgent:
                         approach=match_data.get("approach", ""),
                         value_provided=match_data.get("value_provided", ""),
                         industry=match_data.get("industry", ""),
-                        technologies_used=match_data.get("technologies_used", []),
+                        technologies_used=self._coerce_technologies_used(
+                            match_data.get("technologies_used", [])
+                        ),
                         emd=match_data.get("emd"),
                         url=match_data.get("url", ""),
                     )
@@ -867,7 +869,9 @@ class CredentialsAgent:
                         approach=match_data.get("approach", ""),
                         value_provided=match_data.get("value_provided", ""),
                         industry=match_data.get("industry", ""),
-                        technologies_used=match_data.get("technologies_used", []),
+                        technologies_used=self._coerce_technologies_used(
+                            match_data.get("technologies_used", [])
+                        ),
                         emd=match_data.get("emd"),
                         url=match_data.get("url", "")
                     )
@@ -1041,3 +1045,13 @@ class CredentialsAgent:
                 return False
 
         return True
+
+    def _coerce_technologies_used(self, value: object) -> List[str]:
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        if isinstance(value, str):
+            text = value.strip()
+            if not text or text.lower() in {"not specified", "n/a", "none"}:
+                return []
+            return [text]
+        return []

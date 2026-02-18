@@ -23,7 +23,9 @@ from models.bd_schemas import (
     MDReport,
     MDReportOpportunity,
     Opportunity,
-    CredentialMatch
+    CredentialMatch,
+    SignalEvidence,
+    PhaseOpportunity,
 )
 
 logger = logging.getLogger(__name__)
@@ -83,6 +85,9 @@ class FinalAnalystAgent:
         credentials_status_counts: Optional[Dict[str, int]] = None,
         credentials_lookup_mode: str = "serial_per_opportunity",
         credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
+        confirmed_signal_evidence: Optional[List[SignalEvidence]] = None,
+        phase3_candidates: Optional[List[PhaseOpportunity]] = None,
+        allowed_sources: Optional[List[str]] = None,
     ) -> MDReport:
         """Synthesize research and credentials into MD report.
         
@@ -115,6 +120,9 @@ class FinalAnalystAgent:
                 credentials_status_counts=credentials_status_counts,
                 credentials_lookup_mode=credentials_lookup_mode,
                 credentials_batch_diagnostics=credentials_batch_diagnostics,
+                confirmed_signal_evidence=confirmed_signal_evidence,
+                phase3_candidates=phase3_candidates,
+                allowed_sources=allowed_sources,
                 fallback_reason="extraction_skip",
             )
 
@@ -131,6 +139,9 @@ class FinalAnalystAgent:
             credentials_status_counts=credentials_status_counts,
             credentials_lookup_mode=credentials_lookup_mode,
             credentials_batch_diagnostics=credentials_batch_diagnostics,
+            confirmed_signal_evidence=confirmed_signal_evidence,
+            phase3_candidates=phase3_candidates,
+            allowed_sources=allowed_sources,
         )
         
         # Fill template
@@ -167,6 +178,9 @@ class FinalAnalystAgent:
                 credentials_status_counts=credentials_status_counts,
                 credentials_lookup_mode=credentials_lookup_mode,
                 credentials_batch_diagnostics=credentials_batch_diagnostics,
+                confirmed_signal_evidence=confirmed_signal_evidence,
+                phase3_candidates=phase3_candidates,
+                allowed_sources=allowed_sources,
             )
             
         except Exception as e:
@@ -184,6 +198,9 @@ class FinalAnalystAgent:
                 credentials_status_counts=credentials_status_counts,
                 credentials_lookup_mode=credentials_lookup_mode,
                 credentials_batch_diagnostics=credentials_batch_diagnostics,
+                confirmed_signal_evidence=confirmed_signal_evidence,
+                phase3_candidates=phase3_candidates,
+                allowed_sources=allowed_sources,
                 fallback_reason="synthesis_error",
                 fallback_error_message=str(e),
             )
@@ -200,7 +217,10 @@ class FinalAnalystAgent:
         lookups_skipped_reason: Optional[str],
         credentials_status_counts: Dict[str, int],
         credentials_lookup_mode: str,
-        credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics]
+        credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics],
+        confirmed_signal_evidence: Optional[List[SignalEvidence]],
+        phase3_candidates: Optional[List[PhaseOpportunity]],
+        allowed_sources: Optional[List[str]],
     ) -> Dict[str, str]:
         """Build variables for prompt template."""
         # Trigger summary
@@ -265,7 +285,22 @@ class FinalAnalystAgent:
                     ),
                 },
                 indent=2
-            )
+            ),
+            "confirmed_signals_json": json.dumps(
+                [
+                    item.model_dump() if hasattr(item, "model_dump") else item.__dict__
+                    for item in (confirmed_signal_evidence or [])
+                ],
+                indent=2,
+            ),
+            "phase3_candidates_json": json.dumps(
+                [
+                    item.model_dump() if hasattr(item, "model_dump") else item.__dict__
+                    for item in (phase3_candidates or [])
+                ],
+                indent=2,
+            ),
+            "allowed_sources_json": json.dumps(allowed_sources or [], indent=2),
         }
 
     def _batch_diagnostics_for_prompt(
@@ -299,6 +334,9 @@ class FinalAnalystAgent:
         credentials_status_counts: Dict[str, int],
         credentials_lookup_mode: str = "serial_per_opportunity",
         credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
+        confirmed_signal_evidence: Optional[List[SignalEvidence]] = None,
+        phase3_candidates: Optional[List[PhaseOpportunity]] = None,
+        allowed_sources: Optional[List[str]] = None,
     ) -> MDReport:
         """Parse LLM response into MDReport."""
         try:
@@ -363,6 +401,22 @@ class FinalAnalystAgent:
                     credentials_lookup_status=lookup_status
                 ))
             
+            parsed_phase2_signal_evidence = self._parse_phase2_signal_evidence(
+                data.get("phase2_signal_evidence"),
+                fallback=confirmed_signal_evidence,
+            )
+            parsed_phase3_opportunities = self._parse_phase3_opportunities(
+                data.get("phase3_opportunities"),
+                fallback=phase3_candidates,
+            )
+            parsed_phase_sources = self._parse_phase_sources(
+                data.get("phase_sources"),
+                fallback=allowed_sources,
+            )
+            parsed_layout_version = data.get("layout_version")
+            if not parsed_layout_version and (parsed_phase2_signal_evidence or parsed_phase3_opportunities):
+                parsed_layout_version = "fs_evidence_locked_v1"
+
             return MDReport(
                 trigger_summary=data.get("trigger_summary", ""),
                 executive_summary=data.get("executive_summary", ""),
@@ -386,6 +440,15 @@ class FinalAnalystAgent:
                 credentials_status_counts=dict(credentials_status_counts),
                 credentials_lookup_mode=credentials_lookup_mode,
                 credentials_batch_diagnostics=credentials_batch_diagnostics,
+                phase2_headline=data.get("phase2_headline"),
+                phase2_signal_evidence=parsed_phase2_signal_evidence,
+                phase2_footnotes=self._parse_phase2_footnotes(
+                    data.get("phase2_footnotes"),
+                    fallback_signal_evidence=parsed_phase2_signal_evidence,
+                ),
+                phase3_opportunities=parsed_phase3_opportunities,
+                phase_sources=parsed_phase_sources,
+                layout_version=parsed_layout_version,
             )
             
         except Exception as e:
@@ -402,6 +465,9 @@ class FinalAnalystAgent:
                 credentials_status_counts=credentials_status_counts,
                 credentials_lookup_mode=credentials_lookup_mode,
                 credentials_batch_diagnostics=credentials_batch_diagnostics,
+                confirmed_signal_evidence=confirmed_signal_evidence,
+                phase3_candidates=phase3_candidates,
+                allowed_sources=allowed_sources,
                 fallback_reason="parse_error",
                 fallback_error_message=str(e),
             )
@@ -453,6 +519,9 @@ class FinalAnalystAgent:
         credentials_status_counts: Optional[Dict[str, int]] = None,
         credentials_lookup_mode: str = "serial_per_opportunity",
         credentials_batch_diagnostics: Optional[CredentialsBatchDiagnostics] = None,
+        confirmed_signal_evidence: Optional[List[SignalEvidence]] = None,
+        phase3_candidates: Optional[List[PhaseOpportunity]] = None,
+        allowed_sources: Optional[List[str]] = None,
         fallback_reason: str = "synthesis_error",
         fallback_error_message: Optional[str] = None,
     ) -> MDReport:
@@ -524,6 +593,12 @@ class FinalAnalystAgent:
             credentials_status_counts=dict(credentials_status_counts),
             credentials_lookup_mode=credentials_lookup_mode,
             credentials_batch_diagnostics=credentials_batch_diagnostics,
+            phase2_headline=self._fallback_phase2_headline(confirmed_signal_evidence),
+            phase2_signal_evidence=confirmed_signal_evidence or None,
+            phase2_footnotes=self._fallback_phase2_footnotes(confirmed_signal_evidence),
+            phase3_opportunities=phase3_candidates or None,
+            phase_sources=(allowed_sources[:20] if allowed_sources else None),
+            layout_version="fs_evidence_locked_v1" if confirmed_signal_evidence or phase3_candidates else None,
         )
 
     def _fallback_confidence_note(self, fallback_reason: str) -> str:
@@ -600,6 +675,133 @@ class FinalAnalystAgent:
             ]
         )
 
+    def _fallback_phase2_headline(
+        self,
+        signal_evidence: Optional[List[SignalEvidence]]
+    ) -> Optional[str]:
+        if not signal_evidence:
+            return None
+        confirmed = [item for item in signal_evidence if item.status == "Confirmed"]
+        if confirmed:
+            return (
+                "Validated public evidence indicates governance and regulatory execution pressure "
+                "across confirmed financial-services signals."
+            )
+        return "Available evidence did not produce confirmed financial-services signals in this run."
+
+    def _fallback_phase2_footnotes(
+        self,
+        signal_evidence: Optional[List[SignalEvidence]]
+    ) -> Optional[List[str]]:
+        if not signal_evidence:
+            return None
+        footnotes: List[str] = []
+        for item in signal_evidence:
+            if item.status != "Confirmed" or not item.source_url:
+                continue
+            quote = (item.evidence_quote or "").strip()
+            quoted = f"\"{quote}\"" if quote else "(No quote captured)"
+            footnotes.append(
+                f"{quoted} — {item.signal_label}; {item.source_url}"
+            )
+        return footnotes or None
+
+    def _parse_phase2_signal_evidence(
+        self,
+        raw: Any,
+        fallback: Optional[List[SignalEvidence]]
+    ) -> Optional[List[SignalEvidence]]:
+        if isinstance(raw, list):
+            parsed: List[SignalEvidence] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                status = str(item.get("status", "Insufficient")).title()
+                if status not in {"Confirmed", "Insufficient", "Rejected"}:
+                    status = "Insufficient"
+                signal_code = str(item.get("signal_code", "")).strip()
+                signal_label = str(item.get("signal_label", "")).strip() or signal_code
+                if not signal_code:
+                    continue
+                parsed.append(
+                    SignalEvidence(
+                        signal_code=signal_code,
+                        signal_label=signal_label,
+                        status=status,  # type: ignore[arg-type]
+                        evidence_quote=str(item.get("evidence_quote", "")).strip(),
+                        source_url=str(item.get("source_url", "")).strip(),
+                        source_title=str(item.get("source_title", "")).strip() or None,
+                        analysis=str(item.get("analysis", "")).strip(),
+                    )
+                )
+            if parsed:
+                return parsed
+        return fallback or None
+
+    def _parse_phase2_footnotes(
+        self,
+        raw: Any,
+        fallback_signal_evidence: Optional[List[SignalEvidence]] = None,
+    ) -> Optional[List[str]]:
+        if isinstance(raw, list):
+            parsed = [str(item).strip() for item in raw if str(item).strip()]
+            if parsed:
+                return parsed
+        return self._fallback_phase2_footnotes(fallback_signal_evidence)
+
+    def _parse_phase3_opportunities(
+        self,
+        raw: Any,
+        fallback: Optional[List[PhaseOpportunity]]
+    ) -> Optional[List[PhaseOpportunity]]:
+        if isinstance(raw, list):
+            parsed: List[PhaseOpportunity] = []
+            for item in raw:
+                if not isinstance(item, dict):
+                    continue
+                derived_from_signal = str(item.get("derived_from_signal", "")).strip()
+                if not derived_from_signal:
+                    continue
+                service_lines = item.get("relevant_service_lines")
+                if isinstance(service_lines, list):
+                    normalized_service_lines = [str(value).strip() for value in service_lines if str(value).strip()]
+                else:
+                    normalized_service_lines = []
+                actions = item.get("recommended_actions")
+                if isinstance(actions, list):
+                    normalized_actions = [str(value).strip() for value in actions if str(value).strip()]
+                else:
+                    normalized_actions = []
+                sources = item.get("sources")
+                if isinstance(sources, list):
+                    normalized_sources = [str(value).strip() for value in sources if str(value).strip()]
+                else:
+                    normalized_sources = []
+                parsed.append(
+                    PhaseOpportunity(
+                        derived_from_signal=derived_from_signal,
+                        overview=str(item.get("overview", "")).strip(),
+                        technical_explanation=str(item.get("technical_explanation", "")).strip(),
+                        layman_explanation=str(item.get("layman_explanation", "")).strip(),
+                        relevant_service_lines=normalized_service_lines,
+                        credentials_summary=str(item.get("credentials_summary", "")).strip(),
+                        recommended_actions=normalized_actions,
+                        sources=normalized_sources,
+                    )
+                )
+            if parsed:
+                return parsed
+        return fallback or None
+
+    def _parse_phase_sources(self, raw: Any, fallback: Optional[List[str]]) -> Optional[List[str]]:
+        if isinstance(raw, list):
+            parsed = [str(item).strip() for item in raw if str(item).strip()]
+            if parsed:
+                return parsed
+        if fallback:
+            return [str(item).strip() for item in fallback if str(item).strip()]
+        return None
+
     def _sanitize_prompt_context(self, value: Optional[str], max_chars: int = 600) -> str:
         text = re.sub(r"\s+", " ", (value or "").strip())
         if not text:
@@ -628,9 +830,11 @@ class FinalAnalystAgent:
             "nov": 11, "november": 11,
             "dec": 12, "december": 12,
         }
+        temporal_prefixes = ("late ", "early ", "mid ", "by ", "in ", "during ", "through ", "from ")
 
         quarter_range_pattern = re.compile(r"\bQ([1-4])\s*[-–]\s*Q([1-4])\s+(\d{4})\b", re.IGNORECASE)
         single_quarter_pattern = re.compile(r"\bQ([1-4])\s+(\d{4})\b", re.IGNORECASE)
+        year_range_pattern = re.compile(r"\b((?:19|20)\d{2})\s*[-–]\s*((?:19|20)\d{2})\b")
         month_year_pattern = re.compile(
             r"\b("
             r"Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|"
@@ -638,6 +842,14 @@ class FinalAnalystAgent:
             r")\s+(\d{4})\b",
             re.IGNORECASE,
         )
+
+        def _extend_start_for_prefix(source_text: str, start_index: int) -> int:
+            lowered = source_text.lower()
+            for prefix in temporal_prefixes:
+                prefix_start = start_index - len(prefix)
+                if prefix_start >= 0 and lowered[prefix_start:start_index] == prefix:
+                    return prefix_start
+            return start_index
 
         for action in actions:
             text = str(action or "").strip()
@@ -656,30 +868,51 @@ class FinalAnalystAgent:
                 start_q = int(match.group(1))
                 year = int(match.group(3))
                 if year < today.year or (year == today.year and start_q < current_quarter):
-                    add_range(match.start(), match.end())
+                    add_range(_extend_start_for_prefix(text, match.start()), match.end())
 
             for match in single_quarter_pattern.finditer(text):
                 quarter = int(match.group(1))
                 year = int(match.group(2))
                 if year < today.year or (year == today.year and quarter < current_quarter):
-                    add_range(match.start(), match.end())
+                    add_range(_extend_start_for_prefix(text, match.start()), match.end())
+
+            for match in year_range_pattern.finditer(text):
+                start_year = int(match.group(1))
+                end_year = int(match.group(2))
+                if start_year > end_year:
+                    start_year, end_year = end_year, start_year
+                # Any range beginning in the past is considered stale for action planning guidance.
+                if start_year < today.year or end_year < today.year:
+                    add_range(_extend_start_for_prefix(text, match.start()), match.end())
 
             for match in month_year_pattern.finditer(text):
                 month_token = match.group(1).lower()
                 year = int(match.group(2))
                 month = month_lookup.get(month_token, month_lookup.get(month_token[:3], 0))
                 if year < today.year or (year == today.year and month and month < today.month):
-                    add_range(match.start(), match.end())
+                    add_range(_extend_start_for_prefix(text, match.start()), match.end())
 
             for match in re.finditer(r"\b(19|20)\d{2}\b", text):
                 year = int(match.group(0))
                 if year < today.year:
-                    add_range(match.start(), match.end())
+                    add_range(_extend_start_for_prefix(text, match.start()), match.end())
 
             if stale_ranges:
                 replacement = "within the next 30-90 days"
                 for start, end in sorted(stale_ranges, key=lambda x: x[0], reverse=True):
                     text = f"{text[:start]}{replacement}{text[end:]}"
+                text = re.sub(
+                    r"\b(?:by|in|during|through|from)\s+within the next 30-90 days\b",
+                    "within the next 30-90 days",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+                text = re.sub(
+                    r"\b(?:late|early|mid)\s+within the next 30-90 days\b",
+                    "within the next 30-90 days",
+                    text,
+                    flags=re.IGNORECASE,
+                )
                 text = re.sub(r"\s{2,}", " ", text).strip()
 
             sanitized.append(text)

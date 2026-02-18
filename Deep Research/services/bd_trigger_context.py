@@ -7,6 +7,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from models.bd_schemas import BDTrigger
+from services.signal_registry_service import get_signal_registry_service, SignalRegistryService
 
 
 def sanitize_user_prompt_context(user_query: str, max_chars: int = 600) -> Optional[str]:
@@ -24,6 +25,9 @@ def sanitize_user_prompt_context(user_query: str, max_chars: int = 600) -> Optio
 def _parse_signals_from_text(text: str) -> List[str]:
     lowered = (text or "").lower()
     candidates = [
+        ("all signals", "All"),
+        ("executive movement", "Executive Movement"),
+        ("executive transition", "Executive Transition"),
         ("cmmc", "CMMC"),
         ("iv&v", "IV&V"),
         ("rmf", "RMF"),
@@ -44,6 +48,15 @@ def _parse_signals(value: Any) -> List[str]:
     if isinstance(value, str):
         return [part.strip() for part in re.split(r"[,\n;]", value) if part.strip()]
     return []
+
+
+def _extract_fs_signal_tokens_from_query(user_query: str) -> List[str]:
+    lowered = (user_query or "").lower()
+    tokens: List[str] = []
+    for alias in SignalRegistryService.FS_ALIAS_MAP.keys():
+        if alias in lowered:
+            tokens.append(alias)
+    return tokens
 
 
 def _parse_time_window_days(value: Any, fallback_text: str, default: int = 30) -> int:
@@ -132,9 +145,19 @@ def build_trigger_for_bd_enrichment(
     user_query: str,
     session_params: Dict[str, Any],
 ) -> BDTrigger:
+    signal_registry = get_signal_registry_service()
+    is_fs_sector = signal_registry.is_financial_services(sector)
+
     parsed_signals = _parse_signals(session_params.get("signals"))
     if not parsed_signals:
         parsed_signals = _parse_signals_from_text(user_query)
+    if is_fs_sector:
+        canonical_fs = signal_registry.canonicalize_fs_signals(parsed_signals)
+        if not canonical_fs:
+            canonical_fs = signal_registry.canonicalize_fs_signals(
+                _extract_fs_signal_tokens_from_query(user_query)
+            )
+        parsed_signals = canonical_fs
 
     company_focus = (session_params.get("company") or "").strip() if isinstance(session_params.get("company"), str) else None
     if not company_focus:

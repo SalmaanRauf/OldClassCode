@@ -199,7 +199,7 @@ def test_sanitize_recommended_actions_rewrites_stale_quarter_same_year():
 
     sanitized = agent._sanitize_recommended_actions(actions, today=date(2026, 8, 1))
 
-    assert sanitized == ["Coordinate proposal sprint by within the next 30-90 days"]
+    assert sanitized == ["Coordinate proposal sprint within the next 30-90 days"]
 
 
 def test_sanitize_recommended_actions_keeps_current_or_future_quarter():
@@ -228,6 +228,15 @@ def test_fallback_report_sanitizes_stale_recommended_actions():
     assert "Q2-Q3 2024" not in report.executive_summary
 
 
+def test_sanitize_recommended_actions_rewrites_year_range_with_prefix():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    actions = ["Develop compliance roadmap in late 2025–2026"]
+
+    sanitized = agent._sanitize_recommended_actions(actions, today=date(2026, 2, 18))
+
+    assert sanitized == ["Develop compliance roadmap within the next 30-90 days"]
+
+
 def test_build_prompt_variables_includes_current_date_and_prompt_context():
     agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
     trigger = BDTrigger(
@@ -249,6 +258,9 @@ def test_build_prompt_variables_includes_current_date_and_prompt_context():
         credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
         credentials_lookup_mode="serial_per_opportunity",
         credentials_batch_diagnostics=None,
+        confirmed_signal_evidence=None,
+        phase3_candidates=None,
+        allowed_sources=None,
     )
 
     assert prompt_vars["current_date_iso"] == date.today().isoformat()
@@ -275,6 +287,9 @@ def test_build_prompt_variables_truncates_prompt_context():
         credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
         credentials_lookup_mode="serial_per_opportunity",
         credentials_batch_diagnostics=None,
+        confirmed_signal_evidence=None,
+        phase3_candidates=None,
+        allowed_sources=None,
     )
 
     assert len(prompt_vars["user_prompt_context"]) <= 600

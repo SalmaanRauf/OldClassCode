@@ -3,6 +3,7 @@ Formatting helpers for BD report rendering in Chainlit surfaces.
 """
 from __future__ import annotations
 
+import os
 from typing import Dict, Any, Optional, List
 
 from models.bd_schemas import (
@@ -17,6 +18,15 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
     """Format an MDReport into a Deep Research section payload."""
     if not report:
         return None
+
+    show_diagnostics = os.getenv("BD_SHOW_PIPELINE_DIAGNOSTICS", "false").lower() in {"1", "true", "yes"}
+    if report.layout_version == "fs_evidence_locked_v1" or report.phase2_signal_evidence or report.phase3_opportunities:
+        content = _format_phase_layout(report, show_diagnostics=show_diagnostics)
+        return {
+            "title": "🎯 BD Analysis & Credentials Validation",
+            "content": content,
+            "citations": [],
+        }
 
     lines: List[str] = []
 
@@ -55,10 +65,11 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
                         lines.append(f"     - {cred.title}")
             lines.append("")
 
-    lines.extend(_format_pipeline_diagnostics(report))
-    if report.credentials_lookup_mode == "batched_single_call" and report.credentials_batch_diagnostics:
-        lines.extend(_format_credentials_batch_io(report))
-    lines.extend(_format_credentials_evidence(report))
+    if show_diagnostics:
+        lines.extend(_format_pipeline_diagnostics(report))
+        if report.credentials_lookup_mode == "batched_single_call" and report.credentials_batch_diagnostics:
+            lines.extend(_format_credentials_batch_io(report))
+        lines.extend(_format_credentials_evidence(report))
 
     if report.signals_detected:
         lines.append("### Key Signals Detected")
@@ -80,6 +91,83 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
         "content": "\n".join(lines),
         "citations": [],
     }
+
+
+def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
+    lines: List[str] = []
+
+    lines.append("### PHASE 2 — Analytical Synthesis (Evidence-Locked)")
+    lines.append("")
+    if report.phase2_headline:
+        lines.append(report.phase2_headline)
+        lines.append("")
+
+    if report.phase2_signal_evidence:
+        for evidence in report.phase2_signal_evidence:
+            lines.append(
+                f"- **{evidence.signal_label} ({evidence.signal_code})** — {evidence.status}"
+            )
+            if evidence.analysis:
+                lines.append(f"  {evidence.analysis}")
+            if evidence.evidence_quote:
+                lines.append(f"  Quote: \"{evidence.evidence_quote}\"")
+            if evidence.source_url:
+                source_title = evidence.source_title or evidence.source_url
+                lines.append(f"  Source: [{source_title}]({evidence.source_url})")
+        lines.append("")
+    else:
+        lines.append("No phase-2 signal evidence was produced.")
+        lines.append("")
+
+    if report.phase2_footnotes:
+        lines.append("Footnotes (verbatim + linkage)")
+        for footnote in report.phase2_footnotes:
+            lines.append(f"- {footnote}")
+        lines.append("")
+
+    lines.append("### PHASE 3 — Opportunity Analysis & Client Enablement")
+    lines.append("")
+    if report.phase3_opportunities:
+        for index, opportunity in enumerate(report.phase3_opportunities, 1):
+            lines.append(f"**Opportunity {index} (Derived from {opportunity.derived_from_signal})**")
+            if opportunity.overview:
+                lines.append(f"Opportunity Overview\n{opportunity.overview}")
+            if opportunity.technical_explanation:
+                lines.append(f"Detailed Technical Explanation\n{opportunity.technical_explanation}")
+            if opportunity.layman_explanation:
+                lines.append(f"Layman's Explanation\n{opportunity.layman_explanation}")
+            if opportunity.relevant_service_lines:
+                lines.append("Relevant Service Lines")
+                for service_line in opportunity.relevant_service_lines:
+                    lines.append(f"- {service_line}")
+            lines.append("Relevant Protiviti Credentials")
+            lines.append(opportunity.credentials_summary or "No materially aligned credentials identified.")
+            if opportunity.recommended_actions:
+                lines.append("Recommended Client Enablement Actions")
+                for action in opportunity.recommended_actions:
+                    lines.append(f"- {action}")
+            if opportunity.sources:
+                lines.append("Sources (signal-aligned):")
+                for source in opportunity.sources:
+                    lines.append(f"- {source}")
+            lines.append("")
+    else:
+        lines.append("No phase-3 opportunities were generated.")
+        lines.append("")
+
+    if report.phase_sources:
+        lines.append("Sources")
+        for source in report.phase_sources:
+            lines.append(f"- {source}")
+        lines.append("")
+
+    if show_diagnostics:
+        lines.extend(_format_pipeline_diagnostics(report))
+        if report.credentials_lookup_mode == "batched_single_call" and report.credentials_batch_diagnostics:
+            lines.extend(_format_credentials_batch_io(report))
+        lines.extend(_format_credentials_evidence(report))
+
+    return "\n".join(lines)
 
 
 def _format_credentials_evidence(report: MDReport) -> List[str]:

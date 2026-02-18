@@ -1,5 +1,5 @@
 """
-Tests for BD report formatter credentials evidence rendering.
+Tests for BD report formatter phase rendering and diagnostics toggles.
 """
 from datetime import datetime
 
@@ -15,21 +15,23 @@ from models.bd_schemas import (
     CredentialMatch,
     CredentialsLookupDiagnostics,
     CredentialsBatchDiagnostics,
+    PhaseOpportunity,
+    SignalEvidence,
 )
 
 
-def _build_report() -> MDReport:
+def _build_phase_report() -> MDReport:
     return MDReport(
-        trigger_summary="Defense trigger",
+        trigger_summary="Financial services trigger",
         executive_summary=(
             "Deep Research Findings\n"
-            "Market signal detected.\n\n"
+            "Verified public signals detected.\n\n"
             "Credentials Agent Findings\n"
             "- Matched opportunities: 1\n"
             "- No-match opportunities: 0\n"
             "- Lookup failures: 0\n\n"
             "Combined Report & Action Items\n"
-            "- Prioritize validated opportunities."
+            "- Prioritize phase-aligned opportunities."
         ),
         top_opportunities=[
             MDReportOpportunity(
@@ -61,13 +63,13 @@ def _build_report() -> MDReport:
         generated_at=datetime.now(),
         confidence_note="High confidence.",
         opportunity_extraction_status="Parsed",
-        opportunity_extraction_reason="Parsed 1 opportunities using narrative_fallback.",
+        opportunity_extraction_reason="Parsed 1 opportunities using fs_signal_derivation.",
         opportunities_extracted_count=1,
         lookups_executed_count=1,
         lookups_skipped_reason=None,
         credentials_status_counts={"Matched": 1, "No Match": 0, "Lookup Failed": 0},
         credentials_lookup_mode="batched_single_call",
-        opportunities_source="atlas_digest",
+        opportunities_source="fs_signal_derivation",
         credentials_batch_diagnostics=CredentialsBatchDiagnostics(
             invoked=True,
             lookup_count_requested=3,
@@ -80,79 +82,89 @@ def _build_report() -> MDReport:
         credentials_evidence=[
             CredentialsLookupDiagnostics(
                 opportunity_title="Program A",
-                sector="Defense",
-                query_text="FULL QUERY TEXT :: include everything line1\nline2\nline3",
-                raw_response_text='FULL RAW RESPONSE :: {"matches":[{"title":"Defense CMMC Credential"}]}',
+                sector="Financial Services",
+                query_text="FULL QUERY TEXT",
+                raw_response_text='{"matches":[{"title":"Defense CMMC Credential"}]}',
                 parse_outcome="json_parsed_with_matches",
                 lookup_status="Matched",
                 duration_ms=12.34,
                 match_count=1,
             )
         ],
+        phase2_headline="Capital One is balancing remediation execution with regulatory deliverable cadence.",
+        phase2_signal_evidence=[
+            SignalEvidence(
+                signal_code="FS.EXEC.TRANSITION",
+                signal_label="Executive Transition",
+                status="Confirmed",
+                evidence_quote="Capital One appointed ... Business Chief Risk Officer ...",
+                source_url="https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro",
+                source_title="FinTech Magazine",
+                analysis="Named risk leadership aligns to payments expansion governance.",
+            )
+        ],
+        phase2_footnotes=[
+            "\"Capital One appointed ...\" — FinTech Magazine; https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro"
+        ],
+        phase3_opportunities=[
+            PhaseOpportunity(
+                derived_from_signal="FS.EXEC.TRANSITION",
+                overview="Risk leadership transition creates governance alignment opportunity.",
+                technical_explanation="Define operating model, control ownership, and escalation paths.",
+                layman_explanation="Set clear guardrails early so growth does not require rework later.",
+                relevant_service_lines=[
+                    "Risk governance and operating model advisory",
+                    "Control framework design for new initiatives",
+                ],
+                credentials_summary="No materially aligned credentials identified.",
+                recommended_actions=[
+                    "Facilitate a mandate translation workshop within the next 30-90 days."
+                ],
+                sources=[
+                    "https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro"
+                ],
+            )
+        ],
+        phase_sources=[
+            "https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro"
+        ],
+        layout_version="fs_evidence_locked_v1",
     )
 
 
-def test_formatter_includes_fixed_three_block_summary():
-    report = _build_report()
+def test_formatter_renders_phase_layout_by_default():
+    report = _build_phase_report()
     section = format_bd_report_as_section(report)
 
     assert section is not None
     content = section["content"]
-    assert "Deep Research Findings" in content
-    assert "Credentials Agent Findings" in content
-    assert "Combined Report & Action Items" in content
+    assert "PHASE 2 — Analytical Synthesis (Evidence-Locked)" in content
+    assert "PHASE 3 — Opportunity Analysis & Client Enablement" in content
+    assert "Executive Transition (FS.EXEC.TRANSITION)" in content
+    assert "— Confirmed" in content
+    assert "Opportunity 1 (Derived from FS.EXEC.TRANSITION)" in content
 
 
-def test_formatter_renders_full_credentials_evidence_without_truncation():
-    report = _build_report()
+def test_formatter_hides_diagnostics_by_default():
+    report = _build_phase_report()
+    os.environ.pop("BD_SHOW_PIPELINE_DIAGNOSTICS", None)
     section = format_bd_report_as_section(report)
 
     content = section["content"]
-    assert "### Credentials Evidence (Full I/O)" in content
-    assert "Status: Matched" in content
-    assert "Parse Outcome: json_parsed_with_matches" in content
-    assert "Full Query Text: See **Credentials Batch I/O (Full)** section." in content
-    assert "Full Raw Response Text: See **Credentials Batch I/O (Full)** section." in content
-    assert "Title: Defense CMMC Credential" in content
-    assert "Industry: Defense" in content
-    assert "Client Challenge: Needed CMMC alignment" in content
-    assert "Approach: Control mapping and remediation" in content
-    assert "Value Provided: Passed readiness assessment" in content
+    assert "### Pipeline Diagnostics" not in content
+    assert "### Credentials Evidence (Full I/O)" not in content
+    assert "### Credentials Batch I/O (Full)" not in content
 
 
-def test_formatter_renders_full_batch_io_once():
-    report = _build_report()
-    section = format_bd_report_as_section(report)
-
-    content = section["content"]
-    assert "### Credentials Batch I/O (Full)" in content
-    assert "BATCH QUERY FULL TEXT line1\nline2" in content
-    assert '{"results":[{"opportunity_id":"opp_1"}]}' in content
-    assert "Lookup Count Requested: 3" in content
-
-
-def test_formatter_includes_pipeline_diagnostics():
-    report = _build_report()
-    section = format_bd_report_as_section(report)
+def test_formatter_can_show_diagnostics_with_toggle():
+    report = _build_phase_report()
+    os.environ["BD_SHOW_PIPELINE_DIAGNOSTICS"] = "true"
+    try:
+        section = format_bd_report_as_section(report)
+    finally:
+        os.environ.pop("BD_SHOW_PIPELINE_DIAGNOSTICS", None)
 
     content = section["content"]
     assert "### Pipeline Diagnostics" in content
-    assert "Synthesis Status: synthesized" in content
-    assert "Opportunities Extracted: 1" in content
-    assert "Extraction Status: Parsed" in content
-    assert "Lookups Executed: 1" in content
-    assert "Credentials Lookup Mode: batched_single_call" in content
-    assert "Opportunities Source: atlas_digest" in content
-    assert "Lookup Status Counts: Matched=1, No Match=0, Lookup Failed=0" in content
-
-
-def test_serial_mode_omits_batch_io_section():
-    report = _build_report()
-    report.credentials_lookup_mode = "serial_per_opportunity"
-    report.credentials_batch_diagnostics = None
-    section = format_bd_report_as_section(report)
-
-    content = section["content"]
-    assert "### Credentials Batch I/O (Full)" not in content
-    assert "Full Query Text: See **Credentials Batch I/O (Full)** section." not in content
-    assert "Full Raw Response Text: See **Credentials Batch I/O (Full)** section." not in content
+    assert "### Credentials Evidence (Full I/O)" in content
+    assert "### Credentials Batch I/O (Full)" in content

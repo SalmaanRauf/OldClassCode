@@ -316,6 +316,30 @@ class TestResponseParsing:
         assert result.diagnostics.parse_outcome == "json_parsed_all_matches_filtered_invalid_url"
         assert "filtered_invalid_url_count=1" in (result.diagnostics.error_message or "")
 
+    def test_single_parse_coerces_technologies_used_string(self, agent):
+        raw = json.dumps(
+            {
+                "matches": [
+                    {
+                        "title": "Credential with string technologies",
+                        "client_challenge": "Challenge",
+                        "approach": "Approach",
+                        "value_provided": "Value",
+                        "industry": "Financial Services",
+                        "technologies_used": "Not Specified",
+                        "url": "https://roberthalf.sharepoint.com/sites/iShare-Client-Credentials/SitePages/Credential-Details.aspx?itemid=1732",
+                    }
+                ],
+                "no_matches_found": False,
+            }
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity")
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 1
+        assert result.matches[0].technologies_used == []
+
 
 # =============================================================================
 # Integration Tests (with mocks)

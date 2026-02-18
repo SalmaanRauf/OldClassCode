@@ -262,6 +262,34 @@ class MDReportOpportunity(BaseModel):
     )
 
 
+class SignalEvidence(BaseModel):
+    """Evidence record for a normalized financial-services signal."""
+
+    signal_code: str = Field(..., description="Canonical signal code (e.g., FS.EXEC.TRANSITION)")
+    signal_label: str = Field(..., description="Human readable signal label")
+    status: Literal["Confirmed", "Insufficient", "Rejected"] = Field(
+        "Insufficient",
+        description="Signal confidence status after deterministic guardrails"
+    )
+    evidence_quote: str = Field("", description="Short quote supporting the signal")
+    source_url: str = Field("", description="Primary source URL supporting the evidence")
+    source_title: Optional[str] = Field(None, description="Source title for readability")
+    analysis: str = Field("", description="Analytical interpretation of why the evidence matters")
+
+
+class PhaseOpportunity(BaseModel):
+    """Derived opportunity detail for phase-based evidence-locked output."""
+
+    derived_from_signal: str = Field(..., description="Canonical signal code that produced this opportunity")
+    overview: str = Field("", description="Opportunity overview")
+    technical_explanation: str = Field("", description="Detailed technical explanation")
+    layman_explanation: str = Field("", description="Plain-English explanation")
+    relevant_service_lines: List[str] = Field(default_factory=list, description="Service lines tied to this opportunity")
+    credentials_summary: str = Field("", description="Credential relevance summary")
+    recommended_actions: List[str] = Field(default_factory=list, description="Opportunity-specific action list")
+    sources: List[str] = Field(default_factory=list, description="Opportunity-specific source URLs")
+
+
 class MDReport(BaseModel):
     """Final report for Managing Directors.
     
@@ -335,6 +363,30 @@ class MDReport(BaseModel):
         default_factory=lambda: {"Matched": 0, "No Match": 0, "Lookup Failed": 0},
         description="Count of credentials outcomes by status"
     )
+    phase2_headline: Optional[str] = Field(
+        None,
+        description="Evidence-locked Phase 2 governing headline"
+    )
+    phase2_signal_evidence: Optional[List[SignalEvidence]] = Field(
+        None,
+        description="Phase 2 confirmed signal evidence list"
+    )
+    phase2_footnotes: Optional[List[str]] = Field(
+        None,
+        description="Phase 2 footnotes with quote and linkage context"
+    )
+    phase3_opportunities: Optional[List[PhaseOpportunity]] = Field(
+        None,
+        description="Phase 3 deterministic opportunities derived from confirmed signals"
+    )
+    phase_sources: Optional[List[str]] = Field(
+        None,
+        description="Final phase output source URLs"
+    )
+    layout_version: Optional[str] = Field(
+        None,
+        description="Renderer layout hint for phase-based output"
+    )
 
 
 # =============================================================================
@@ -397,6 +449,18 @@ class BDContext(BaseModel):
     credentials_status_counts: Dict[str, int] = Field(
         default_factory=lambda: {"Matched": 0, "No Match": 0, "Lookup Failed": 0},
         description="Credentials status counts for run diagnostics"
+    )
+    fs_signal_evidence: List[SignalEvidence] = Field(
+        default_factory=list,
+        description="Financial services signal evidence records"
+    )
+    fs_phase3_candidates: List[PhaseOpportunity] = Field(
+        default_factory=list,
+        description="Financial services derived phase opportunities"
+    )
+    fs_allowed_sources: List[str] = Field(
+        default_factory=list,
+        description="Allowed sources after deterministic source guardrails"
     )
     synthesis_status: Optional[str] = Field(
         None,

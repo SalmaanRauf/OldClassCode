@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.bd_orchestrator import BDOrchestrator
 from services.opportunity_extractor import OpportunityExtractor
 from services.opportunity_digestor import OpportunityDigestor
+from services.fs_signal_evidence_digestor import FSSignalEvidenceDigestor
+from services.fs_opportunity_deriver import FSOpportunityDeriver
 from agents.credentials_agent import CredentialsAgent
 from agents.final_analyst_agent import FinalAnalystAgent
 from models.bd_schemas import (
@@ -29,7 +31,9 @@ from models.bd_schemas import (
     OpportunityExtractionDiagnostics,
     CredentialMatch,
     MDReport,
-    MDReportOpportunity
+    MDReportOpportunity,
+    SignalEvidence,
+    PhaseOpportunity,
 )
 
 
@@ -1027,6 +1031,102 @@ class TestEdgeCases:
         # Serial default should execute per-opportunity top 3 lookups.
         assert mock_credentials_agent.find_credentials.await_count == 3
         mock_credentials_agent.find_credentials_batch.assert_not_called()
+
+
+class TestFSSignalEvidenceMode:
+    """Validate FS-first evidence lock path without regressing non-FS behavior."""
+
+    @pytest.mark.asyncio
+    async def test_financial_services_uses_fs_signal_digest_and_deriver(
+        self, mock_extractor, mock_credentials_agent, mock_final_analyst
+    ):
+        fs_trigger = BDTrigger(
+            sector="Financial Services",
+            signals=["FS.EXEC.TRANSITION"],
+            company_focus="Capital One",
+            geography="US",
+        )
+
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            executive_summary="FS summary",
+            opportunities=[],
+            raw_citations=[
+                "https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro"
+            ],
+        )
+
+        mock_digestor = MagicMock(spec=FSSignalEvidenceDigestor)
+        mock_digestor.digest = AsyncMock(return_value=(
+            [
+                SignalEvidence(
+                    signal_code="FS.EXEC.TRANSITION",
+                    signal_label="Executive Transition",
+                    status="Confirmed",
+                    evidence_quote="Capital One appointed ... Business Chief Risk Officer ...",
+                    source_url="https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro",
+                    source_title="FinTech Magazine",
+                    analysis="Governance alignment signal.",
+                )
+            ],
+            {"status": "Succeeded", "parse_outcome": "json_parsed_with_signal_evidence"},
+            ["https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro"],
+        ))
+
+        mock_deriver = MagicMock(spec=FSOpportunityDeriver)
+        mock_deriver.derive.return_value = [
+            PhaseOpportunity(
+                derived_from_signal="FS.EXEC.TRANSITION",
+                overview="Governance-alignment opportunity.",
+                technical_explanation="Define operating model and controls.",
+                layman_explanation="Set guardrails early.",
+                relevant_service_lines=["Risk governance advisory"],
+                credentials_summary="No materially aligned credentials identified.",
+                recommended_actions=["Run governance workshop within the next 30-90 days."],
+                sources=["https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro"],
+            )
+        ]
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            fs_signal_evidence_digestor=mock_digestor,
+            fs_opportunity_deriver=mock_deriver,
+            credentials_agent=mock_credentials_agent,
+            final_analyst=mock_final_analyst,
+        )
+
+        report = await orchestrator.run(fs_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        mock_digestor.digest.assert_called_once()
+        mock_deriver.derive.assert_called_once()
+        assert report.opportunities_source == "fs_signal_derivation"
+        assert report.opportunities_extracted_count == 1
+
+    @pytest.mark.asyncio
+    async def test_non_financial_services_skips_fs_signal_digest(
+        self, mock_extractor, mock_credentials_agent, mock_final_analyst, sample_trigger
+    ):
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            executive_summary="Defense summary",
+            opportunities=[Opportunity(title="Opp 1", scope="Scope", confidence="High")],
+        )
+
+        mock_digestor = MagicMock(spec=FSSignalEvidenceDigestor)
+        mock_digestor.digest = AsyncMock(return_value=([], {}, []))
+        mock_deriver = MagicMock(spec=FSOpportunityDeriver)
+        mock_deriver.derive.return_value = []
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            fs_signal_evidence_digestor=mock_digestor,
+            fs_opportunity_deriver=mock_deriver,
+            credentials_agent=mock_credentials_agent,
+            final_analyst=mock_final_analyst,
+        )
+
+        await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        mock_digestor.digest.assert_not_called()
+        mock_deriver.derive.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -28,6 +28,9 @@ from models.bd_schemas import (
 )
 from services.opportunity_extractor import OpportunityExtractor
 from services.opportunity_digestor import OpportunityDigestor
+from services.fs_signal_evidence_digestor import FSSignalEvidenceDigestor
+from services.fs_opportunity_deriver import FSOpportunityDeriver
+from services.signal_registry_service import get_signal_registry_service
 from agents.credentials_agent import CredentialsAgent
 from agents.final_analyst_agent import FinalAnalystAgent
 
@@ -55,6 +58,8 @@ class BDOrchestrator:
         self,
         extractor: Optional[OpportunityExtractor] = None,
         opportunity_digestor: Optional[OpportunityDigestor] = None,
+        fs_signal_evidence_digestor: Optional[FSSignalEvidenceDigestor] = None,
+        fs_opportunity_deriver: Optional[FSOpportunityDeriver] = None,
         credentials_agent: Optional[CredentialsAgent] = None,
         final_analyst: Optional[FinalAnalystAgent] = None,
         traces_dir: Optional[Path] = None,
@@ -74,10 +79,13 @@ class BDOrchestrator:
         """
         self.extractor = extractor or OpportunityExtractor()
         self.opportunity_digestor = opportunity_digestor or OpportunityDigestor()
+        self.fs_signal_evidence_digestor = fs_signal_evidence_digestor or FSSignalEvidenceDigestor()
+        self.fs_opportunity_deriver = fs_opportunity_deriver or FSOpportunityDeriver()
         self.credentials_agent = credentials_agent
         self.final_analyst = final_analyst or FinalAnalystAgent()
         self.traces_dir = traces_dir
         self.use_atlas_digestion = use_atlas_digestion
+        self.signal_registry = get_signal_registry_service()
         allowed_lookup_modes = {"serial_per_opportunity", "batched_single_call"}
         if credentials_lookup_mode not in allowed_lookup_modes:
             logger.warning(
@@ -174,6 +182,42 @@ class BDOrchestrator:
                 f"(status={ctx.opportunity_extraction_status})"
             )
 
+            if self.signal_registry.is_financial_services(trigger.sector):
+                await self._notify(progress_cb, "Normalizing financial-services signal evidence...")
+                (
+                    fs_signal_evidence,
+                    fs_digest_diagnostics,
+                    allowed_sources,
+                ) = await self.fs_signal_evidence_digestor.digest(
+                    trigger=trigger,
+                    deep_research_markdown=ctx.deep_research_raw or "",
+                    requested_signal_codes=list(trigger.signals),
+                    source_urls=ctx.parsed_research.raw_citations,
+                )
+                ctx.fs_signal_evidence = fs_signal_evidence
+                ctx.fs_allowed_sources = allowed_sources
+                ctx.opportunity_digest_diagnostics = {
+                    **(ctx.opportunity_digest_diagnostics or {}),
+                    "fs_signal_evidence_digest": fs_digest_diagnostics,
+                }
+
+                ctx.fs_phase3_candidates = self.fs_opportunity_deriver.derive(
+                    trigger=trigger,
+                    signal_evidence=ctx.fs_signal_evidence,
+                    max_opportunities=3,
+                )
+                if ctx.fs_phase3_candidates:
+                    ctx.parsed_research.opportunities = self._phase_candidates_to_opportunities(ctx)
+                    ctx.opportunities_extracted_count = len(ctx.parsed_research.opportunities)
+                    ctx.opportunities_source = "fs_signal_derivation"
+                    ctx.opportunity_extraction_status = "Parsed"
+                    ctx.opportunity_extraction_reason = (
+                        f"Derived {ctx.opportunities_extracted_count} opportunities from confirmed FS signals."
+                    )
+                    ctx.trace.append(
+                        f"FS evidence mode derived {ctx.opportunities_extracted_count} opportunities."
+                    )
+
             # Step 3: Query credentials for top opportunities
             top_opportunities = ctx.parsed_research.opportunities[:3]
             status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
@@ -251,6 +295,9 @@ class BDOrchestrator:
                 credentials_status_counts=ctx.credentials_status_counts,
                 credentials_lookup_mode=ctx.credentials_lookup_mode,
                 credentials_batch_diagnostics=ctx.credentials_batch_diagnostics,
+                confirmed_signal_evidence=ctx.fs_signal_evidence,
+                phase3_candidates=ctx.fs_phase3_candidates,
+                allowed_sources=ctx.fs_allowed_sources,
             )
             self._attach_credentials_evidence(ctx.final_report, ctx.credentials_results, ctx.credentials_diagnostics)
             self._attach_pipeline_diagnostics(ctx.final_report, ctx)
@@ -472,6 +519,25 @@ class BDOrchestrator:
             report.synthesis_fallback_reason = ctx.synthesis_fallback_reason
         if ctx.synthesis_error_message:
             report.synthesis_error_message = ctx.synthesis_error_message
+
+    def _phase_candidates_to_opportunities(self, ctx: BDContext) -> List[Opportunity]:
+        """Convert deterministic phase candidates into opportunities for credential validation."""
+        opportunities: List[Opportunity] = []
+        for candidate in ctx.fs_phase3_candidates[:3]:
+            opportunities.append(
+                Opportunity(
+                    title=f"{candidate.derived_from_signal}: {candidate.overview[:90]}",
+                    agency=None,
+                    scope=(candidate.technical_explanation or candidate.overview or "").strip(),
+                    estimated_value=None,
+                    timeline=None,
+                    incumbent=None,
+                    cmmc_level=None,
+                    confidence="High",
+                    citations=list(candidate.sources or []),
+                )
+            )
+        return opportunities
     
     def _save_trace(self, ctx: BDContext, duration: float):
         """Save execution trace to file."""

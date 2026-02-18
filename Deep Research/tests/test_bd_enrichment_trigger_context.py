@@ -52,3 +52,40 @@ def test_build_trigger_without_session_params_still_builds():
     assert trigger.time_window_days == 100
     assert trigger.min_value_usd == 1_000_000
     assert "CMMC" in trigger.signals
+
+
+def test_financial_services_all_signals_expands_to_canonical_fs_set():
+    trigger = build_trigger_for_bd_enrichment(
+        sector="financial_services",
+        user_query=(
+            "Research Financial Services opportunities for Capital One with all signals "
+            "in the US within the last 180 days."
+        ),
+        session_params={
+            "signals": "All",
+            "company": "Capital One",
+            "geography": "US",
+            "time_window": "180 days",
+        },
+    )
+
+    assert "FS.EXEC.TRANSITION" in trigger.signals
+    assert "FS.REGULATORY.DEADLINE" in trigger.signals
+    assert len(trigger.signals) >= 5
+
+
+def test_financial_services_executive_movement_maps_to_exec_transition():
+    trigger = build_trigger_for_bd_enrichment(
+        sector="financial_services",
+        user_query=(
+            "Research Financial Services opportunities for Capital One focused on Executive Movement in the US."
+        ),
+        session_params={
+            "signals": "Executive Movement",
+            "company": "Capital One",
+            "geography": "US",
+            "time_window": "180 days",
+        },
+    )
+
+    assert trigger.signals == ["FS.EXEC.TRANSITION"]
