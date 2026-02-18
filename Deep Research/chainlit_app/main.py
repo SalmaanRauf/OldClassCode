@@ -30,7 +30,6 @@ from tools.task_executor import task_executor
 from tools.response_formatter import response_formatter
 from services.company_profiles import load_company_profiles
 from services.prompt_generator import get_prompt_generator, ResearchParameters
-from services.source_quality import rank_and_filter_citations
 
 # BD Analysis enrichment (auto-runs after Deep Research)
 from services.bd_orchestrator import BDOrchestrator
@@ -250,10 +249,10 @@ def _format_dr_as_markdown(response: Dict[str, Any]) -> str:
             lines.append("")
     
     # Add citations as sources
-    citations = rank_and_filter_citations(response.get("citations", []), limit=20)
+    citations = response.get("citations", [])
     if citations:
         lines.append("## Sources")
-        for cite in citations:
+        for cite in citations[:20]:
             url = cite.get("url", "")
             title = cite.get("title", url)
             if url:
@@ -283,11 +282,9 @@ async def present_enhanced_response(response: Dict[str, Any]) -> None:
         async def _send_sources(citations, heading="Sources"):
             if not citations:
                 return
-            filtered_citations = rank_and_filter_citations(citations, limit=50)
-            if not filtered_citations:
-                return
             lines = [f"**{heading}:**"]
-            for citation in filtered_citations:
+            # Show ALL sources - extremely high limit
+            for citation in citations[:1000]:
                 title = citation.get("title", "Source")
                 url = citation.get("url", "#")
                 lines.append(f" [{title}]({url})")
@@ -397,19 +394,14 @@ async def present_enhanced_response(response: Dict[str, Any]) -> None:
 
                     source_urls = insights.get("source_urls")
                     if source_urls and isinstance(source_urls, list):
-                        filtered_source_urls = rank_and_filter_citations(
-                            [{"title": str(url), "url": str(url)} for url in source_urls if str(url).strip()],
-                            limit=10,
-                        )
                         lines.append("** Sources:**")
-                        for source in filtered_source_urls:
-                            lines.append(f"- {source.get('url', '')}")
+                        for url in source_urls[:10]:
+                            lines.append(f"- {url}")
                         lines.append("")
 
                 if citations:
-                    filtered_citations = rank_and_filter_citations(citations, limit=10)
                     lines.append("** Additional Sources:**")
-                    for citation in filtered_citations:
+                    for citation in citations[:10]:
                         title = citation.get("title", citation.get("url", "Source"))
                         url = citation.get("url", "#")
                         lines.append(f"- [{title}]({url})")
@@ -435,9 +427,8 @@ async def present_enhanced_response(response: Dict[str, Any]) -> None:
                     lines.append(summary)
                     lines.append("")
                 if citations:
-                    filtered_citations = rank_and_filter_citations(citations, limit=10)
                     lines.append("**Sources:**")
-                    for citation in filtered_citations:
+                    for citation in citations[:10]:
                         cite_title = citation.get("title", citation.get("url", "Source"))
                         cite_url = citation.get("url", "#")
                         lines.append(f"- [{cite_title}]({cite_url})")
