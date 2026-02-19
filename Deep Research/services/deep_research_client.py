@@ -238,6 +238,22 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
             )
         return deduped
 
+    def _merge_streamed_citations(
+        self,
+        report: DeepResearchReport,
+        streamed_urls: Set[str],
+    ) -> DeepResearchReport:
+        """Merge all streamed URLs into report citations so discovered sources are not dropped."""
+        merged = list(report.citations)
+        for url in sorted(streamed_urls):
+            clean = str(url or "").strip()
+            if not clean:
+                continue
+            merged.append(DeepResearchCitation(title=clean, url=clean))
+
+        report.citations = self._dedupe_citations(merged)
+        return report
+
     def _is_agent_message(self, msg) -> bool:
         """Check if a message is from the agent/assistant."""
         try:
@@ -525,6 +541,9 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
                     
             except Exception as e:
                 logger.warning("Corrective URL search failed, continuing with original report: %s", e)
+
+        # Merge all streamed citations, even if they did not make the final narrative body.
+        report = self._merge_streamed_citations(report, all_citations)
 
         # Add metadata
         report.metadata.update({

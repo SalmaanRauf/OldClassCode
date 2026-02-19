@@ -22,6 +22,8 @@ def test_prompt_generator_fallback_includes_capital_one_scope_guardrail():
     prompt = generator._fallback_template(params)
 
     assert "Anchor findings to Capital One/Discover only; exclude unrelated peer-company personnel moves." in prompt
+    assert "Treat people movement as a first-class signal for Capital One" in prompt
+    assert "FinTech Magazine People Moves" in prompt
 
 
 def test_prompt_generator_fallback_omits_scope_guardrail_for_non_fs_sector():
@@ -37,3 +39,4 @@ def test_prompt_generator_fallback_omits_scope_guardrail_for_non_fs_sector():
     prompt = generator._fallback_template(params)
 
     assert "exclude unrelated peer-company personnel moves" not in prompt
+    assert "FinTech Magazine People Moves" not in prompt

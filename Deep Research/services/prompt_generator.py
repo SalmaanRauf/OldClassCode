@@ -163,15 +163,25 @@ class PromptGenerator:
     def _apply_company_scope_guardrail(self, prompt: str, params: ResearchParameters) -> str:
         """Inject deterministic company-scope sentence for FS runs to reduce broad drift."""
         base = (prompt or "").strip()
-        scope_sentence = self._company_scope_sentence(params)
-        if not scope_sentence:
+        scope_sentences = []
+        company_scope = self._company_scope_sentence(params)
+        if company_scope:
+            scope_sentences.append(company_scope)
+        people_movement_scope = self._people_movement_priority_sentence(params)
+        if people_movement_scope:
+            scope_sentences.append(people_movement_scope)
+
+        if not scope_sentences:
             return base
 
-        if scope_sentence.lower() in base.lower():
-            return base
-        if not base:
-            return scope_sentence
-        return f"{base} {scope_sentence}"
+        for sentence in scope_sentences:
+            if sentence.lower() in base.lower():
+                continue
+            if not base:
+                base = sentence
+            else:
+                base = f"{base} {sentence}"
+        return base
 
     def _company_scope_sentence(self, params: ResearchParameters) -> str:
         sector = (params.sector or "").strip().lower().replace(" ", "_")
@@ -183,6 +193,55 @@ class PromptGenerator:
             return "Anchor findings to Capital One/Discover only; exclude unrelated peer-company personnel moves."
         return (
             f"Anchor findings to {company} only; exclude unrelated peer-company personnel moves."
+        )
+
+    def _people_movement_priority_sentence(self, params: ResearchParameters) -> str:
+        """Ensure people-movement research is first-class for FS runs."""
+        sector = (params.sector or "").strip().lower().replace(" ", "_")
+        if sector != "financial_services":
+            return ""
+
+        signals = (params.signals or "").strip().lower()
+        all_signals_requested = (
+            not signals
+            or signals in {"n/a", "all", "all signals", "all relevant signals", "detect all relevant signals"}
+            or "all relevant signals" in signals
+            or "all signals" in signals
+        )
+        people_move_requested = any(
+            token in signals
+            for token in (
+                "people move",
+                "people-move",
+                "people movement",
+                "exec transition",
+                "executive transition",
+                "cro",
+                "cfo",
+                "cco",
+                "crro",
+            )
+        )
+        if not (all_signals_requested or people_move_requested):
+            return ""
+
+        company = (params.company or "").strip()
+        if company:
+            if company.lower() == "capital one":
+                target_entities = "Capital One/Discover"
+            else:
+                target_entities = company
+            return (
+                f"Treat people movement as a first-class signal for {company}; identify all material "
+                f"{target_entities} executive and board moves (including CRO/CFO/CCO/CRRO, regional risk, "
+                "and board/committee appointments), explicitly check FinTech Magazine People Moves, and "
+                "corroborate with issuer/SEC/IR or executive self-disclosures when available."
+            )
+
+        return (
+            "Treat people movement as a first-class signal; identify all material executive and board moves "
+            "(including CRO/CFO/CCO/CRRO, regional risk, and board/committee appointments), explicitly check "
+            "FinTech Magazine People Moves, and corroborate with issuer/SEC/IR or executive self-disclosures when available."
         )
 
 

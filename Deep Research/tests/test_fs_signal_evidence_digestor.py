@@ -473,3 +473,56 @@ Citi appointed a new Chief Financial Officer to oversee enterprise finance trans
     assert len(signal_evidence) == 1
     assert signal_evidence[0].status == "Insufficient"
     assert "target company scope" in signal_evidence[0].analysis.lower()
+
+
+def test_digest_exec_transition_enrichment_keeps_multiple_capital_one_movements():
+    markdown = """
+Natalie Hyche Kelly is joining Capital One as Business Chief Risk Officer for the Global Payments Network.
+Bharat Panchal rejoined in a new role as Chief Risk & Regulatory Officer for APAC & Middle East, Global Payments Network at Capital One.
+
+# Sources
+- https://fintechmagazine.com/news/people-move-natalie-hyche-kelly
+- https://www.linkedin.com/posts/example_exec_post
+- https://www.linkedin.com/posts/example_regional_exec_post
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "No transition identified.",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    entry = signal_evidence[0]
+    assert entry.status == "Confirmed"
+    assert "target-company movements observed" in (entry.analysis or "").lower()
+    assert "natalie hyche kelly" in (entry.analysis or "").lower()
+    assert "bharat panchal" in (entry.analysis or "").lower()
+    assert "movement sources:" in (entry.analysis or "").lower()
+    assert "fintechmagazine.com" in (entry.source_url or "").lower()

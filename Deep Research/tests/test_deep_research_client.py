@@ -7,7 +7,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.deep_research_client import DeepResearchClient
+from services.deep_research_client import DeepResearchClient, DeepResearchCitation, DeepResearchReport
 
 
 def _client() -> DeepResearchClient:
@@ -70,4 +70,24 @@ def test_parse_message_dedupes_mixed_annotation_and_plain_text_urls():
     urls = [citation.url for citation in report.citations]
     assert urls.count(duplicate_url) == 1
     assert urls.count(unique_url) == 1
+    assert len(urls) == 2
+
+
+def test_merge_streamed_citations_adds_urls_not_in_final_message():
+    client = _client()
+    report = DeepResearchReport(
+        summary="summary",
+        sections=[],
+        citations=[DeepResearchCitation(title="A", url="https://example.com/a")],
+        metadata={},
+    )
+
+    merged = client._merge_streamed_citations(
+        report=report,
+        streamed_urls={"https://example.com/a", "https://example.com/b"},
+    )
+
+    urls = {citation.url for citation in merged.citations}
+    assert "https://example.com/a" in urls
+    assert "https://example.com/b" in urls
     assert len(urls) == 2

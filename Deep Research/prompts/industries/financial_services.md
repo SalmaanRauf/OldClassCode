@@ -65,6 +65,9 @@ When the user requests research on any of the following signals, apply the corre
 - When social/self-disclosure sources are used, prefer corroboration with issuer IR/SEC filings or established media where available
 - Keep social/self-disclosure usage optional and scoped only to this signal (no global social-source mining)
 - Keep this signal-scoped to executive transition research; do not treat social-source mining as a global requirement across all signals
+- Treat this signal as equal priority to enforcement/deadline signals when the user requests "all relevant signals"
+- Run dedicated people-movement searches for the target company (not peers), including FinTech Magazine People Moves, and capture all material moves (executive, regional, and board/committee)
+- For Capital One-focused runs, include Discover-linked governance and leadership integration movements when evidenced
 
 ---
 

@@ -23,8 +23,9 @@ Extract structured signal evidence from the Deep Research markdown for only the 
 5. Do not fabricate quotes, URLs, or signal claims.
 6. Keep analysis concise and factual.
 7. Special handling for `FS.EXEC.TRANSITION`:
-   - In `analysis`, summarize all material people movements found (executive role shifts, regional risk/regulatory appointments, or board/committee placements) in concise factual language.
-   - Keep `evidence_quote` and `source_url` anchored to the single strongest supporting source from the allowed URL set.
+   - In `analysis`, summarize all material Capital One/Discover people movements found (executive role shifts, regional risk/regulatory appointments, and board/committee placements) in concise factual language.
+   - Do not collapse to a single movement when multiple material moves are present.
+   - `source_url` should be one valid supporting source, and `analysis` should retain the full multi-movement picture with corroborating source references when available.
 8. If the trigger indicates `Company: Capital One`, treat people-movement findings as in-scope only when tied to Capital One/Discover governance context.
    - Do not confirm peer-company personnel moves unless evidence explicitly links them to Capital One/Discover integration or oversight.
 

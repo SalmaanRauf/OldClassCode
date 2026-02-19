@@ -149,6 +149,12 @@ class FSSignalEvidenceDigestor:
                 deep_research_markdown=deep_research_markdown,
                 entity_aliases=entity_aliases,
             )
+            enforced = self._enrich_exec_transition_signal(
+                signal_evidence=enforced,
+                deep_research_markdown=deep_research_markdown,
+                available_sources=available_sources,
+                entity_aliases=entity_aliases,
+            )
 
             diagnostics["signals_returned"] = len(enforced)
             diagnostics["status"] = "Succeeded"
@@ -264,76 +270,50 @@ class FSSignalEvidenceDigestor:
             return signal_evidence
 
         current = signal_evidence[target_idx]
-        if current.status == "Confirmed":
-            return signal_evidence
-
         text = deep_research_markdown or ""
-        if not self._has_entity_linked_movement(text=text, entity_aliases=entity_aliases):
+        movement_mentions = self._extract_entity_linked_movement_mentions(
+            text=text,
+            entity_aliases=entity_aliases,
+        )
+        movement_sources = self._movement_source_url_candidates(
+            available_sources=available_sources,
+            deep_research_markdown=text,
+            entity_aliases=entity_aliases,
+        )
+
+        if not movement_mentions and not movement_sources:
             return signal_evidence
 
-        if current.source_url:
-            preferred_source = current.source_url
-        else:
-            def _exec_score(url: str) -> tuple[int, int, int, int]:
-                normalized = (url or "").strip().lower()
-                try:
-                    host = urlparse(url).netloc.lower().strip().removeprefix("www.")
-                except Exception:
-                    host = ""
-                movement_bonus = 0
-                movement_keywords = (
-                    "linkedin.com/posts/",
-                    "people-move",
-                    "appointment",
-                    "appointed",
-                    "rejoined",
-                    "board-member",
-                    "board-of-directors",
-                    "corporate-governance",
-                    "committee",
-                    "sec-filings",
-                    "/8-k",
-                    "news-release",
-                )
-                for keyword in movement_keywords:
-                    if keyword in normalized:
-                        movement_bonus += 1
-                entity_bonus = 0
-                if "capitalone" in normalized or "discover" in normalized or "global-payments-network" in normalized:
-                    entity_bonus = 2
-                host_bonus = 0
-                if "linkedin.com" in host:
-                    host_bonus = 5
-                elif host.endswith("sec.gov"):
-                    host_bonus = 4
-                elif host.endswith("capitalone.com") or "gcs-web.com" in host:
-                    host_bonus = 3
-                elif "fintechmagazine.com" in host:
-                    host_bonus = 2
-                elif "investor." in host:
-                    host_bonus = 2
-                return (entity_bonus, movement_bonus, host_bonus, self._source_guardrails.score_url(url))
-
-            def _score_sort_key(url: str) -> tuple[int, int, int, int, int]:
-                entity_bonus, movement_bonus, host_bonus, guardrail_score = _exec_score(url)
-                # Prefer richer evidence URLs when scores tie.
-                return (entity_bonus, movement_bonus, host_bonus, guardrail_score, len(url))
-
+        normalized_available = {str(url or "").strip() for url in available_sources if str(url or "").strip()}
+        preferred_source = (current.source_url or "").strip()
+        if preferred_source and preferred_source not in normalized_available:
             preferred_source = ""
-            if available_sources:
-                preferred_source = max(available_sources, key=_score_sort_key)
+        if not preferred_source:
+            preferred_source = self._select_exec_transition_primary_source(movement_sources)
+
+        if current.status == "Confirmed":
+            signal_evidence[target_idx] = SignalEvidence(
+                signal_code=current.signal_code,
+                signal_label=current.signal_label,
+                status=current.status,
+                evidence_quote=current.evidence_quote or (movement_mentions[0][:220] if movement_mentions else ""),
+                source_url=preferred_source or current.source_url,
+                source_title=current.source_title,
+                analysis=current.analysis,
+            )
+            return signal_evidence
 
         signal_evidence[target_idx] = SignalEvidence(
             signal_code=current.signal_code,
             signal_label=current.signal_label,
             status="Confirmed",
-            evidence_quote=current.evidence_quote,
+            evidence_quote=current.evidence_quote or (movement_mentions[0][:220] if movement_mentions else ""),
             source_url=preferred_source,
             source_title=current.source_title,
             analysis=(
-                f"{current.analysis} Deterministic recovery: explicit executive or board movement language in source text."
+                f"{current.analysis} Deterministic recovery: explicit executive or board movement language detected."
                 if current.analysis
-                else "Deterministic recovery: explicit executive or board movement language in source text."
+                else "Deterministic recovery: explicit executive or board movement language detected."
             ),
         )
         return signal_evidence
@@ -409,6 +389,211 @@ class FSSignalEvidenceDigestor:
             if self._is_entity_linked(window, entity_aliases):
                 return True
         return False
+
+    def _extract_entity_linked_movement_mentions(
+        self,
+        text: str,
+        entity_aliases: Set[str],
+        max_items: int = 6,
+    ) -> List[str]:
+        if not text:
+            return []
+
+        mentions: List[str] = []
+        seen = set()
+        pattern = self._movement_pattern()
+        for match in pattern.finditer(text):
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            line_end = text.find("\n", match.end())
+            if line_end < 0:
+                line_end = len(text)
+            snippet = text[line_start:line_end].strip()
+            if len(snippet) < 32:
+                window_start = max(0, match.start() - 140)
+                window_end = min(len(text), match.end() + 220)
+                snippet = text[window_start:window_end].strip()
+            if not snippet:
+                continue
+            if not self._is_entity_linked(snippet, entity_aliases):
+                continue
+            cleaned = re.sub(r"\s+", " ", snippet).strip()
+            key = re.sub(r"[^a-z0-9]+", " ", cleaned.lower()).strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            mentions.append(cleaned[:360].rstrip())
+            if len(mentions) >= max_items:
+                break
+
+        return mentions
+
+    def _movement_source_url_candidates(
+        self,
+        available_sources: List[str],
+        deep_research_markdown: str,
+        entity_aliases: Set[str],
+    ) -> List[str]:
+        movement_keywords = (
+            "people-move",
+            "people-moves",
+            "appointment",
+            "appointed",
+            "joining",
+            "joined",
+            "rejoined",
+            "chief-risk",
+            "business-cro",
+            "cro",
+            "crro",
+            "cfo",
+            "cco",
+            "board",
+            "committee",
+            "governance",
+            "global-payments-network",
+            "natalie-hyche-kelly",
+            "bharat-panchal",
+        )
+        alias_url_tokens = set()
+        for alias in entity_aliases:
+            cleaned = alias.replace(" ", "")
+            if cleaned:
+                alias_url_tokens.add(cleaned)
+            dashed = alias.replace(" ", "-")
+            if dashed:
+                alias_url_tokens.add(dashed)
+
+        has_entity_linked_movement_text = self._has_entity_linked_movement(
+            text=deep_research_markdown or "",
+            entity_aliases=entity_aliases,
+        )
+
+        candidates: List[str] = []
+        seen = set()
+        for raw_url in available_sources:
+            url = str(raw_url or "").strip()
+            if not url:
+                continue
+            normalized = url.lower()
+            try:
+                host = urlparse(url).netloc.lower().strip().removeprefix("www.")
+            except Exception:
+                host = ""
+
+            movement_indicated = any(keyword in normalized for keyword in movement_keywords)
+            if (
+                not movement_indicated
+                and ("linkedin.com/posts/" in normalized or host.endswith("sec.gov") or host.endswith("capitalone.com") or "gcs-web.com" in host)
+                and has_entity_linked_movement_text
+            ):
+                movement_indicated = True
+            if not movement_indicated:
+                continue
+
+            host_linked = host.endswith("sec.gov") or host.endswith("capitalone.com") or "gcs-web.com" in host
+            entity_linked = (
+                self._is_entity_linked(normalized, entity_aliases)
+                or any(token and token in normalized for token in alias_url_tokens)
+                or self._is_alias_near_url(
+                    text=deep_research_markdown or "",
+                    url=url,
+                    entity_aliases=entity_aliases,
+                )
+            )
+            if not entity_linked and "linkedin.com" in host and has_entity_linked_movement_text:
+                entity_linked = True
+            if not entity_linked and host_linked and has_entity_linked_movement_text:
+                entity_linked = True
+            if not entity_linked:
+                continue
+
+            if url not in seen:
+                seen.add(url)
+                candidates.append(url)
+
+        return candidates
+
+    def _select_exec_transition_primary_source(self, candidate_urls: List[str]) -> str:
+        """Select one canonical URL while preserving all other movement URLs in analysis."""
+        if not candidate_urls:
+            return ""
+
+        def _priority(url: str) -> int:
+            normalized = url.lower()
+            if "fintechmagazine.com" in normalized and "people-move" in normalized:
+                return 0
+            if "fintechmagazine.com" in normalized:
+                return 1
+            if "linkedin.com/posts/" in normalized:
+                return 2
+            if "sec.gov" in normalized:
+                return 3
+            if "capitalone.com" in normalized or "gcs-web.com" in normalized:
+                return 4
+            return 5
+
+        return min(candidate_urls, key=lambda url: (_priority(url), candidate_urls.index(url)))
+
+    def _enrich_exec_transition_signal(
+        self,
+        signal_evidence: List[SignalEvidence],
+        deep_research_markdown: str,
+        available_sources: List[str],
+        entity_aliases: Set[str],
+    ) -> List[SignalEvidence]:
+        target_idx = next(
+            (idx for idx, item in enumerate(signal_evidence) if item.signal_code == "FS.EXEC.TRANSITION"),
+            None,
+        )
+        if target_idx is None:
+            return signal_evidence
+
+        item = signal_evidence[target_idx]
+        movement_mentions = self._extract_entity_linked_movement_mentions(
+            text=deep_research_markdown or "",
+            entity_aliases=entity_aliases,
+            max_items=4,
+        )
+        movement_sources = self._movement_source_url_candidates(
+            available_sources=available_sources,
+            deep_research_markdown=deep_research_markdown or "",
+            entity_aliases=entity_aliases,
+        )
+        if not movement_mentions and not movement_sources:
+            return signal_evidence
+
+        analysis = (item.analysis or "").strip()
+        movement_summary = ""
+        if movement_mentions:
+            movement_summary = "Material target-company movements observed: " + " | ".join(
+                f"{idx + 1}) {snippet}" for idx, snippet in enumerate(movement_mentions)
+            )
+        source_summary = ""
+        if movement_sources:
+            source_summary = "Movement sources: " + "; ".join(movement_sources[:6]) + "."
+
+        pieces = [piece for piece in [analysis, movement_summary, source_summary] if piece]
+        updated_analysis = " ".join(pieces).strip()
+
+        preferred_source = (item.source_url or "").strip()
+        if not preferred_source:
+            preferred_source = self._select_exec_transition_primary_source(movement_sources)
+
+        updated_status = item.status
+        if item.status != "Confirmed" and (movement_mentions or movement_sources):
+            updated_status = "Confirmed"
+
+        updated_quote = item.evidence_quote or (movement_mentions[0][:220] if movement_mentions else "")
+        signal_evidence[target_idx] = SignalEvidence(
+            signal_code=item.signal_code,
+            signal_label=item.signal_label,
+            status=updated_status,
+            evidence_quote=updated_quote,
+            source_url=preferred_source,
+            source_title=item.source_title,
+            analysis=updated_analysis,
+        )
+        return signal_evidence
 
     def _enforce_exec_transition_entity_scope(
         self,
@@ -488,6 +673,23 @@ class FSSignalEvidenceDigestor:
             return False
         start = max(0, idx - 140)
         end = min(len(normalized_text), idx + len(normalized_quote) + 140)
+        return self._is_entity_linked(normalized_text[start:end], entity_aliases)
+
+    def _is_alias_near_url(
+        self,
+        text: str,
+        url: str,
+        entity_aliases: Set[str],
+    ) -> bool:
+        if not text or not url:
+            return False
+        normalized_text = text.lower()
+        normalized_url = url.lower().strip()
+        idx = normalized_text.find(normalized_url)
+        if idx < 0:
+            return False
+        start = max(0, idx - 180)
+        end = min(len(normalized_text), idx + len(normalized_url) + 180)
         return self._is_entity_linked(normalized_text[start:end], entity_aliases)
 
     def _extract_urls(self, text: str) -> List[str]:
