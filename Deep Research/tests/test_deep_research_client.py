@@ -91,3 +91,25 @@ def test_merge_streamed_citations_adds_urls_not_in_final_message():
     assert "https://example.com/a" in urls
     assert "https://example.com/b" in urls
     assert len(urls) == 2
+
+
+def test_merge_streamed_citations_filters_bing_search_wrapper_urls():
+    client = _client()
+    report = DeepResearchReport(
+        summary="summary",
+        sections=[],
+        citations=[],
+        metadata={},
+    )
+
+    merged = client._merge_streamed_citations(
+        report=report,
+        streamed_urls={
+            "https://www.bing.com/search?q=capital+one+people+moves",
+            "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly",
+        },
+    )
+
+    urls = {citation.url for citation in merged.citations}
+    assert "https://www.bing.com/search?q=capital+one+people+moves" not in urls
+    assert "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly" in urls

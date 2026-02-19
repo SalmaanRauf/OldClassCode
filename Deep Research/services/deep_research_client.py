@@ -5,6 +5,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
+from urllib.parse import urlparse
 
 from azure.identity.aio import DefaultAzureCredential
 from azure.core.exceptions import AzureError
@@ -213,10 +214,35 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
         seen = set()
         for url in urls:
             cleaned = url.strip().rstrip(".,;)")
-            if cleaned and cleaned not in seen:
+            if cleaned and self._is_displayable_source_url(cleaned) and cleaned not in seen:
                 seen.add(cleaned)
                 normalized.append(cleaned)
         return normalized
+
+    def _is_displayable_source_url(self, url: str) -> bool:
+        """Exclude search wrapper URLs so canonical/source links stay user-meaningful."""
+        normalized = (url or "").strip().lower()
+        if not normalized.startswith(("http://", "https://")):
+            return False
+        try:
+            parsed = urlparse(normalized)
+            host = parsed.netloc.removeprefix("www.")
+            path = parsed.path or ""
+            query = parsed.query or ""
+        except Exception:
+            return False
+
+        # Filter Bing/Google/Yahoo search query wrappers.
+        if host.endswith("bing.com") and path.startswith("/search"):
+            return False
+        if host.endswith("google.com") and path.startswith("/search"):
+            return False
+        if host.endswith("yahoo.com") and path.startswith("/search"):
+            return False
+        # Filter obvious "redirect/search" style query URLs.
+        if "search?" in normalized and ("q=" in query or "query=" in query):
+            return False
+        return True
 
     def _dedupe_citations(self, citations: List[DeepResearchCitation]) -> List[DeepResearchCitation]:
         """Deduplicate citations by normalized URL while preserving first title encountered."""
@@ -225,6 +251,8 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
         for citation in citations:
             url = (citation.url or "").strip()
             if not url:
+                continue
+            if not self._is_displayable_source_url(url):
                 continue
             key = url.lower()
             if key in seen:
@@ -247,7 +275,7 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
         merged = list(report.citations)
         for url in sorted(streamed_urls):
             clean = str(url or "").strip()
-            if not clean:
+            if not clean or not self._is_displayable_source_url(clean):
                 continue
             merged.append(DeepResearchCitation(title=clean, url=clean))
 

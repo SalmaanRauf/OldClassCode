@@ -80,7 +80,11 @@ class FSSignalEvidenceDigestor:
         seen_sources = set()
         for item in raw_sources:
             normalized = str(item or "").strip()
-            if not normalized or normalized in seen_sources:
+            if (
+                not normalized
+                or normalized in seen_sources
+                or not self._is_displayable_source_url(normalized)
+            ):
                 continue
             seen_sources.add(normalized)
             available_sources.append(normalized)
@@ -700,10 +704,32 @@ class FSSignalEvidenceDigestor:
         seen = set()
         for url in raw_urls:
             cleaned = url.strip().rstrip(".,;)")
-            if cleaned and cleaned not in seen:
+            if cleaned and self._is_displayable_source_url(cleaned) and cleaned not in seen:
                 normalized.append(cleaned)
                 seen.add(cleaned)
         return normalized
+
+    def _is_displayable_source_url(self, url: str) -> bool:
+        normalized = (url or "").strip().lower()
+        if not normalized.startswith(("http://", "https://")):
+            return False
+        try:
+            parsed = urlparse(normalized)
+            host = parsed.netloc.removeprefix("www.")
+            path = parsed.path or ""
+            query = parsed.query or ""
+        except Exception:
+            return False
+
+        if host.endswith("bing.com") and path.startswith("/search"):
+            return False
+        if host.endswith("google.com") and path.startswith("/search"):
+            return False
+        if host.endswith("yahoo.com") and path.startswith("/search"):
+            return False
+        if "search?" in normalized and ("q=" in query or "query=" in query):
+            return False
+        return True
 
     def _extract_json(self, text: str) -> str:
         cleaned = text.strip()

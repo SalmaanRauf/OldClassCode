@@ -526,3 +526,49 @@ Bharat Panchal rejoined in a new role as Chief Risk & Regulatory Officer for APA
     assert "bharat panchal" in (entry.analysis or "").lower()
     assert "movement sources:" in (entry.analysis or "").lower()
     assert "fintechmagazine.com" in (entry.source_url or "").lower()
+
+
+def test_digest_exec_transition_excludes_bing_search_wrapper_sources():
+    markdown = """
+Natalie Hyche Kelly is joining Capital One as Business Chief Risk Officer for the Global Payments Network.
+
+# Sources
+- https://www.bing.com/search?q=FinTech+Magazine+people+moves+capital+one
+- https://fintechmagazine.com/news/people-move-natalie-hyche-kelly
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert all("bing.com/search" not in source for source in allowed_sources)
+    assert len(signal_evidence) == 1
+    assert "bing.com/search" not in (signal_evidence[0].source_url or "")
