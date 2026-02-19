@@ -24,7 +24,7 @@ import json
 import os
 import re
 import sys
-from datetime import datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -103,10 +103,19 @@ def _append_sources_if_missing(markdown: str, source_urls: List[str]) -> str:
 
 def _model_dump(model: Any) -> Dict[str, Any]:
     if hasattr(model, "model_dump"):
-        return model.model_dump()
+        try:
+            return model.model_dump(mode="json")
+        except TypeError:
+            return model.model_dump()
     if hasattr(model, "dict"):
         return model.dict()
     raise TypeError(f"Unsupported model type: {type(model)}")
+
+
+def _json_default(value: Any) -> Any:
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return str(value)
 
 
 def _resolve_fixture_payload(fixture: Dict[str, Any], fixture_path: Path) -> Tuple[str, List[str]]:
@@ -299,7 +308,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     output_dir = Path(args.output_dir).expanduser().resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    ts = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     deep_hash = hashlib.sha256(deep_markdown.encode("utf-8")).hexdigest()[:12]
     stem = f"bd_replay_{ts}_{deep_hash}"
 
@@ -322,7 +331,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     json_path = output_dir / f"{stem}.json"
     md_path = output_dir / f"{stem}.md"
-    json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    json_path.write_text(json.dumps(payload, indent=2, default=_json_default), encoding="utf-8")
     md_path.write_text(section_content, encoding="utf-8")
 
     print("\n=== Artifacts ===")
