@@ -597,7 +597,7 @@ class FinalAnalystAgent:
             phase2_signal_evidence=confirmed_signal_evidence or None,
             phase2_footnotes=self._fallback_phase2_footnotes(confirmed_signal_evidence),
             phase3_opportunities=phase3_candidates or None,
-            phase_sources=(allowed_sources[:20] if allowed_sources else None),
+            phase_sources=(list(allowed_sources) if allowed_sources else None),
             layout_version="fs_evidence_locked_v1" if confirmed_signal_evidence or phase3_candidates else None,
         )
 
@@ -794,13 +794,25 @@ class FinalAnalystAgent:
         return fallback or None
 
     def _parse_phase_sources(self, raw: Any, fallback: Optional[List[str]]) -> Optional[List[str]]:
+        merged: List[str] = []
+        seen = set()
+
+        for source in (fallback or []):
+            normalized = str(source).strip()
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            merged.append(normalized)
+
         if isinstance(raw, list):
-            parsed = [str(item).strip() for item in raw if str(item).strip()]
-            if parsed:
-                return parsed
-        if fallback:
-            return [str(item).strip() for item in fallback if str(item).strip()]
-        return None
+            for source in raw:
+                normalized = str(source).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                merged.append(normalized)
+
+        return merged or None
 
     def _sanitize_prompt_context(self, value: Optional[str], max_chars: int = 600) -> str:
         text = re.sub(r"\s+", " ", (value or "").strip())

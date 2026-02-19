@@ -72,9 +72,17 @@ class FSSignalEvidenceDigestor:
             diagnostics["parse_outcome"] = "no_requested_signals"
             return [], diagnostics, []
 
-        available_sources = self._source_guardrails.apply_domain_cap(
-            source_urls or self._extract_urls(deep_research_markdown)
-        )
+        # Keep full unique source set for synthesis context/display; domain caps are enforced
+        # separately when promoting evidence to Confirmed status.
+        raw_sources = source_urls or self._extract_urls(deep_research_markdown)
+        available_sources: List[str] = []
+        seen_sources = set()
+        for item in raw_sources:
+            normalized = str(item or "").strip()
+            if not normalized or normalized in seen_sources:
+                continue
+            seen_sources.add(normalized)
+            available_sources.append(normalized)
         diagnostics["allowed_source_count"] = len(available_sources)
 
         try:
@@ -261,4 +269,3 @@ class FSSignalEvidenceDigestor:
             "Allowed URLs: {{$allowed_sources_json}}\n"
             "Markdown:\n{{$deep_research_markdown}}\n"
         )
-

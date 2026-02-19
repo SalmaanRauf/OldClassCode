@@ -252,7 +252,7 @@ def _format_dr_as_markdown(response: Dict[str, Any]) -> str:
     citations = response.get("citations", [])
     if citations:
         lines.append("## Sources")
-        for cite in citations[:20]:
+        for cite in citations:
             url = cite.get("url", "")
             title = cite.get("title", url)
             if url:

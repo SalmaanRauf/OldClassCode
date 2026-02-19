@@ -294,3 +294,18 @@ def test_build_prompt_variables_truncates_prompt_context():
 
     assert len(prompt_vars["user_prompt_context"]) <= 600
     assert "\n" not in prompt_vars["user_prompt_context"]
+
+
+def test_parse_phase_sources_merges_fallback_and_model_sources():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+
+    merged = agent._parse_phase_sources(
+        raw=["https://example.com/model-a", "https://example.com/shared"],
+        fallback=["https://example.com/fallback-a", "https://example.com/shared"],
+    )
+
+    assert merged == [
+        "https://example.com/fallback-a",
+        "https://example.com/shared",
+        "https://example.com/model-a",
+    ]
