@@ -184,6 +184,12 @@ class BDOrchestrator:
 
             if self.signal_registry.is_financial_services(trigger.sector):
                 await self._notify(progress_cb, "Normalizing financial-services signal evidence...")
+                requested_fs_signals = list(trigger.signals)
+                if not requested_fs_signals:
+                    requested_fs_signals = self.signal_registry.get_fs_signal_codes()
+                    ctx.trace.append(
+                        "No FS signals were explicitly requested; defaulted to full FS signal set."
+                    )
                 (
                     fs_signal_evidence,
                     fs_digest_diagnostics,
@@ -191,7 +197,7 @@ class BDOrchestrator:
                 ) = await self.fs_signal_evidence_digestor.digest(
                     trigger=trigger,
                     deep_research_markdown=ctx.deep_research_raw or "",
-                    requested_signal_codes=list(trigger.signals),
+                    requested_signal_codes=requested_fs_signals,
                     source_urls=ctx.parsed_research.raw_citations,
                 )
                 ctx.fs_signal_evidence = fs_signal_evidence

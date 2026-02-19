@@ -25,7 +25,12 @@ class SignalRegistryService:
     FS_ALIAS_MAP: Dict[str, str] = {
         "all": "__ALL__",
         "all signals": "__ALL__",
+        "all relevant signals": "__ALL__",
+        "all signal": "__ALL__",
         "executive movement": "FS.EXEC.TRANSITION",
+        "people movement": "FS.EXEC.TRANSITION",
+        "leadership movement": "FS.EXEC.TRANSITION",
+        "leadership change": "FS.EXEC.TRANSITION",
         "executive transition": "FS.EXEC.TRANSITION",
         "cro transition": "FS.EXEC.TRANSITION",
         "cfo transition": "FS.EXEC.TRANSITION",
@@ -85,6 +90,14 @@ class SignalRegistryService:
     def get_signal_label(self, signal_code: str) -> str:
         return self._fs_signal_labels.get(signal_code, signal_code)
 
+    @staticmethod
+    def _normalize_signal_token(value: str) -> str:
+        normalized = (value or "").strip().lower()
+        normalized = normalized.replace("&", " and ")
+        normalized = re.sub(r"[_/\-,]+", " ", normalized)
+        normalized = re.sub(r"\s+", " ", normalized)
+        return normalized.strip()
+
     def canonicalize_fs_signals(self, raw_signals: List[str]) -> List[str]:
         """Canonicalize input signals for FS sector.
 
@@ -104,8 +117,9 @@ class SignalRegistryService:
 
         expanded_all = False
         for token in tokens:
-            lowered = token.lower()
-            mapped = self.FS_ALIAS_MAP.get(lowered)
+            lowered = token.lower().strip()
+            normalized = self._normalize_signal_token(token)
+            mapped = self.FS_ALIAS_MAP.get(lowered) or self.FS_ALIAS_MAP.get(normalized)
             if mapped == "__ALL__":
                 expanded_all = True
                 continue
@@ -139,4 +153,3 @@ def get_signal_registry_service() -> SignalRegistryService:
     if _signal_registry_service is None:
         _signal_registry_service = SignalRegistryService()
     return _signal_registry_service
-

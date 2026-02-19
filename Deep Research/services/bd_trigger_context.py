@@ -52,10 +52,24 @@ def _parse_signals(value: Any) -> List[str]:
 
 def _extract_fs_signal_tokens_from_query(user_query: str) -> List[str]:
     lowered = (user_query or "").lower()
+    normalized_query = SignalRegistryService._normalize_signal_token(user_query or "")
     tokens: List[str] = []
-    for alias in SignalRegistryService.FS_ALIAS_MAP.keys():
-        if alias in lowered:
-            tokens.append(alias)
+    seen = set()
+    aliases = sorted(SignalRegistryService.FS_ALIAS_MAP.keys(), key=len, reverse=True)
+    for alias in aliases:
+        raw_pattern = r"\b" + re.escape(alias).replace(r"\ ", r"\s+") + r"\b"
+        normalized_alias = SignalRegistryService._normalize_signal_token(alias)
+        normalized_pattern = (
+            r"\b" + re.escape(normalized_alias).replace(r"\ ", r"\s+") + r"\b"
+            if normalized_alias
+            else None
+        )
+        if re.search(raw_pattern, lowered) or (
+            normalized_pattern and re.search(normalized_pattern, normalized_query)
+        ):
+            if alias not in seen:
+                tokens.append(alias)
+                seen.add(alias)
     return tokens
 
 
@@ -148,7 +162,8 @@ def build_trigger_for_bd_enrichment(
     signal_registry = get_signal_registry_service()
     is_fs_sector = signal_registry.is_financial_services(sector)
 
-    parsed_signals = _parse_signals(session_params.get("signals"))
+    raw_session_signals = _parse_signals(session_params.get("signals"))
+    parsed_signals = list(raw_session_signals)
     if not parsed_signals:
         parsed_signals = _parse_signals_from_text(user_query)
     if is_fs_sector:
@@ -157,6 +172,12 @@ def build_trigger_for_bd_enrichment(
             canonical_fs = signal_registry.canonicalize_fs_signals(
                 _extract_fs_signal_tokens_from_query(user_query)
             )
+        all_requested = any(
+            str(token).strip().lower() in {"all", "all signal", "all signals", "all relevant signals"}
+            for token in raw_session_signals
+        ) or bool(re.search(r"\ball(?:\s+relevant)?\s+signals?\b", user_query or "", re.IGNORECASE))
+        if not canonical_fs and all_requested:
+            canonical_fs = signal_registry.get_fs_signal_codes()
         parsed_signals = canonical_fs
 
     company_focus = (session_params.get("company") or "").strip() if isinstance(session_params.get("company"), str) else None

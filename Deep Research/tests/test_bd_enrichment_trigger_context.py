@@ -89,3 +89,41 @@ def test_financial_services_executive_movement_maps_to_exec_transition():
     )
 
     assert trigger.signals == ["FS.EXEC.TRANSITION"]
+
+
+def test_financial_services_all_relevant_signals_phrase_expands_when_session_blank():
+    trigger = build_trigger_for_bd_enrichment(
+        sector="financial_services",
+        user_query=(
+            "Research Financial Services sector opportunities related to Capital One, "
+            "identifying all relevant signals. Focus on activity within the CONUS geography "
+            "over the past 180 days."
+        ),
+        session_params={
+            "signals": "",
+            "company": "Capital One",
+            "geography": "CONUS",
+            "time_window": "180 days",
+        },
+    )
+
+    assert "FS.EXEC.TRANSITION" in trigger.signals
+    assert "FS.REGULATORY.DEADLINE" in trigger.signals
+    assert len(trigger.signals) >= 5
+
+
+def test_financial_services_people_movement_phrase_maps_to_exec_transition():
+    trigger = build_trigger_for_bd_enrichment(
+        sector="financial_services",
+        user_query=(
+            "Research Financial Services opportunities for Capital One focused on people movement in the US."
+        ),
+        session_params={
+            "signals": "",
+            "company": "Capital One",
+            "geography": "US",
+            "time_window": "180 days",
+        },
+    )
+
+    assert trigger.signals == ["FS.EXEC.TRANSITION"]

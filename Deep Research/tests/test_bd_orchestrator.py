@@ -1102,6 +1102,49 @@ class TestFSSignalEvidenceMode:
         assert report.opportunities_extracted_count == 1
 
     @pytest.mark.asyncio
+    async def test_financial_services_empty_signal_list_defaults_to_full_fs_set(
+        self, mock_extractor, mock_credentials_agent, mock_final_analyst
+    ):
+        fs_trigger = BDTrigger(
+            sector="Financial Services",
+            signals=[],
+            company_focus="Capital One",
+            geography="US",
+        )
+
+        source_url = (
+            "https://fintechmagazine.com/banking/"
+            "capital-one-announces-appointment-of-global-payments-network-business-cro"
+        )
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            executive_summary="FS summary",
+            opportunities=[],
+            raw_citations=[source_url],
+        )
+
+        mock_digestor = MagicMock(spec=FSSignalEvidenceDigestor)
+        mock_digestor.digest = AsyncMock(return_value=([], {"status": "Succeeded"}, [source_url]))
+
+        mock_deriver = MagicMock(spec=FSOpportunityDeriver)
+        mock_deriver.derive.return_value = []
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            fs_signal_evidence_digestor=mock_digestor,
+            fs_opportunity_deriver=mock_deriver,
+            credentials_agent=mock_credentials_agent,
+            final_analyst=mock_final_analyst,
+        )
+
+        await orchestrator.run(fs_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        mock_digestor.digest.assert_called_once()
+        requested_signal_codes = mock_digestor.digest.await_args.kwargs["requested_signal_codes"]
+        assert "FS.EXEC.TRANSITION" in requested_signal_codes
+        assert "FS.REGULATORY.DEADLINE" in requested_signal_codes
+        assert len(requested_signal_codes) >= 5
+
+    @pytest.mark.asyncio
     async def test_non_financial_services_skips_fs_signal_digest(
         self, mock_extractor, mock_credentials_agent, mock_final_analyst, sample_trigger
     ):

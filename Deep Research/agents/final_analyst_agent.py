@@ -340,6 +340,7 @@ class FinalAnalystAgent:
     ) -> MDReport:
         """Parse LLM response into MDReport."""
         try:
+            today = datetime.now().date()
             # Extract JSON from response
             json_str = self._extract_json(response_text)
             data = json.loads(json_str)
@@ -409,6 +410,10 @@ class FinalAnalystAgent:
                 data.get("phase3_opportunities"),
                 fallback=phase3_candidates,
             )
+            parsed_phase3_opportunities = self._sanitize_phase3_opportunities(
+                parsed_phase3_opportunities,
+                today=today,
+            )
             parsed_phase_sources = self._parse_phase_sources(
                 data.get("phase_sources"),
                 fallback=allowed_sources,
@@ -424,7 +429,7 @@ class FinalAnalystAgent:
                 signals_detected=data.get("signals_detected", [])[:5],
                 recommended_actions=self._sanitize_recommended_actions(
                     data.get("recommended_actions", [])[:5],
-                    today=datetime.now().date(),
+                    today=today,
                 ),
                 generated_at=datetime.now(),
                 confidence_note=data.get("confidence_note", ""),
@@ -596,7 +601,10 @@ class FinalAnalystAgent:
             phase2_headline=self._fallback_phase2_headline(confirmed_signal_evidence),
             phase2_signal_evidence=confirmed_signal_evidence or None,
             phase2_footnotes=self._fallback_phase2_footnotes(confirmed_signal_evidence),
-            phase3_opportunities=phase3_candidates or None,
+            phase3_opportunities=self._sanitize_phase3_opportunities(
+                phase3_candidates,
+                today=datetime.now().date(),
+            ),
             phase_sources=(list(allowed_sources) if allowed_sources else None),
             layout_version="fs_evidence_locked_v1" if confirmed_signal_evidence or phase3_candidates else None,
         )
@@ -793,6 +801,28 @@ class FinalAnalystAgent:
                 return parsed
         return fallback or None
 
+    def _sanitize_phase3_opportunities(
+        self,
+        opportunities: Optional[List[PhaseOpportunity]],
+        today: date,
+    ) -> Optional[List[PhaseOpportunity]]:
+        if not opportunities:
+            return opportunities
+
+        sanitized: List[PhaseOpportunity] = []
+        for item in opportunities:
+            sanitized.append(
+                item.model_copy(
+                    update={
+                        "recommended_actions": self._sanitize_recommended_actions(
+                            item.recommended_actions,
+                            today=today,
+                        )
+                    }
+                )
+            )
+        return sanitized
+
     def _parse_phase_sources(self, raw: Any, fallback: Optional[List[str]]) -> Optional[List[str]]:
         merged: List[str] = []
         seen = set()
@@ -842,7 +872,17 @@ class FinalAnalystAgent:
             "nov": 11, "november": 11,
             "dec": 12, "december": 12,
         }
-        temporal_prefixes = ("late ", "early ", "mid ", "by ", "in ", "during ", "through ", "from ")
+        temporal_prefixes = (
+            "late ",
+            "early ",
+            "mid ",
+            "by ",
+            "in ",
+            "during ",
+            "through ",
+            "from ",
+            "before ",
+        )
 
         quarter_range_pattern = re.compile(r"\bQ([1-4])\s*[-–]\s*Q([1-4])\s+(\d{4})\b", re.IGNORECASE)
         single_quarter_pattern = re.compile(r"\bQ([1-4])\s+(\d{4})\b", re.IGNORECASE)
@@ -914,7 +954,7 @@ class FinalAnalystAgent:
                 for start, end in sorted(stale_ranges, key=lambda x: x[0], reverse=True):
                     text = f"{text[:start]}{replacement}{text[end:]}"
                 text = re.sub(
-                    r"\b(?:by|in|during|through|from)\s+within the next 30-90 days\b",
+                    r"\b(?:by|in|during|through|from|before)\s+within the next 30-90 days\b",
                     "within the next 30-90 days",
                     text,
                     flags=re.IGNORECASE,

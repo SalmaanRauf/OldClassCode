@@ -15,6 +15,7 @@ from models.bd_schemas import (
     Opportunity,
     CredentialsResponse,
     CredentialMatch,
+    PhaseOpportunity,
 )
 
 
@@ -308,4 +309,85 @@ def test_parse_phase_sources_merges_fallback_and_model_sources():
         "https://example.com/fallback-a",
         "https://example.com/shared",
         "https://example.com/model-a",
+    ]
+
+
+def test_parse_report_sanitizes_stale_phase3_recommended_actions():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(opportunities=[])
+
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS run",
+            "executive_summary": "Summary",
+            "top_opportunities": [],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+            "phase3_opportunities": [
+                {
+                    "derived_from_signal": "FS.EXEC.TRANSITION",
+                    "overview": "Overview",
+                    "technical_explanation": "Technical",
+                    "layman_explanation": "Layman",
+                    "relevant_service_lines": ["Risk governance advisory"],
+                    "credentials_summary": "No materially aligned credentials identified.",
+                    "recommended_actions": ["Deploy governance controls by April 2025."],
+                    "sources": ["https://example.com/source-a"],
+                }
+            ],
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials={},
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=0,
+        lookups_executed_count=0,
+        lookups_skipped_reason="No opportunities identified for credentials validation.",
+        credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+        confirmed_signal_evidence=None,
+        phase3_candidates=None,
+        allowed_sources=None,
+    )
+
+    assert report.phase3_opportunities is not None
+    assert report.phase3_opportunities[0].recommended_actions == [
+        "Deploy governance controls within the next 30-90 days."
+    ]
+
+
+def test_fallback_report_sanitizes_stale_phase3_candidate_actions():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(executive_summary="Summary")
+
+    report = agent._fallback_report(
+        trigger=trigger,
+        research=research,
+        credentials={},
+        phase3_candidates=[
+            PhaseOpportunity(
+                derived_from_signal="FS.EXEC.TRANSITION",
+                overview="Overview",
+                technical_explanation="Technical",
+                layman_explanation="Layman",
+                relevant_service_lines=["Risk governance advisory"],
+                credentials_summary="No materially aligned credentials identified.",
+                recommended_actions=["Start delivery before September 2025."],
+                sources=["https://example.com/source-a"],
+            )
+        ],
+    )
+
+    assert report.phase3_opportunities is not None
+    assert report.phase3_opportunities[0].recommended_actions == [
+        "Start delivery within the next 30-90 days."
     ]
