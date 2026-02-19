@@ -22,6 +22,9 @@ Extract structured signal evidence from the Deep Research markdown for only the 
 4. `source_url` MUST be one of the provided allowed source URLs.
 5. Do not fabricate quotes, URLs, or signal claims.
 6. Keep analysis concise and factual.
+7. Special handling for `FS.EXEC.TRANSITION`:
+   - In `analysis`, summarize all material people movements found (executive role shifts, regional risk/regulatory appointments, or board/committee placements) in concise factual language.
+   - Keep `evidence_quote` and `source_url` anchored to the single strongest supporting source from the allowed URL set.
 
 # Output Contract
 Return ONLY valid JSON:

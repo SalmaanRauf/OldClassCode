@@ -46,6 +46,9 @@ When the user requests research on any of the following signals, apply the corre
 **What it is:** New risk, finance, or compliance leadership driving change initiatives
 **Keywords to detect:** "Chief Risk Officer", "CFO appointed", "Chief Compliance Officer", "head of risk", "risk leadership"
 **What to research when this signal is requested:**
+- Executive role transitions across risk/finance/compliance leadership (appointed, named, joined, rejoined, promoted, succeeded)
+- Business-line and regional risk leadership changes (e.g., platform/business CRO, regional CRRO scope)
+- Board appointments and committee placements tied to post-acquisition governance integration
 - New executive's background and prior initiatives
 - Predecessor's tenure and departure circumstances
 - Institution's recent regulatory challenges
@@ -54,6 +57,7 @@ When the user requests research on any of the following signals, apply the corre
 - Budget and team expansion signals
 - Optional people-movement verification from executive self-disclosures (e.g., LinkedIn/company post) when they explicitly state role + employer + scope
 - When social/self-disclosure sources are used, prefer corroboration with issuer IR/SEC filings or established media where available
+- Keep social/self-disclosure usage optional and scoped only to this signal (no global social-source mining)
 - Keep this signal-scoped to executive transition research; do not treat social-source mining as a global requirement across all signals
 
 ---

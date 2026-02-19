@@ -203,7 +203,9 @@ def _print_report_summary(report: MDReport) -> None:
     print(f"- opportunity_extraction_status: {report.opportunity_extraction_status}")
     print(f"- opportunities_extracted_count: {report.opportunities_extracted_count}")
     print(f"- lookups_executed_count: {report.lookups_executed_count}")
-    print(f"- credentials_status_counts: {report.credentials_status_counts}")
+    matched = report.credentials_status_counts.get("Matched", 0)
+    no_match = report.credentials_status_counts.get("No Match", 0)
+    print(f"- credentials_status_counts: matched={matched}, no_match={no_match}")
     print(f"- synthesis_status: {report.synthesis_status}")
     if report.synthesis_fallback_reason:
         print(f"- synthesis_fallback_reason: {report.synthesis_fallback_reason}")

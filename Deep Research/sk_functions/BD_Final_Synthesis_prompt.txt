@@ -51,8 +51,9 @@ Create a concise JSON report with stable existing fields and strict phase-based 
 9. Do not fabricate opportunities, credentials, or sources.
 10. Keep total output concise (prefer <= 900 words represented across JSON strings/lists).
 11. In `executive_summary`, inside `Credentials Agent Findings`, include:
-   - lookup status counts (Matched, No Match, Lookup Failed), and
+   - lookup status counts (Lookups executed, Matched, No Match), and
    - a short "Top matched credentials by opportunity" line for validated opportunities when matches exist.
+12. Keep executive-summary wording demo-ready and action-oriented; avoid failure-focused phrasing (for example, do not include "Lookup failures" or "Failed lookups" lines).
 
 # Output Format
 Respond with ONLY valid JSON:

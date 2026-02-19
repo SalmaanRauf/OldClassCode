@@ -291,3 +291,140 @@ I am joining Capital One as the Business Chief Risk Officer for its new Global P
     assert signal_evidence[0].signal_code == "FS.REGULATORY.DEADLINE"
     assert signal_evidence[0].status == "Insufficient"
     assert signal_evidence[0].source_url == ""
+
+
+def test_digest_recovers_exec_transition_for_regional_crro_language():
+    markdown = """
+I rejoined Capital One in a new role as Chief Risk & Regulatory Officer for APAC & Middle East, Global Payments Network.
+
+# Sources
+- https://www.linkedin.com/posts/example_regional_exec_post
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "No transition identified.",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Confirmed"
+    assert "linkedin.com" in signal_evidence[0].source_url
+
+
+def test_digest_recovers_exec_transition_for_board_appointment_language():
+    markdown = """
+Capital One appointed Thomas G. Maheras to serve on the Capital One Board of Directors with committee assignments following close.
+
+# Sources
+- https://www.sec.gov/Archives/edgar/data/927628/000119312525122059/d934475dex991.htm
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "No transition identified.",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Confirmed"
+    assert "sec.gov" in signal_evidence[0].source_url
+
+
+def test_digest_recovery_prefers_people_movement_specific_sources():
+    markdown = """
+Capital One appointed a Business Chief Risk Officer for its new Global Payments Network.
+
+# Sources
+- https://www.bankingdive.com/news/generic-financial-services-update/123456/
+- https://www.linkedin.com/posts/example_exec_post
+- https://www.sec.gov/Archives/edgar/data/927628/000119312525122059/d934475dex991.htm
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "No transition identified.",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Confirmed"
+    assert "linkedin.com" in signal_evidence[0].source_url

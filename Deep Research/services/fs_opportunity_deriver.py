@@ -35,15 +35,23 @@ class FSOpportunityDeriver:
         "FS.CONSUMER.LITIGATION_SETTLEMENT": _OpportunityTemplate(
             overview=(
                 "Consumer remediation obligations appear to be in execution mode, creating demand for "
-                "governance over eligibility logic, payout controls, and remediation reporting."
+                "governance over eligibility logic, payout controls, and remediation reporting. "
+                "Settlement execution typically shifts scrutiny from legal terms to operational proof, "
+                "including whether customer-impact calculations are complete, consistent, and timely. "
+                "This creates immediate demand for independent governance support before milestone attestations."
             ),
             technical_explanation=(
                 "Settlement execution requires traceable calculation logic, source-to-report data lineage, "
-                "exception handling controls, and defensible evidence packs for oversight."
+                "exception handling controls, and defensible evidence packs for oversight. "
+                "High-risk failure points usually include eligibility-rule interpretation, manual overrides, "
+                "and reconciliation breaks between source systems and payout files. "
+                "An audit-ready control framework should tie every claim to data source, owner, approval, and test evidence."
             ),
             layman_explanation=(
                 "The bank must prove it is paying the right customers the right amounts on time, and keep "
-                "clear documentation in case regulators challenge the results."
+                "clear documentation in case regulators challenge the results. "
+                "If the logic or documentation is inconsistent, the bank can face rework, delays, and credibility loss. "
+                "Strong governance now prevents expensive clean-up later."
             ),
             service_lines=[
                 "Consumer remediation governance & controls advisory",
@@ -59,15 +67,21 @@ class FSOpportunityDeriver:
         "FS.REGULATORY.DEADLINE": _OpportunityTemplate(
             overview=(
                 "Formal regulatory deliverable timelines create near-term pressure on governance, document control, "
-                "and evidence traceability."
+                "and evidence traceability. "
+                "Because the timeline is externally imposed, execution quality and timing discipline matter as much as technical content. "
+                "This opens a focused opportunity to run deadline-driven governance and defensibility support."
             ),
             technical_explanation=(
                 "Deadline-driven submissions require section-level ownership, version control, claim-to-source "
-                "traceability, and pre-submission defensibility reviews."
+                "traceability, and pre-submission defensibility reviews. "
+                "A strong operating model includes accountable owners, integrated review gates, and change logs that explain every material edit. "
+                "Evidence standards should be defined early so final artifacts can withstand regulator challenge without last-minute rebuilds."
             ),
             layman_explanation=(
                 "Regulators want a high-quality plan on a strict schedule, so the work must be tightly managed "
-                "with clear evidence and approvals."
+                "with clear evidence and approvals. "
+                "Teams need one coordinated playbook so everyone knows what to deliver, when, and with what proof. "
+                "Good structure reduces deadline risk and avoids scramble-mode submissions."
             ),
             service_lines=[
                 "Governance and documentation readiness advisory",
@@ -83,15 +97,23 @@ class FSOpportunityDeriver:
         "FS.EXEC.TRANSITION": _OpportunityTemplate(
             overview=(
                 "Executive risk leadership transitions around strategic initiatives create governance-alignment "
-                "opportunities at the operating model level."
+                "opportunities at the operating model level. "
+                "When new leaders inherit high-visibility initiatives, they often reset decision rights, risk appetite language, "
+                "and first-line/second-line engagement norms. "
+                "That transition window is the best moment to standardize governance before process debt accumulates."
             ),
             technical_explanation=(
                 "Early alignment typically defines risk appetite articulation, first-line control expectations, "
-                "oversight forums, and audit-ready decision documentation."
+                "oversight forums, and audit-ready decision documentation. "
+                "Core design work includes RACI boundaries across business, risk, compliance, and technology teams, "
+                "plus a minimum evidence standard for control decisions and exception approvals. "
+                "Program governance should explicitly map initiative milestones to risk reviews and committee reporting."
             ),
             layman_explanation=(
                 "A new risk executive can set guardrails early so growth initiatives don’t require expensive control "
-                "rework later."
+                "rework later. "
+                "Clear ownership and reporting rhythms prevent confusion as the initiative scales. "
+                "Getting this right early saves time, budget, and audit friction."
             ),
             service_lines=[
                 "Risk governance and operating model advisory",
@@ -259,4 +281,3 @@ class FSOpportunityDeriver:
             recommended_actions=list(template.actions),
             sources=sources,
         )
-

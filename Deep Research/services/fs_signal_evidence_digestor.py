@@ -256,35 +256,70 @@ class FSSignalEvidenceDigestor:
         if current.status == "Confirmed":
             return signal_evidence
 
-        text = (deep_research_markdown or "").lower()
-        appointment_pattern = re.compile(
-            r"\b(appointed|hired|named)\b.{0,180}\b("
-            r"chief risk officer|business chief risk officer|chief financial officer|"
-            r"chief compliance officer|\bcro\b|\bcfo\b|\bcco\b"
-            r")\b",
+        text = deep_research_markdown or ""
+        movement_pattern = re.compile(
+            r"("
+            r"\b(joining|joined|rejoined|appointed|named|hired|promoted|succeeded)\b.{0,220}\b("
+            r"business chief risk officer|chief risk(?:\s*&\s*regulatory|\s+and\s+regulatory)? officer|"
+            r"chief financial officer|chief compliance officer|head of risk|"
+            r"\bcro\b|\bcfo\b|\bcco\b|\bcrro\b"
+            r")\b"
+            r"|"
+            r"\b(board of directors|serve on .* board|committee assignment|committee placements?|board refresh|board expansion)\b"
+            r")",
             re.IGNORECASE | re.DOTALL,
         )
-        if not appointment_pattern.search(text):
+        if not movement_pattern.search(text):
             return signal_evidence
 
         if current.source_url:
             preferred_source = current.source_url
         else:
-            def _exec_score(url: str) -> tuple[int, int]:
+            def _exec_score(url: str) -> tuple[int, int, int]:
+                normalized = (url or "").strip().lower()
                 try:
                     host = urlparse(url).netloc.lower().strip().removeprefix("www.")
                 except Exception:
                     host = ""
+                movement_bonus = 0
+                movement_keywords = (
+                    "linkedin.com/posts/",
+                    "people-move",
+                    "appointment",
+                    "appointed",
+                    "rejoined",
+                    "board-member",
+                    "board-of-directors",
+                    "corporate-governance",
+                    "committee",
+                    "sec-filings",
+                    "/8-k",
+                    "news-release",
+                )
+                for keyword in movement_keywords:
+                    if keyword in normalized:
+                        movement_bonus += 1
                 host_bonus = 0
-                if "fintechmagazine.com" in host:
+                if "linkedin.com" in host:
+                    host_bonus = 5
+                elif host.endswith("sec.gov"):
+                    host_bonus = 4
+                elif host.endswith("capitalone.com") or "gcs-web.com" in host:
                     host_bonus = 3
-                elif "linkedin.com" in host:
+                elif "fintechmagazine.com" in host:
                     host_bonus = 2
-                return (self._source_guardrails.score_url(url), host_bonus)
+                elif "investor." in host:
+                    host_bonus = 2
+                return (movement_bonus, host_bonus, self._source_guardrails.score_url(url))
+
+            def _score_sort_key(url: str) -> tuple[int, int, int, int]:
+                movement_bonus, host_bonus, guardrail_score = _exec_score(url)
+                # Prefer richer evidence URLs when scores tie.
+                return (movement_bonus, host_bonus, guardrail_score, len(url))
 
             preferred_source = ""
             if available_sources:
-                preferred_source = max(available_sources, key=_exec_score)
+                preferred_source = max(available_sources, key=_score_sort_key)
 
         signal_evidence[target_idx] = SignalEvidence(
             signal_code=current.signal_code,
@@ -294,9 +329,9 @@ class FSSignalEvidenceDigestor:
             source_url=preferred_source,
             source_title=current.source_title,
             analysis=(
-                f"{current.analysis} Deterministic recovery: explicit appointment language in source text."
+                f"{current.analysis} Deterministic recovery: explicit executive or board movement language in source text."
                 if current.analysis
-                else "Deterministic recovery: explicit appointment language in source text."
+                else "Deterministic recovery: explicit executive or board movement language in source text."
             ),
         )
         return signal_evidence

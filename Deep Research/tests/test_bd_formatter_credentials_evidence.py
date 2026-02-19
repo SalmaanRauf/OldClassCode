@@ -36,7 +36,7 @@ def _build_phase_report() -> MDReport:
         top_opportunities=[
             MDReportOpportunity(
                 opportunity=Opportunity(
-                    title="Program A",
+                    title="FS.EXEC.TRANSITION: Program A",
                     agency="DoD",
                     scope="Compliance services",
                     estimated_value="$10M",
@@ -45,13 +45,34 @@ def _build_phase_report() -> MDReport:
                 ),
                 credentials=[
                     CredentialMatch(
-                        title="Defense CMMC Credential",
+                        title="Technology Risk Management & Governance",
                         client_challenge="Needed CMMC alignment",
                         approach="Control mapping and remediation",
                         value_provided="Passed readiness assessment",
-                        industry="Defense",
+                        industry="Financial Services",
                         technologies_used=["NIST 800-171"],
+                        emd=None,
                         url="https://ishare.protiviti.com/cred/123",
+                    ),
+                    CredentialMatch(
+                        title="Operational Risk Management Governance and Framework Support",
+                        client_challenge="Needed first-line/second-line oversight alignment",
+                        approach="RCSA assessments and governance workflow support",
+                        value_provided="Improved governance visibility and audit readiness",
+                        industry="Financial Services",
+                        technologies_used=[],
+                        emd="Jane Leader",
+                        url="https://ishare.protiviti.com/cred/456",
+                    ),
+                    CredentialMatch(
+                        title="Should Not Render Because Top 2 Cap",
+                        client_challenge="Challenge",
+                        approach="Approach",
+                        value_provided="Value",
+                        industry="Financial Services",
+                        technologies_used=[],
+                        emd=None,
+                        url="https://ishare.protiviti.com/cred/789",
                     )
                 ],
                 validation_status="Validated",
@@ -161,6 +182,20 @@ def test_formatter_renders_phase_layout_by_default():
     assert "**Layman's Explanation**" in content
     assert "**Relevant Service Lines (mapped ONLY to this opportunity's confirmed signals)**" in content
     assert "**Relevant Protiviti Credentials (if applicable)**" in content
+    assert "Credential 1" in content
+    assert "Matched credential: Technology Risk Management & Governance" in content
+    assert "Client challenge: Needed CMMC alignment" in content
+    assert "What we did: Control mapping and remediation" in content
+    assert "Value provided: Passed readiness assessment" in content
+    assert "Industry: Financial Services" in content
+    assert "Technologies used: NIST 800-171" in content
+    assert "EMD: Not provided" in content
+    assert "Why this matches:" in content
+    assert "URL: https://ishare.protiviti.com/cred/123" in content
+    assert "Credential 2" in content
+    assert "Matched credential: Operational Risk Management Governance and Framework Support" in content
+    assert "EMD: Jane Leader" in content
+    assert "Should Not Render Because Top 2 Cap" not in content
     assert "**Sources (signal-aligned)**" in content
     assert content.count("---") >= 2
     assert "Sources (1 distinct unique citations)" in content
@@ -189,6 +224,7 @@ def test_formatter_can_show_diagnostics_with_toggle():
     assert "### Pipeline Diagnostics" in content
     assert "### Credentials Evidence (Full I/O)" in content
     assert "### Credentials Batch I/O (Full)" in content
+    assert "Lookup Failed=" not in content
 
 
 def test_non_phase_layout_remains_legacy():

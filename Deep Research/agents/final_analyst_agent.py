@@ -717,11 +717,7 @@ class FinalAnalystAgent:
                 f"- Lookups executed: {lookups_executed_count}",
                 f"- Matched opportunities: {counts['Matched']}",
                 f"- No-match opportunities: {counts['No Match']}",
-                f"- Lookup failures: {counts['Lookup Failed']}",
             ]
-            if counts["Lookup Failed"] > 0:
-                failed_titles = [title for title, resp in credentials.items() if resp.lookup_status == "Lookup Failed"]
-                credentials_lines.append(f"- Failed lookups: {', '.join(failed_titles[:5])}")
 
         combined_lines = []
         if research.recommended_actions:
@@ -734,8 +730,6 @@ class FinalAnalystAgent:
             combined_lines.append("- Continue targeted opportunity monitoring and refresh signals weekly.")
         if lookups_executed_count == 0 and opportunity_extraction_status == "Extraction Failed":
             combined_lines.append("- Re-run with a canonical opportunities section or improve opportunity extraction patterns before credentials validation.")
-        if counts["Lookup Failed"] > 0 and lookups_executed_count > 0:
-            combined_lines.append("- Resolve credentials lookup failures before final MD-ready validation.")
         if counts["No Match"] > 0 and lookups_executed_count > 0:
             combined_lines.append("- Prioritize opportunities with stronger internal proof or develop supporting credential narratives.")
 
@@ -784,6 +778,7 @@ class FinalAnalystAgent:
             )
 
         credentials_text = parsed["Credentials Agent Findings"]
+        credentials_text = self._strip_failure_lines(credentials_text)
         credentials_text = self._ensure_credentials_counts_lines(
             credentials_text=credentials_text,
             credentials_status_counts=credentials_status_counts,
@@ -793,6 +788,10 @@ class FinalAnalystAgent:
         credentials_text = self._ensure_top_matched_line(
             credentials_text=credentials_text,
             top_opportunities=top_opportunities,
+        )
+        combined_text = self._strip_failure_lines(
+            parsed["Combined Report & Action Items"],
+            include_lookup_count_lines=False,
         )
 
         return "\n".join(
@@ -804,9 +803,34 @@ class FinalAnalystAgent:
                 credentials_text,
                 "",
                 "Combined Report & Action Items",
-                parsed["Combined Report & Action Items"],
+                combined_text,
             ]
         ).strip()
+
+    def _strip_failure_lines(
+        self,
+        text: str,
+        include_lookup_count_lines: bool = True,
+    ) -> str:
+        """Remove failure-oriented demo-facing lines while keeping core summary context."""
+        if not text:
+            return ""
+
+        blocked_tokens = [
+            "failed lookups",
+            "resolve credentials lookup failures",
+            "credentials lookup failures",
+        ]
+        if include_lookup_count_lines:
+            blocked_tokens.append("lookup failures")
+
+        kept: List[str] = []
+        for line in text.splitlines():
+            lowered = line.strip().lower()
+            if any(token in lowered for token in blocked_tokens):
+                continue
+            kept.append(line)
+        return "\n".join(kept).strip()
 
     def _split_three_block_summary(self, summary: str) -> Optional[Dict[str, str]]:
         """Split summary into required titled blocks if contract headings are present."""
@@ -846,7 +870,6 @@ class FinalAnalystAgent:
         required_markers = [
             "matched opportunities",
             "no-match opportunities",
-            "lookup failures",
         ]
         has_all_markers = all(marker in lowered for marker in required_markers)
         if has_all_markers:
@@ -864,7 +887,6 @@ class FinalAnalystAgent:
                     f"- Lookups executed: {lookups_executed_count}",
                     f"- Matched opportunities: {credentials_status_counts.get('Matched', 0)}",
                     f"- No-match opportunities: {credentials_status_counts.get('No Match', 0)}",
-                    f"- Lookup failures: {credentials_status_counts.get('Lookup Failed', 0)}",
                 ]
             )
 

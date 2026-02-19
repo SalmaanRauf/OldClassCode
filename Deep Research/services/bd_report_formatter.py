@@ -4,6 +4,7 @@ Formatting helpers for BD report rendering in Chainlit surfaces.
 from __future__ import annotations
 
 import os
+import re
 from typing import Dict, Any, Optional, List
 
 from models.bd_schemas import (
@@ -205,9 +206,100 @@ def _format_structured_footnote_lines(footnote: str) -> List[str]:
     ]
 
 
+def _extract_signal_code_from_title(text: str) -> Optional[str]:
+    match = re.match(r"\s*(FS\.[A-Z0-9_.]+)\s*:", (text or "").strip(), flags=re.IGNORECASE)
+    if not match:
+        return None
+    return match.group(1).upper()
+
+
+def _build_phase_credentials_index(report: MDReport) -> Dict[str, List[CredentialMatch]]:
+    index: Dict[str, List[CredentialMatch]] = {}
+    seen_keys: Dict[str, set[str]] = {}
+    for opp_report in report.top_opportunities or []:
+        if opp_report.credentials_lookup_status != "Matched" or not opp_report.credentials:
+            continue
+        signal_code = _extract_signal_code_from_title(opp_report.opportunity.title)
+        if not signal_code:
+            continue
+        bucket = index.setdefault(signal_code, [])
+        seen = seen_keys.setdefault(signal_code, set())
+        for credential in opp_report.credentials:
+            dedupe_key = f"{(credential.url or '').strip().lower()}|{(credential.title or '').strip().lower()}"
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            bucket.append(credential)
+    return index
+
+
+def _format_technologies(technologies: List[str]) -> str:
+    normalized = [item.strip() for item in (technologies or []) if item and item.strip()]
+    return ", ".join(normalized) if normalized else "Not provided"
+
+
+def _credential_match_reason(opportunity_signal: str, credential: CredentialMatch) -> str:
+    base = {
+        "FS.CONSUMER.LITIGATION_SETTLEMENT": (
+            "Matches remediation-governance needs around calculation controls, execution oversight, and regulator-facing evidence."
+        ),
+        "FS.REGULATORY.DEADLINE": (
+            "Matches deadline-driven governance and documentation needs where traceability, ownership, and defensibility are critical."
+        ),
+        "FS.EXEC.TRANSITION": (
+            "Matches risk-operating-model alignment needs during leadership transitions, including control ownership and oversight cadence."
+        ),
+        "FS.CECL.IMPLEMENTATION": (
+            "Matches accounting and control-governance needs tied to model methodology, evidence quality, and post-change assurance."
+        ),
+    }.get(
+        (opportunity_signal or "").upper(),
+        "Matches the confirmed opportunity scope based on similar governance, risk, and control outcomes.",
+    )
+    if credential.industry:
+        return f"{base} Industry alignment: {credential.industry}."
+    return base
+
+
+def _sanitize_phase_credentials_summary(summary: str) -> str:
+    normalized = (summary or "").strip()
+    if not normalized:
+        return "No materially aligned credentials identified."
+    lowered = normalized.lower()
+    if "lookup failed" in lowered or lowered.startswith("failed"):
+        return "No materially aligned credentials identified."
+    return normalized
+
+
+def _format_phase_credential_cards(
+    opportunity_signal: str,
+    credentials: List[CredentialMatch],
+) -> List[str]:
+    lines: List[str] = []
+    if not credentials:
+        lines.append("No materially aligned credentials identified.")
+        return lines
+
+    for index, credential in enumerate(credentials[:2], 1):
+        lines.append(f"Credential {index}")
+        lines.append(f"Matched credential: {credential.title or 'Not provided'}")
+        lines.append(f"Client challenge: {credential.client_challenge or 'Not provided'}")
+        lines.append(f"What we did: {credential.approach or 'Not provided'}")
+        lines.append(f"Value provided: {credential.value_provided or 'Not provided'}")
+        lines.append(f"Industry: {credential.industry or 'Not provided'}")
+        lines.append(f"Technologies used: {_format_technologies(credential.technologies_used)}")
+        lines.append(f"EMD: {credential.emd or 'Not provided'}")
+        lines.append(f"Why this matches: {_credential_match_reason(opportunity_signal, credential)}")
+        lines.append(f"URL: {credential.url or 'Not provided'}")
+        if index < min(2, len(credentials)):
+            lines.append("")
+    return lines
+
+
 def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
     lines: List[str] = []
     distinct_sources = _distinct_sources(report.phase_sources)
+    phase_credentials = _build_phase_credentials_index(report)
 
     lines.extend(_format_scan_first_summary(report, distinct_source_count=len(distinct_sources)))
 
@@ -266,7 +358,16 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
                     lines.append(f"- {service_line}")
                 lines.append("")
             lines.append("**Relevant Protiviti Credentials (if applicable)**")
-            lines.append(opportunity.credentials_summary or "No materially aligned credentials identified.")
+            resolved_credentials = phase_credentials.get((opportunity.derived_from_signal or "").upper(), [])
+            if resolved_credentials:
+                lines.extend(
+                    _format_phase_credential_cards(
+                        opportunity_signal=opportunity.derived_from_signal,
+                        credentials=resolved_credentials,
+                    )
+                )
+            else:
+                lines.append(_sanitize_phase_credentials_summary(opportunity.credentials_summary))
             lines.append("")
             if opportunity.recommended_actions:
                 lines.append("**Recommended Client Enablement Actions**")
@@ -442,8 +543,7 @@ def _format_pipeline_diagnostics(report: MDReport) -> List[str]:
     lines.append(
         "- Lookup Status Counts: "
         f"Matched={report.credentials_status_counts.get('Matched', 0)}, "
-        f"No Match={report.credentials_status_counts.get('No Match', 0)}, "
-        f"Lookup Failed={report.credentials_status_counts.get('Lookup Failed', 0)}"
+        f"No Match={report.credentials_status_counts.get('No Match', 0)}"
     )
     if report.lookups_skipped_reason:
         lines.append(f"- Lookups Skipped Reason: {report.lookups_skipped_reason}")
