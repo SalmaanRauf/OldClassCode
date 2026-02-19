@@ -379,6 +379,55 @@ def test_parse_report_injects_credentials_counts_and_top_matches_into_executive_
     assert "ERM & RCSA Advisory" in summary
 
 
+def test_parse_report_deduplicates_credentials_metric_lines():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(executive_summary="Research summary text.")
+
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS run",
+            "executive_summary": (
+                "Deep Research Findings\n"
+                "Research summary text.\n\n"
+                "Credentials Agent Findings\n"
+                "Lookups executed: 3, Matched: 3, No Match: 0.\n"
+                "- Lookups executed: 3\n"
+                "- Matched opportunities: 3\n"
+                "- No-match opportunities: 0\n"
+                "- Top matched credentials by opportunity: Existing line.\n\n"
+                "Combined Report & Action Items\n"
+                "- Action."
+            ),
+            "top_opportunities": [],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials={},
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=0,
+        lookups_executed_count=3,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 3, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    summary = report.executive_summary
+    assert summary.count("- Lookups executed: 3") == 1
+    assert summary.count("- Matched opportunities: 3") == 1
+    assert summary.count("- No-match opportunities: 0") == 1
+    assert summary.count("Top matched credentials by opportunity") <= 1
+
+
 def test_parse_report_strips_failure_resolution_actions_from_combined_block():
     agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
     trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
@@ -425,6 +474,97 @@ def test_parse_report_strips_failure_resolution_actions_from_combined_block():
     assert "Lookup failures" not in summary
     assert "Failed lookups" not in summary
     assert "Resolve credentials lookup failures before final MD-ready validation." not in summary
+
+
+def test_parse_report_uses_index_fallback_for_canonical_opportunity_titles():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    first_title = "FS.CONSUMER.LITIGATION_SETTLEMENT: Canonical first."
+    second_title = "FS.REGULATORY.DEADLINE: Canonical second."
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(title=first_title, scope="Scope A", confidence="High"),
+            Opportunity(title=second_title, scope="Scope B", confidence="High"),
+        ]
+    )
+    credentials = {
+        first_title: CredentialsResponse(
+            opportunity_title=first_title,
+            matches=[
+                CredentialMatch(
+                    title="Credential A",
+                    client_challenge="Challenge A",
+                    approach="Approach A",
+                    value_provided="Value A",
+                    url="https://ishare.protiviti.com/cred/a",
+                )
+            ],
+            lookup_status="Matched",
+        ),
+        second_title: CredentialsResponse(
+            opportunity_title=second_title,
+            matches=[
+                CredentialMatch(
+                    title="Credential B",
+                    client_challenge="Challenge B",
+                    approach="Approach B",
+                    value_provided="Value B",
+                    url="https://ishare.protiviti.com/cred/b",
+                )
+            ],
+            lookup_status="Matched",
+        ),
+    }
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS run",
+            "executive_summary": (
+                "Deep Research Findings\n"
+                "Summary.\n\n"
+                "Credentials Agent Findings\n"
+                "- Narrative.\n\n"
+                "Combined Report & Action Items\n"
+                "- Action."
+            ),
+            "top_opportunities": [
+                {
+                    "title": "Rewritten Opportunity Alpha",
+                    "scope": "Scope A",
+                    "validation_status": "No Internal Data",
+                    "credentials": [],
+                },
+                {
+                    "title": "Rewritten Opportunity Beta",
+                    "scope": "Scope B",
+                    "validation_status": "No Internal Data",
+                    "credentials": [],
+                },
+            ],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials=credentials,
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=2,
+        lookups_executed_count=2,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 2, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    assert report.top_opportunities[0].opportunity.title == first_title
+    assert report.top_opportunities[1].opportunity.title == second_title
+    assert report.top_opportunities[0].credentials[0].title == "Credential A"
+    assert report.top_opportunities[1].credentials[0].title == "Credential B"
 
 
 def test_fallback_phase2_footnotes_use_strict_structured_schema():

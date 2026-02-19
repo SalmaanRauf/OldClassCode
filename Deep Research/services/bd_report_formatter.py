@@ -233,6 +233,16 @@ def _build_phase_credentials_index(report: MDReport) -> Dict[str, List[Credentia
     return index
 
 
+def _build_phase_credentials_by_position(report: MDReport) -> List[List[CredentialMatch]]:
+    ordered: List[List[CredentialMatch]] = []
+    for opp_report in report.top_opportunities or []:
+        if opp_report.credentials_lookup_status == "Matched" and opp_report.credentials:
+            ordered.append(opp_report.credentials[:2])
+        else:
+            ordered.append([])
+    return ordered
+
+
 def _format_technologies(technologies: List[str]) -> str:
     normalized = [item.strip() for item in (technologies or []) if item and item.strip()]
     return ", ".join(normalized) if normalized else "Not provided"
@@ -296,10 +306,22 @@ def _format_phase_credential_cards(
     return lines
 
 
+def _structured_footnote_from_evidence(evidence) -> str:
+    return "\n".join(
+        [
+            f"Verbatim quote: {evidence.evidence_quote or '(Not provided)'}",
+            f"Source title: {evidence.source_title or evidence.source_url or '(Not provided)'}",
+            f"Canonical URL: {evidence.source_url or '(Not provided)'}",
+            f"Evidentiary linkage: {evidence.analysis or '(Not provided)'}",
+        ]
+    )
+
+
 def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
     lines: List[str] = []
     distinct_sources = _distinct_sources(report.phase_sources)
     phase_credentials = _build_phase_credentials_index(report)
+    phase_credentials_by_position = _build_phase_credentials_by_position(report)
 
     lines.extend(_format_scan_first_summary(report, distinct_source_count=len(distinct_sources)))
 
@@ -309,8 +331,13 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
         lines.append(f"Governing Headline: {report.phase2_headline}")
         lines.append("")
 
-    if report.phase2_signal_evidence:
-        for evidence in report.phase2_signal_evidence:
+    confirmed_phase2 = [
+        evidence for evidence in (report.phase2_signal_evidence or [])
+        if evidence.status == "Confirmed"
+    ]
+
+    if confirmed_phase2:
+        for evidence in confirmed_phase2:
             lines.append(f"**{evidence.signal_label} ({evidence.signal_code}) — {evidence.status}**")
             if evidence.analysis:
                 lines.append(evidence.analysis)
@@ -323,14 +350,20 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
             lines.append("")
         lines.append("")
     else:
-        lines.append("No phase-2 signal evidence was produced.")
+        lines.append("No confirmed phase-2 signal evidence was produced.")
         lines.append("")
 
-    if report.phase2_footnotes:
+    if confirmed_phase2:
         lines.append("Footnotes")
-        for index, footnote in enumerate(report.phase2_footnotes, 1):
-            lines.append(f"{index}.")
-            lines.extend(_format_structured_footnote_lines(footnote))
+        for index, evidence in enumerate(confirmed_phase2, 1):
+            if report.phase2_footnotes and index - 1 < len(report.phase2_footnotes):
+                footnote = report.phase2_footnotes[index - 1]
+            else:
+                footnote = _structured_footnote_from_evidence(evidence)
+            structured_lines = _format_structured_footnote_lines(footnote)
+            lines.append(f"{index}. {structured_lines[0]}")
+            for line in structured_lines[1:]:
+                lines.append(f"   {line}")
             lines.append("")
         lines.append("")
 
@@ -359,6 +392,8 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
                 lines.append("")
             lines.append("**Relevant Protiviti Credentials (if applicable)**")
             resolved_credentials = phase_credentials.get((opportunity.derived_from_signal or "").upper(), [])
+            if not resolved_credentials and index - 1 < len(phase_credentials_by_position):
+                resolved_credentials = phase_credentials_by_position[index - 1]
             if resolved_credentials:
                 lines.extend(
                     _format_phase_credential_cards(

@@ -134,10 +134,20 @@ class FSSignalEvidenceDigestor:
                 parsed,
                 available_sources=set(available_sources),
             )
+            entity_aliases = self._build_entity_aliases(
+                company_focus=trigger.company_focus,
+                deep_research_markdown=deep_research_markdown,
+            )
             enforced = self._recover_exec_transition_signal(
                 enforced,
                 deep_research_markdown=deep_research_markdown,
                 available_sources=available_sources,
+                entity_aliases=entity_aliases,
+            )
+            enforced = self._enforce_exec_transition_entity_scope(
+                signal_evidence=enforced,
+                deep_research_markdown=deep_research_markdown,
+                entity_aliases=entity_aliases,
             )
 
             diagnostics["signals_returned"] = len(enforced)
@@ -239,6 +249,7 @@ class FSSignalEvidenceDigestor:
         signal_evidence: List[SignalEvidence],
         deep_research_markdown: str,
         available_sources: List[str],
+        entity_aliases: Set[str],
     ) -> List[SignalEvidence]:
         """Promote exec-transition when explicit appointment evidence exists in text.
 
@@ -257,25 +268,13 @@ class FSSignalEvidenceDigestor:
             return signal_evidence
 
         text = deep_research_markdown or ""
-        movement_pattern = re.compile(
-            r"("
-            r"\b(joining|joined|rejoined|appointed|named|hired|promoted|succeeded)\b.{0,220}\b("
-            r"business chief risk officer|chief risk(?:\s*&\s*regulatory|\s+and\s+regulatory)? officer|"
-            r"chief financial officer|chief compliance officer|head of risk|"
-            r"\bcro\b|\bcfo\b|\bcco\b|\bcrro\b"
-            r")\b"
-            r"|"
-            r"\b(board of directors|serve on .* board|committee assignment|committee placements?|board refresh|board expansion)\b"
-            r")",
-            re.IGNORECASE | re.DOTALL,
-        )
-        if not movement_pattern.search(text):
+        if not self._has_entity_linked_movement(text=text, entity_aliases=entity_aliases):
             return signal_evidence
 
         if current.source_url:
             preferred_source = current.source_url
         else:
-            def _exec_score(url: str) -> tuple[int, int, int]:
+            def _exec_score(url: str) -> tuple[int, int, int, int]:
                 normalized = (url or "").strip().lower()
                 try:
                     host = urlparse(url).netloc.lower().strip().removeprefix("www.")
@@ -299,6 +298,9 @@ class FSSignalEvidenceDigestor:
                 for keyword in movement_keywords:
                     if keyword in normalized:
                         movement_bonus += 1
+                entity_bonus = 0
+                if "capitalone" in normalized or "discover" in normalized or "global-payments-network" in normalized:
+                    entity_bonus = 2
                 host_bonus = 0
                 if "linkedin.com" in host:
                     host_bonus = 5
@@ -310,12 +312,12 @@ class FSSignalEvidenceDigestor:
                     host_bonus = 2
                 elif "investor." in host:
                     host_bonus = 2
-                return (movement_bonus, host_bonus, self._source_guardrails.score_url(url))
+                return (entity_bonus, movement_bonus, host_bonus, self._source_guardrails.score_url(url))
 
-            def _score_sort_key(url: str) -> tuple[int, int, int, int]:
-                movement_bonus, host_bonus, guardrail_score = _exec_score(url)
+            def _score_sort_key(url: str) -> tuple[int, int, int, int, int]:
+                entity_bonus, movement_bonus, host_bonus, guardrail_score = _exec_score(url)
                 # Prefer richer evidence URLs when scores tie.
-                return (movement_bonus, host_bonus, guardrail_score, len(url))
+                return (entity_bonus, movement_bonus, host_bonus, guardrail_score, len(url))
 
             preferred_source = ""
             if available_sources:
@@ -335,6 +337,158 @@ class FSSignalEvidenceDigestor:
             ),
         )
         return signal_evidence
+
+    def _movement_pattern(self) -> re.Pattern:
+        return re.compile(
+            r"("
+            r"\b(joining|joined|rejoined|appointed|named|hired|promoted|succeeded)\b.{0,260}\b("
+            r"business chief risk officer|chief risk(?:\s*&\s*regulatory|\s+and\s+regulatory)? officer|"
+            r"chief financial officer|chief compliance officer|head of risk|"
+            r"\bcro\b|\bcfo\b|\bcco\b|\bcrro\b"
+            r")\b"
+            r"|"
+            r"\b(board of directors|serve on .* board|committee assignment|committee placements?|board refresh|board expansion)\b"
+            r")",
+            re.IGNORECASE | re.DOTALL,
+        )
+
+    def _build_entity_aliases(
+        self,
+        company_focus: Optional[str],
+        deep_research_markdown: str,
+    ) -> Set[str]:
+        aliases: Set[str] = set()
+        focus = (company_focus or "").strip().lower()
+        if not focus:
+            return aliases
+
+        aliases.add(focus)
+        aliases.add(focus.replace(" ", ""))
+
+        if "capital one" in focus:
+            aliases.update(
+                {
+                    "capital one",
+                    "capitalone",
+                    "discover",
+                    "discover financial",
+                    "discover financial services",
+                }
+            )
+            if "global payments network" in (deep_research_markdown or "").lower():
+                aliases.add("global payments network")
+        elif "discover" in focus:
+            aliases.update({"discover", "discover financial", "discover financial services"})
+
+        return {alias for alias in aliases if alias}
+
+    def _is_entity_linked(
+        self,
+        text: str,
+        entity_aliases: Set[str],
+    ) -> bool:
+        if not entity_aliases:
+            return True
+        normalized = (text or "").lower()
+        if not normalized:
+            return False
+        return any(alias in normalized for alias in entity_aliases)
+
+    def _has_entity_linked_movement(
+        self,
+        text: str,
+        entity_aliases: Set[str],
+    ) -> bool:
+        if not text:
+            return False
+        pattern = self._movement_pattern()
+        for match in pattern.finditer(text):
+            start = max(0, match.start() - 120)
+            end = min(len(text), match.end() + 120)
+            window = text[start:end]
+            if self._is_entity_linked(window, entity_aliases):
+                return True
+        return False
+
+    def _enforce_exec_transition_entity_scope(
+        self,
+        signal_evidence: List[SignalEvidence],
+        deep_research_markdown: str,
+        entity_aliases: Set[str],
+    ) -> List[SignalEvidence]:
+        if not entity_aliases:
+            return signal_evidence
+
+        normalized: List[SignalEvidence] = []
+        for item in signal_evidence:
+            if item.signal_code != "FS.EXEC.TRANSITION":
+                normalized.append(item)
+                continue
+
+            combined = " ".join(
+                [
+                    item.evidence_quote or "",
+                    item.source_title or "",
+                    item.source_url or "",
+                ]
+            )
+            linked = self._is_entity_linked(combined, entity_aliases)
+            if not linked and item.evidence_quote:
+                linked = self._is_alias_near_quote(
+                    text=deep_research_markdown or "",
+                    quote=item.evidence_quote,
+                    entity_aliases=entity_aliases,
+                )
+            if (
+                not linked
+                and "deterministic recovery" in (item.analysis or "").lower()
+                and not item.evidence_quote
+            ):
+                linked = self._has_entity_linked_movement(
+                    text=deep_research_markdown or "",
+                    entity_aliases=entity_aliases,
+                )
+
+            if item.status == "Confirmed" and not linked:
+                analysis = (
+                    f"{item.analysis} Demoted: movement evidence was not explicitly linked to target company scope."
+                    if item.analysis
+                    else "Demoted: movement evidence was not explicitly linked to target company scope."
+                )
+                normalized.append(
+                    SignalEvidence(
+                        signal_code=item.signal_code,
+                        signal_label=item.signal_label,
+                        status="Insufficient",
+                        evidence_quote=item.evidence_quote,
+                        source_url=item.source_url,
+                        source_title=item.source_title,
+                        analysis=analysis,
+                    )
+                )
+            else:
+                normalized.append(item)
+
+        return normalized
+
+    def _is_alias_near_quote(
+        self,
+        text: str,
+        quote: str,
+        entity_aliases: Set[str],
+    ) -> bool:
+        if not text or not quote:
+            return False
+        normalized_text = text.lower()
+        normalized_quote = quote.strip().lower()
+        if not normalized_quote:
+            return False
+        idx = normalized_text.find(normalized_quote)
+        if idx < 0:
+            return False
+        start = max(0, idx - 140)
+        end = min(len(normalized_text), idx + len(normalized_quote) + 140)
+        return self._is_entity_linked(normalized_text[start:end], entity_aliases)
 
     def _extract_urls(self, text: str) -> List[str]:
         if not text:

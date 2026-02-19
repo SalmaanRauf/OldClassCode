@@ -18,6 +18,7 @@ Generate a single research prompt that:
 4. Mentions filtering criteria (geography, minimum value, time window) if provided
 5. References relevant service lines if specified
 6. Incorporates any additional context or focus areas from "Other Context"
+7. If Sector is Financial Services and a Company is provided, add a strict company-scope sentence that prevents broad peer-company drift.
 
 **Output Format:**
 Output ONLY the research prompt text. No explanations, no headers, no formatting.
@@ -26,6 +27,8 @@ Output ONLY the research prompt text. No explanations, no headers, no formatting
 - Be deterministic: same inputs should produce nearly identical output
 - If a field is empty or "N/A", omit it from the prompt
 - Keep the prompt concise but comprehensive (2-4 sentences)
+- For Financial Services with `Company/Topic = Capital One`, include this exact sentence:
+  `Anchor findings to Capital One/Discover only; exclude unrelated peer-company personnel moves.`
 
 **Example Output:**
 Research Defense sector opportunities for Lockheed Martin focusing on CMMC and IV&V signals. Filter for CONUS geography with minimum contract value of $10M within the last 90 days. Prioritize opportunities aligned with Model Validation and Cybersecurity Compliance service lines.

@@ -347,12 +347,16 @@ class FinalAnalystAgent:
             
             # Build top opportunities
             top_opps = []
-            for opp_data in data.get("top_opportunities", [])[:3]:
+            for index, opp_data in enumerate(data.get("top_opportunities", [])[:3]):
                 # Find matching original opportunity
                 original_opp = self._find_opportunity(
                     opp_data.get("title", ""),
                     research.opportunities
                 )
+                if original_opp is None and index < len(research.opportunities):
+                    # Deterministic fallback for aggressively rewritten titles:
+                    # keep canonical opportunity ordering from source extraction.
+                    original_opp = research.opportunities[index]
                 source_response = self._resolve_credentials_response(
                     opp_title=str(opp_data.get("title", "")),
                     original_opp=original_opp,
@@ -779,6 +783,8 @@ class FinalAnalystAgent:
 
         credentials_text = parsed["Credentials Agent Findings"]
         credentials_text = self._strip_failure_lines(credentials_text)
+        credentials_text = self._strip_credentials_metrics_lines(credentials_text)
+        credentials_text = self._strip_top_matched_line(credentials_text)
         credentials_text = self._ensure_credentials_counts_lines(
             credentials_text=credentials_text,
             credentials_status_counts=credentials_status_counts,
@@ -830,6 +836,35 @@ class FinalAnalystAgent:
             if any(token in lowered for token in blocked_tokens):
                 continue
             kept.append(line)
+        return "\n".join(kept).strip()
+
+    def _strip_credentials_metrics_lines(self, text: str) -> str:
+        if not text:
+            return ""
+
+        patterns = [
+            re.compile(r"\blookups?\s*executed\b", re.IGNORECASE),
+            re.compile(r"\bmatched\s+opportunities\b", re.IGNORECASE),
+            re.compile(r"\bno[- ]match\s+opportunities\b", re.IGNORECASE),
+            re.compile(r"\bmatched\s*:\s*\d+\b", re.IGNORECASE),
+            re.compile(r"\bno\s*match\s*:\s*\d+\b", re.IGNORECASE),
+        ]
+
+        kept: List[str] = []
+        for line in text.splitlines():
+            if any(pattern.search(line) for pattern in patterns):
+                continue
+            kept.append(line)
+        return "\n".join(kept).strip()
+
+    def _strip_top_matched_line(self, text: str) -> str:
+        if not text:
+            return ""
+        kept = [
+            line
+            for line in text.splitlines()
+            if "top matched credentials by opportunity" not in line.lower()
+        ]
         return "\n".join(kept).strip()
 
     def _split_three_block_summary(self, summary: str) -> Optional[Dict[str, str]]:

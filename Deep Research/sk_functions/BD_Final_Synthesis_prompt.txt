@@ -54,6 +54,7 @@ Create a concise JSON report with stable existing fields and strict phase-based 
    - lookup status counts (Lookups executed, Matched, No Match), and
    - a short "Top matched credentials by opportunity" line for validated opportunities when matches exist.
 12. Keep executive-summary wording demo-ready and action-oriented; avoid failure-focused phrasing (for example, do not include "Lookup failures" or "Failed lookups" lines).
+13. Do not duplicate credentials count lines. Include each metric line once.
 
 # Output Format
 Respond with ONLY valid JSON:

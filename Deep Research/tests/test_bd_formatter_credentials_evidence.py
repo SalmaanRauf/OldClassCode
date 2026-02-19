@@ -122,13 +122,26 @@ def _build_phase_report() -> MDReport:
                 source_url="https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro",
                 source_title="FinTech Magazine",
                 analysis="Named risk leadership aligns to payments expansion governance.",
-            )
+            ),
+            SignalEvidence(
+                signal_code="FS.MODEL_RISK.FINDINGS",
+                signal_label="Model Risk Findings",
+                status="Insufficient",
+                evidence_quote="No public model findings were explicitly identified.",
+                source_url="https://example.com/model-risk",
+                source_title="Example",
+                analysis="Insufficient evidence for confirmation.",
+            ),
         ],
         phase2_footnotes=[
             "Verbatim quote: \"Capital One appointed ...\"\n"
             "Source title: FinTech Magazine\n"
             "Canonical URL: https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro\n"
-            "Evidentiary linkage: Supports documented executive transition."
+            "Evidentiary linkage: Supports documented executive transition.",
+            "Verbatim quote: \"No public model findings were explicitly identified.\"\n"
+            "Source title: Example\n"
+            "Canonical URL: https://example.com/model-risk\n"
+            "Evidentiary linkage: This should not render in confirmed-only mode."
         ],
         phase3_opportunities=[
             PhaseOpportunity(
@@ -172,9 +185,14 @@ def test_formatter_renders_phase_layout_by_default():
     assert "Governing Headline:" in content
     assert "Executive Transition (FS.EXEC.TRANSITION)" in content
     assert "— Confirmed" in content
+    assert "Model Risk Findings (FS.MODEL_RISK.FINDINGS)" not in content
     assert "Verbatim quote:" in content
     assert "Canonical URL:" in content
-    assert "1." in content
+    assert "1. Verbatim quote:" in content
+    assert "   Source title:" in content
+    assert "   Canonical URL:" in content
+    assert "   Evidentiary linkage:" in content
+    assert "2. Verbatim quote:" not in content
     assert "Evidentiary linkage:" in content
     assert "#### Opportunity 1 — FS.EXEC.TRANSITION" in content
     assert "**Opportunity Overview**" in content
@@ -225,6 +243,16 @@ def test_formatter_can_show_diagnostics_with_toggle():
     assert "### Credentials Evidence (Full I/O)" in content
     assert "### Credentials Batch I/O (Full)" in content
     assert "Lookup Failed=" not in content
+
+
+def test_formatter_uses_position_fallback_for_credentials_cards_when_signal_code_unavailable():
+    report = _build_phase_report()
+    report.top_opportunities[0].opportunity.title = "Program A rewritten by synthesis"
+    section = format_bd_report_as_section(report)
+
+    content = section["content"]
+    assert "Matched credential: Technology Risk Management & Governance" in content
+    assert "Matched credential: Operational Risk Management Governance and Framework Support" in content
 
 
 def test_non_phase_layout_remains_legacy():

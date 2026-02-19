@@ -112,6 +112,7 @@ class PromptGenerator:
             generated = str(result).strip() if result else None
             
             if generated:
+                generated = self._apply_company_scope_guardrail(generated, params)
                 logger.info(f"Generated prompt: {generated[:100]}...")
                 return generated
             else:
@@ -155,8 +156,34 @@ class PromptGenerator:
         # Other context
         if params.other_context and params.other_context.lower() != "n/a":
             parts.append(f"Additional context: {params.other_context}")
-        
-        return " ".join(parts)
+
+        prompt = " ".join(parts)
+        return self._apply_company_scope_guardrail(prompt, params)
+
+    def _apply_company_scope_guardrail(self, prompt: str, params: ResearchParameters) -> str:
+        """Inject deterministic company-scope sentence for FS runs to reduce broad drift."""
+        base = (prompt or "").strip()
+        scope_sentence = self._company_scope_sentence(params)
+        if not scope_sentence:
+            return base
+
+        if scope_sentence.lower() in base.lower():
+            return base
+        if not base:
+            return scope_sentence
+        return f"{base} {scope_sentence}"
+
+    def _company_scope_sentence(self, params: ResearchParameters) -> str:
+        sector = (params.sector or "").strip().lower().replace(" ", "_")
+        company = (params.company or "").strip()
+        if not company or sector != "financial_services":
+            return ""
+
+        if company.lower() == "capital one":
+            return "Anchor findings to Capital One/Discover only; exclude unrelated peer-company personnel moves."
+        return (
+            f"Anchor findings to {company} only; exclude unrelated peer-company personnel moves."
+        )
 
 
 # Global instance

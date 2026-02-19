@@ -428,3 +428,48 @@ Capital One appointed a Business Chief Risk Officer for its new Global Payments 
     assert len(signal_evidence) == 1
     assert signal_evidence[0].status == "Confirmed"
     assert "linkedin.com" in signal_evidence[0].source_url
+
+
+def test_digest_demotes_peer_company_people_movement_without_capital_one_linkage():
+    markdown = """
+Citi appointed a new Chief Financial Officer to oversee enterprise finance transformation.
+
+# Sources
+- https://www.bankingdive.com/news/citi-mark-mason-cfo-step-down-march-gonzalo-luchetti-fraser-sieg-luft-habner/806137/
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Confirmed",
+                "evidence_quote": "Citi appointed a new Chief Financial Officer.",
+                "source_url": "https://www.bankingdive.com/news/citi-mark-mason-cfo-step-down-march-gonzalo-luchetti-fraser-sieg-luft-habner/806137/",
+                "source_title": "Banking Dive",
+                "analysis": "Leadership transition reported.",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Insufficient"
+    assert "target company scope" in signal_evidence[0].analysis.lower()
