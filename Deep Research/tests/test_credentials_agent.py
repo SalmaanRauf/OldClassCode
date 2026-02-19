@@ -340,6 +340,84 @@ class TestResponseParsing:
         assert len(result.matches) == 1
         assert result.matches[0].technologies_used == []
 
+    def test_single_parse_recovers_valid_json_with_trailing_malformed_text(self, agent):
+        raw = (
+            '{"matches":[{"title":"Recovered Credential","client_challenge":"Challenge",'
+            '"approach":"Approach","value_provided":"Value","industry":"Financial Services",'
+            '"technologies_used":[],"url":"https://ishare.protiviti.com/cred/recovered"}],'
+            '"no_matches_found":false}\n'
+            'Trailing content {that is not valid json'
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity")
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 1
+        assert result.matches[0].title == "Recovered Credential"
+
+    def test_single_parse_dedupes_duplicate_urls_and_caps_matches(self, agent):
+        raw = json.dumps(
+            {
+                "matches": [
+                    {
+                        "title": "Credential 1",
+                        "client_challenge": "Challenge 1",
+                        "approach": "Approach 1",
+                        "value_provided": "Value 1",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/1",
+                    },
+                    {
+                        "title": "Credential 1 Duplicate",
+                        "client_challenge": "Challenge 1",
+                        "approach": "Approach 1",
+                        "value_provided": "Value 1",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/1",
+                    },
+                    {
+                        "title": "Credential 2",
+                        "client_challenge": "Challenge 2",
+                        "approach": "Approach 2",
+                        "value_provided": "Value 2",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/2",
+                    },
+                    {
+                        "title": "Credential 3",
+                        "client_challenge": "Challenge 3",
+                        "approach": "Approach 3",
+                        "value_provided": "Value 3",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/3",
+                    },
+                    {
+                        "title": "Credential 4",
+                        "client_challenge": "Challenge 4",
+                        "approach": "Approach 4",
+                        "value_provided": "Value 4",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/4",
+                    },
+                ],
+                "no_matches_found": False,
+            }
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity")
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 3
+        urls = [match.url for match in result.matches]
+        assert len(set(urls)) == 3
+        assert "https://ishare.protiviti.com/cred/1" in urls
+        assert "https://ishare.protiviti.com/cred/4" not in urls
+
 
 # =============================================================================
 # Integration Tests (with mocks)

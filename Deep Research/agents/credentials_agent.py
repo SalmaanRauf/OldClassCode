@@ -17,7 +17,7 @@ import asyncio
 import logging
 from urllib.parse import urlparse
 from time import perf_counter
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Set
 
 from services.contextfree_client import ContextFreeClient, ContextFreeError
 from models.bd_schemas import (
@@ -29,6 +29,7 @@ from models.bd_schemas import (
 )
 
 logger = logging.getLogger(__name__)
+MAX_SINGLE_MATCHES = 3
 
 
 # =============================================================================
@@ -755,13 +756,18 @@ class CredentialsAgent:
     def _coerce_matches(self, raw_matches: object, max_matches: int) -> Tuple[List[CredentialMatch], int]:
         matches: List[CredentialMatch] = []
         filtered_invalid_url_count = 0
+        seen_urls: Set[str] = set()
         if not isinstance(raw_matches, list):
             return matches, filtered_invalid_url_count
         for match_data in raw_matches:
             if not isinstance(match_data, dict):
                 continue
-            if not self._is_valid_credential_url(match_data.get("url", "")):
+            url = str(match_data.get("url", "")).strip()
+            if not self._is_valid_credential_url(url):
                 filtered_invalid_url_count += 1
+                continue
+            normalized_url = url.lower()
+            if normalized_url in seen_urls:
                 continue
             try:
                 matches.append(
@@ -775,9 +781,10 @@ class CredentialsAgent:
                             match_data.get("technologies_used", [])
                         ),
                         emd=match_data.get("emd"),
-                        url=match_data.get("url", ""),
+                        url=url,
                     )
                 )
+                seen_urls.add(normalized_url)
             except Exception as e:
                 logger.warning("Failed to parse batch credential match: %s", e)
             if len(matches) >= max_matches:
@@ -850,35 +857,11 @@ class CredentialsAgent:
         
         # Try to parse as JSON
         try:
-            # Handle JSON embedded in markdown code blocks
-            json_str = self._extract_json(raw)
-            data = json.loads(json_str)
-            
-            matches = []
-            filtered_invalid_url_count = 0
-            for match_data in data.get("matches", []):
-                if not isinstance(match_data, dict):
-                    continue
-                if not self._is_valid_credential_url(match_data.get("url", "")):
-                    filtered_invalid_url_count += 1
-                    continue
-                try:
-                    match = CredentialMatch(
-                        title=match_data.get("title", "Unknown"),
-                        client_challenge=match_data.get("client_challenge", ""),
-                        approach=match_data.get("approach", ""),
-                        value_provided=match_data.get("value_provided", ""),
-                        industry=match_data.get("industry", ""),
-                        technologies_used=self._coerce_technologies_used(
-                            match_data.get("technologies_used", [])
-                        ),
-                        emd=match_data.get("emd"),
-                        url=match_data.get("url", "")
-                    )
-                    matches.append(match)
-                except Exception as e:
-                    logger.warning(f"Failed to parse credential match: {e}")
-                    continue
+            data = self._parse_single_response_payload(raw)
+            matches, filtered_invalid_url_count = self._coerce_matches(
+                data.get("matches", []),
+                MAX_SINGLE_MATCHES,
+            )
 
             has_matches = len(matches) > 0
             lookup_status = "Matched" if has_matches else "No Match"
@@ -963,6 +946,26 @@ class CredentialsAgent:
                 diagnostics=diagnostics
             )
 
+    def _parse_single_response_payload(self, raw: str) -> Dict[str, object]:
+        """Parse response payload for single-opportunity lookups with salvage fallback."""
+        primary_candidate = self._extract_json(raw)
+        parse_error: Optional[json.JSONDecodeError] = None
+        try:
+            payload = json.loads(primary_candidate)
+            if isinstance(payload, dict):
+                return payload
+        except json.JSONDecodeError as e:
+            parse_error = e
+
+        recovered = self._extract_first_valid_json_object(raw, required_key="matches")
+        if recovered is not None:
+            return recovered
+
+        if parse_error is not None:
+            raise parse_error
+
+        raise json.JSONDecodeError("Could not locate JSON object in response.", raw, 0)
+
     def _build_failure_response(
         self,
         opportunity_title: str,
@@ -1021,6 +1024,63 @@ class CredentialsAgent:
             return text[start:end]
         
         return text
+
+    def _extract_first_valid_json_object(
+        self,
+        text: str,
+        required_key: Optional[str] = None,
+    ) -> Optional[Dict[str, object]]:
+        """Extract the first valid JSON object from arbitrary text."""
+        if not text:
+            return None
+
+        for idx, ch in enumerate(text):
+            if ch != "{":
+                continue
+            candidate = self._extract_balanced_json_object(text, idx)
+            if not candidate:
+                continue
+            try:
+                payload = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if required_key and required_key not in payload:
+                continue
+            return payload
+        return None
+
+    def _extract_balanced_json_object(self, text: str, start_index: int) -> Optional[str]:
+        """Return a balanced JSON object substring starting at start_index."""
+        if start_index < 0 or start_index >= len(text) or text[start_index] != "{":
+            return None
+
+        depth = 0
+        in_string = False
+        escape = False
+        for idx in range(start_index, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+            if ch == "{":
+                depth += 1
+                continue
+            if ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start_index:idx + 1]
+        return None
 
     def _is_valid_credential_url(self, url: object) -> bool:
         if not isinstance(url, str):
