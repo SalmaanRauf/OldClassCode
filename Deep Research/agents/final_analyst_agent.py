@@ -353,30 +353,19 @@ class FinalAnalystAgent:
                     opp_data.get("title", ""),
                     research.opportunities
                 )
-                
-                # Build credential matches
-                llm_cred_matches = []
-                for cred_data in opp_data.get("credentials", []):
-                    llm_cred_matches.append(CredentialMatch(
-                        title=cred_data.get("title", ""),
-                        client_challenge="",
-                        value_provided="",
-                        url=cred_data.get("url", "")
-                    ))
-
-                source_title = (original_opp.title if original_opp else opp_data.get("title", ""))
-                source_response = credentials.get(source_title, credentials.get(opp_data.get("title", ""), None))
+                source_response = self._resolve_credentials_response(
+                    opp_title=str(opp_data.get("title", "")),
+                    original_opp=original_opp,
+                    credentials=credentials,
+                )
                 lookup_status = source_response.lookup_status if source_response else "No Match"
 
-                if source_response:
-                    if lookup_status == "Matched" and source_response.matches:
-                        # Canonical source of truth is parsed Credentials Agent output.
-                        cred_matches = source_response.matches[:2]
-                    else:
-                        cred_matches = []
+                if source_response and lookup_status == "Matched" and source_response.matches:
+                    # Canonical source of truth is parsed Credentials Agent output.
+                    cred_matches = source_response.matches[:2]
                 else:
-                    # Fallback only when a credentials source response is unavailable.
-                    cred_matches = llm_cred_matches[:2]
+                    # Do not consume LLM-provided credential stubs when canonical lookup is absent/no-match.
+                    cred_matches = []
 
                 validation_status = opp_data.get("validation_status", "No Internal Data")
                 if validation_status not in ("Validated", "Partial", "No Internal Data"):
@@ -484,6 +473,74 @@ class FinalAnalystAgent:
             if opp.title.lower() in title_lower or title_lower in opp.title.lower():
                 return opp
         return None
+
+    def _resolve_credentials_response(
+        self,
+        opp_title: str,
+        original_opp: Optional[Opportunity],
+        credentials: Dict[str, CredentialsResponse],
+    ) -> Optional[CredentialsResponse]:
+        """Resolve canonical credentials response even when synthesis rewrites/truncates titles."""
+        candidates = [opp_title, original_opp.title if original_opp else ""]
+        for candidate in candidates:
+            if candidate and candidate in credentials:
+                return credentials[candidate]
+
+        signal_codes: List[str] = []
+        for candidate in candidates:
+            code = self._extract_signal_code(candidate)
+            if code and code not in signal_codes:
+                signal_codes.append(code)
+        for signal_code in signal_codes:
+            scoped = [
+                (title, response)
+                for title, response in credentials.items()
+                if self._extract_signal_code(title) == signal_code
+            ]
+            if len(scoped) == 1:
+                return scoped[0][1]
+            if scoped:
+                scoped.sort(key=lambda item: len(item[0]), reverse=True)
+                return scoped[0][1]
+
+        normalized_targets = [
+            self._normalize_lookup_key(candidate)
+            for candidate in candidates
+            if candidate
+        ]
+        normalized_targets = [target for target in normalized_targets if target]
+        if not normalized_targets:
+            return None
+
+        fuzzy_hits: List[tuple[str, CredentialsResponse]] = []
+        for title, response in credentials.items():
+            normalized_title = self._normalize_lookup_key(title)
+            if not normalized_title:
+                continue
+            if any(
+                normalized_title in normalized_target or normalized_target in normalized_title
+                for normalized_target in normalized_targets
+            ):
+                fuzzy_hits.append((title, response))
+
+        if len(fuzzy_hits) == 1:
+            return fuzzy_hits[0][1]
+        if fuzzy_hits:
+            fuzzy_hits.sort(key=lambda item: len(item[0]), reverse=True)
+            return fuzzy_hits[0][1]
+        return None
+
+    def _extract_signal_code(self, text: str) -> Optional[str]:
+        if not text:
+            return None
+        match = re.match(r"\s*(FS\.[A-Z0-9_.]+)\s*:", text.strip(), re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1).upper()
+
+    def _normalize_lookup_key(self, text: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+        return re.sub(r"\s+", " ", normalized)
     
     def _extract_json(self, text: str) -> str:
         """Extract JSON from text, handling markdown code blocks."""

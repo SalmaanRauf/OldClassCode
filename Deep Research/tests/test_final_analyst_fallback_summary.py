@@ -174,6 +174,126 @@ def test_parse_report_prefers_source_credentials_and_clears_non_match_stubs():
     assert opp2.validation_status == "No Internal Data"
 
 
+def test_parse_report_resolves_credentials_by_signal_code_when_title_rewritten():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.REGULATORY.DEADLINE"])
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(
+                title="FS.REGULATORY.DEADLINE: Formal regulatory deliverable timelines create near-term pressure on governance, document control, and evidence traceability.",
+                scope="Scope",
+                confidence="High",
+            )
+        ]
+    )
+    credentials = {
+        "FS.REGULATORY.DEADLINE: Formal regulatory deliverable timelines create near-term pressure on governance, document control, and evidence traceability.": CredentialsResponse(
+            opportunity_title="FS.REGULATORY.DEADLINE: Formal regulatory deliverable timelines create near-term pressure on governance, document control, and evidence traceability.",
+            matches=[
+                CredentialMatch(
+                    title="Canonical Regulatory Deadline Credential",
+                    client_challenge="Challenge",
+                    approach="Approach",
+                    value_provided="Value",
+                    industry="Financial Services",
+                    technologies_used=[],
+                    url="https://ishare.protiviti.com/cred/deadline",
+                )
+            ],
+            lookup_status="Matched",
+        )
+    }
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS research",
+            "executive_summary": "Summary",
+            "top_opportunities": [
+                {
+                    "title": "FS.REGULATORY.DEADLINE: Formal regulatory deliverable timelines create near-term pressure on governance, documentation",
+                    "scope": "Scope",
+                    "validation_status": "No Internal Data",
+                    "credentials": [
+                        {"title": "LLM Stub", "url": "https://stub.local"}
+                    ],
+                }
+            ],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials=credentials,
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=1,
+        lookups_executed_count=1,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 1, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    opp = report.top_opportunities[0]
+    assert opp.credentials_lookup_status == "Matched"
+    assert opp.validation_status == "Partial"
+    assert len(opp.credentials) == 1
+    assert opp.credentials[0].title == "Canonical Regulatory Deadline Credential"
+
+
+def test_parse_report_does_not_use_llm_stub_credentials_when_canonical_missing():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(title="FS.EXEC.TRANSITION: Executive transition.", scope="Scope", confidence="Medium")
+        ]
+    )
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS research",
+            "executive_summary": "Summary",
+            "top_opportunities": [
+                {
+                    "title": "FS.EXEC.TRANSITION: Executive transition (rewritten).",
+                    "scope": "Scope",
+                    "validation_status": "Validated",
+                    "credentials": [
+                        {"title": "LLM Hallucinated Credential", "url": "https://stub.local"}
+                    ],
+                }
+            ],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "Medium confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials={},
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=1,
+        lookups_executed_count=1,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 0, "No Match": 1, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    opp = report.top_opportunities[0]
+    assert opp.credentials_lookup_status == "No Match"
+    assert opp.validation_status == "No Internal Data"
+    assert opp.credentials == []
+
+
 def test_fallback_report_defaults_to_serial_lookup_mode():
     agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
     trigger = BDTrigger(sector="Defense", signals=["CMMC"])

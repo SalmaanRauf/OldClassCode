@@ -11,6 +11,7 @@ Orchestrates the sequence:
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime
 from typing import Optional, Callable, Dict, List, Any
 from pathlib import Path
@@ -493,7 +494,7 @@ class BDOrchestrator:
         report.credentials_evidence = list(diagnostics.values())
         for opp_report in report.top_opportunities:
             title = opp_report.opportunity.title
-            cred_resp = credentials_results.get(title)
+            cred_resp = self._resolve_credentials_response_for_title(title, credentials_results)
             if not cred_resp:
                 continue
 
@@ -507,6 +508,95 @@ class BDOrchestrator:
                 opp_report.credentials = []
                 # Preserve legacy validation labels while surfacing explicit status separately.
                 opp_report.validation_status = "No Internal Data"
+
+        if report.phase3_opportunities:
+            for phase_opp in report.phase3_opportunities:
+                cred_resp = self._resolve_credentials_response_for_signal(
+                    phase_opp.derived_from_signal,
+                    credentials_results,
+                )
+                if not cred_resp:
+                    continue
+                if cred_resp.lookup_status == "Matched" and cred_resp.matches:
+                    titles = [match.title for match in cred_resp.matches[:2] if match.title]
+                    if titles:
+                        phase_opp.credentials_summary = (
+                            "Matched credentials: " + "; ".join(titles) + "."
+                        )
+                elif cred_resp.lookup_status == "Lookup Failed":
+                    phase_opp.credentials_summary = (
+                        "Credential lookup failed for this opportunity in this run."
+                    )
+                else:
+                    phase_opp.credentials_summary = "No materially aligned credentials identified."
+
+    def _resolve_credentials_response_for_title(
+        self,
+        title: str,
+        credentials_results: Dict[str, CredentialsResponse],
+    ) -> Optional[CredentialsResponse]:
+        if title in credentials_results:
+            return credentials_results[title]
+
+        signal_code = self._extract_signal_code(title)
+        if signal_code:
+            response = self._resolve_credentials_response_for_signal(signal_code, credentials_results)
+            if response:
+                return response
+
+        normalized_title = self._normalize_lookup_key(title)
+        if not normalized_title:
+            return None
+
+        fuzzy_hits: List[tuple[str, CredentialsResponse]] = []
+        for key, response in credentials_results.items():
+            normalized_key = self._normalize_lookup_key(key)
+            if not normalized_key:
+                continue
+            if normalized_key in normalized_title or normalized_title in normalized_key:
+                fuzzy_hits.append((key, response))
+
+        if len(fuzzy_hits) == 1:
+            return fuzzy_hits[0][1]
+        if fuzzy_hits:
+            fuzzy_hits.sort(key=lambda item: len(item[0]), reverse=True)
+            return fuzzy_hits[0][1]
+        return None
+
+    def _resolve_credentials_response_for_signal(
+        self,
+        signal_code: Optional[str],
+        credentials_results: Dict[str, CredentialsResponse],
+    ) -> Optional[CredentialsResponse]:
+        if not signal_code:
+            return None
+        normalized_code = signal_code.upper().strip()
+        if not normalized_code.startswith("FS."):
+            return None
+
+        scoped = [
+            (key, response)
+            for key, response in credentials_results.items()
+            if self._extract_signal_code(key) == normalized_code
+        ]
+        if len(scoped) == 1:
+            return scoped[0][1]
+        if scoped:
+            scoped.sort(key=lambda item: len(item[0]), reverse=True)
+            return scoped[0][1]
+        return None
+
+    def _extract_signal_code(self, text: str) -> Optional[str]:
+        if not text:
+            return None
+        match = re.match(r"\s*(FS\.[A-Z0-9_.]+)\s*:", text.strip(), re.IGNORECASE)
+        if not match:
+            return None
+        return match.group(1).upper()
+
+    def _normalize_lookup_key(self, text: str) -> str:
+        normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").lower()).strip()
+        return re.sub(r"\s+", " ", normalized)
 
     def _attach_pipeline_diagnostics(self, report: MDReport, ctx: BDContext) -> None:
         """Attach pipeline-level diagnostics for rendering and traceability."""

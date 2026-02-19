@@ -565,6 +565,131 @@ class TestBatchedCredentials:
         assert no_match.validation_status == "No Internal Data"
 
     @pytest.mark.asyncio
+    async def test_signal_code_resolution_updates_top_opportunity_and_phase3_credentials_summary(
+        self, mock_extractor, sample_trigger
+    ):
+        """Should resolve canonical credentials even when synthesized titles are rewritten/truncated."""
+        signal_title = (
+            "FS.REGULATORY.DEADLINE: Formal regulatory deliverable timelines create near-term "
+            "pressure on governance, document control, and evidence traceability."
+        )
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            opportunities=[
+                Opportunity(title=signal_title, scope="Scope", confidence="High"),
+            ]
+        )
+
+        credentials_agent = MagicMock(spec=CredentialsAgent)
+        credentials_agent.find_credentials_batch = AsyncMock(return_value=(
+            {
+                signal_title: CredentialsResponse(
+                    opportunity_title=signal_title,
+                    matches=[
+                        CredentialMatch(
+                            title="Canonical Deadline Credential",
+                            client_challenge="Challenge",
+                            approach="Approach",
+                            value_provided="Value",
+                            industry="Financial Services",
+                            technologies_used=[],
+                            url="https://ishare.protiviti.com/cred/deadline",
+                        )
+                    ],
+                    no_matches_found=False,
+                    lookup_status="Matched",
+                    diagnostics=CredentialsLookupDiagnostics(
+                        opportunity_title=signal_title,
+                        sector="Financial Services",
+                        query_text="batch query",
+                        raw_response_text='{"results":[]}',
+                        parse_outcome="batch_json_parsed_with_matches",
+                        lookup_status="Matched",
+                        duration_ms=10.0,
+                        match_count=1,
+                    ),
+                )
+            },
+            CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=1,
+                lookup_count_returned=1,
+                duration_ms=10.0,
+                query_text="batch query",
+                raw_response_text='{"results":[]}',
+                parse_outcome="batch_json_parsed",
+            ),
+        ))
+
+        final_analyst = MagicMock(spec=FinalAnalystAgent)
+        final_analyst.synthesize = AsyncMock(return_value=MDReport(
+            trigger_summary="FS run",
+            executive_summary="Summary",
+            top_opportunities=[
+                MDReportOpportunity(
+                    opportunity=Opportunity(
+                        title=(
+                            "FS.REGULATORY.DEADLINE: Formal regulatory deliverable timelines create "
+                            "near-term pressure on governance, documentation"
+                        ),
+                        scope="Scope",
+                        confidence="High",
+                    ),
+                    credentials=[
+                        CredentialMatch(
+                            title="LLM Stub",
+                            client_challenge="",
+                            approach="",
+                            value_provided="",
+                            industry="",
+                            technologies_used=[],
+                            url="https://stub.local",
+                        )
+                    ],
+                    validation_status="No Internal Data",
+                    credentials_lookup_status="No Match",
+                )
+            ],
+            signals_detected=[],
+            recommended_actions=[],
+            generated_at=datetime.now(),
+            confidence_note="",
+            phase3_opportunities=[
+                PhaseOpportunity(
+                    derived_from_signal="FS.REGULATORY.DEADLINE",
+                    overview="Overview",
+                    technical_explanation="Technical",
+                    layman_explanation="Layman",
+                    relevant_service_lines=["Service line"],
+                    credentials_summary="No materially aligned credentials identified.",
+                    recommended_actions=["Action"],
+                    sources=["https://occ.treas.gov/news-issuances/bulletins/2025/bulletin-2025-51.html"],
+                )
+            ],
+            layout_version="fs_evidence_locked_v1",
+        ))
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            credentials_agent=credentials_agent,
+            final_analyst=final_analyst,
+            credentials_lookup_mode="batched_single_call",
+        )
+
+        report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+
+        assert len(report.top_opportunities) == 1
+        top_opp = report.top_opportunities[0]
+        assert top_opp.credentials_lookup_status == "Matched"
+        assert top_opp.validation_status == "Partial"
+        assert len(top_opp.credentials) == 1
+        assert top_opp.credentials[0].title == "Canonical Deadline Credential"
+
+        assert report.phase3_opportunities is not None
+        assert report.phase3_opportunities[0].credentials_summary == (
+            "Matched credentials: Canonical Deadline Credential."
+        )
+
+    @pytest.mark.asyncio
     async def test_skips_credentials_when_extraction_failed(
         self, mock_credentials_agent, mock_final_analyst, sample_trigger
     ):
