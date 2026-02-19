@@ -99,30 +99,30 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
     lines.append("### PHASE 2 — Analytical Synthesis (Evidence-Locked)")
     lines.append("")
     if report.phase2_headline:
-        lines.append(report.phase2_headline)
+        lines.append(f"Governing Headline: {report.phase2_headline}")
         lines.append("")
 
     if report.phase2_signal_evidence:
         for evidence in report.phase2_signal_evidence:
-            lines.append(
-                f"- **{evidence.signal_label} ({evidence.signal_code})** — {evidence.status}"
-            )
+            lines.append(f"**{evidence.signal_label} ({evidence.signal_code}) — {evidence.status}**")
             if evidence.analysis:
-                lines.append(f"  {evidence.analysis}")
+                lines.append(evidence.analysis)
             if evidence.evidence_quote:
-                lines.append(f"  Quote: \"{evidence.evidence_quote}\"")
+                lines.append(f"Verbatim quote: \"{evidence.evidence_quote}\"")
             if evidence.source_url:
                 source_title = evidence.source_title or evidence.source_url
-                lines.append(f"  Source: [{source_title}]({evidence.source_url})")
+                lines.append(f"Source title: {source_title}")
+                lines.append(f"Canonical URL: {evidence.source_url}")
+            lines.append("")
         lines.append("")
     else:
         lines.append("No phase-2 signal evidence was produced.")
         lines.append("")
 
     if report.phase2_footnotes:
-        lines.append("Footnotes (verbatim + linkage)")
-        for footnote in report.phase2_footnotes:
-            lines.append(f"- {footnote}")
+        lines.append("Footnotes")
+        for index, footnote in enumerate(report.phase2_footnotes, 1):
+            lines.append(f"{index}. {footnote}")
         lines.append("")
 
     lines.append("### PHASE 3 — Opportunity Analysis & Client Enablement")
@@ -137,10 +137,10 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
             if opportunity.layman_explanation:
                 lines.append(f"Layman's Explanation\n{opportunity.layman_explanation}")
             if opportunity.relevant_service_lines:
-                lines.append("Relevant Service Lines")
+                lines.append("Relevant Service Lines (mapped ONLY to this opportunity's confirmed signals)")
                 for service_line in opportunity.relevant_service_lines:
                     lines.append(f"- {service_line}")
-            lines.append("Relevant Protiviti Credentials")
+            lines.append("Relevant Protiviti Credentials (if applicable)")
             lines.append(opportunity.credentials_summary or "No materially aligned credentials identified.")
             if opportunity.recommended_actions:
                 lines.append("Recommended Client Enablement Actions")
@@ -156,8 +156,17 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
         lines.append("")
 
     if report.phase_sources:
-        lines.append("Sources")
+        seen_sources = set()
+        distinct_sources: List[str] = []
         for source in report.phase_sources:
+            normalized = source.strip()
+            key = normalized.lower()
+            if not normalized or key in seen_sources:
+                continue
+            seen_sources.add(key)
+            distinct_sources.append(normalized)
+        lines.append(f"Sources ({len(distinct_sources)} distinct unique citations)")
+        for source in distinct_sources:
             lines.append(f"- {source}")
         lines.append("")
 

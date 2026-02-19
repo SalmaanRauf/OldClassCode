@@ -140,9 +140,15 @@ def test_formatter_renders_phase_layout_by_default():
     content = section["content"]
     assert "PHASE 2 — Analytical Synthesis (Evidence-Locked)" in content
     assert "PHASE 3 — Opportunity Analysis & Client Enablement" in content
+    assert "Governing Headline:" in content
     assert "Executive Transition (FS.EXEC.TRANSITION)" in content
     assert "— Confirmed" in content
+    assert "Verbatim quote:" in content
+    assert "Canonical URL:" in content
+    assert "Relevant Service Lines (mapped ONLY to this opportunity's confirmed signals)" in content
+    assert "Relevant Protiviti Credentials (if applicable)" in content
     assert "Opportunity 1 (Derived from FS.EXEC.TRANSITION)" in content
+    assert "Sources (1 distinct unique citations)" in content
 
 
 def test_formatter_hides_diagnostics_by_default():

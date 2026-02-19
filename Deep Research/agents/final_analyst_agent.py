@@ -411,9 +411,21 @@ class FinalAnalystAgent:
             if not parsed_layout_version and (parsed_phase2_signal_evidence or parsed_phase3_opportunities):
                 parsed_layout_version = "fs_evidence_locked_v1"
 
+            normalized_executive_summary = self._normalize_executive_summary(
+                summary=data.get("executive_summary", ""),
+                top_opportunities=top_opps,
+                research=research,
+                credentials=credentials,
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=credentials_status_counts,
+            )
+
             return MDReport(
                 trigger_summary=data.get("trigger_summary", ""),
-                executive_summary=data.get("executive_summary", ""),
+                executive_summary=normalized_executive_summary,
                 top_opportunities=top_opps,
                 signals_detected=data.get("signals_detected", [])[:5],
                 recommended_actions=self._sanitize_recommended_actions(
@@ -727,18 +739,185 @@ class FinalAnalystAgent:
         if counts["No Match"] > 0 and lookups_executed_count > 0:
             combined_lines.append("- Prioritize opportunities with stronger internal proof or develop supporting credential narratives.")
 
+        top_matches_line = self._format_top_matches_from_responses(credentials)
+        summary_lines: List[str] = [
+            "Deep Research Findings",
+            deep_research_text,
+            "",
+            "Credentials Agent Findings",
+            *credentials_lines,
+        ]
+        if top_matches_line:
+            summary_lines.append(f"- Top matched credentials by opportunity: {top_matches_line}")
+        summary_lines.extend(
+            [
+                "",
+                "Combined Report & Action Items",
+                *combined_lines,
+            ]
+        )
+        return "\n".join(summary_lines)
+
+    def _normalize_executive_summary(
+        self,
+        summary: str,
+        top_opportunities: List[MDReportOpportunity],
+        research: DeepResearchOutput,
+        credentials: Dict[str, CredentialsResponse],
+        opportunity_extraction_status: str,
+        opportunity_extraction_reason: Optional[str],
+        lookups_executed_count: int,
+        lookups_skipped_reason: Optional[str],
+        credentials_status_counts: Dict[str, int],
+    ) -> str:
+        """Ensure executive summary includes stable three-block contract + credentials specifics."""
+        parsed = self._split_three_block_summary(summary)
+        if not parsed:
+            return self._build_three_block_summary(
+                research=research,
+                credentials=credentials,
+                opportunity_extraction_status=opportunity_extraction_status,
+                opportunity_extraction_reason=opportunity_extraction_reason,
+                lookups_executed_count=lookups_executed_count,
+                lookups_skipped_reason=lookups_skipped_reason,
+                credentials_status_counts=credentials_status_counts,
+            )
+
+        credentials_text = parsed["Credentials Agent Findings"]
+        credentials_text = self._ensure_credentials_counts_lines(
+            credentials_text=credentials_text,
+            credentials_status_counts=credentials_status_counts,
+            lookups_executed_count=lookups_executed_count,
+            lookups_skipped_reason=lookups_skipped_reason,
+        )
+        credentials_text = self._ensure_top_matched_line(
+            credentials_text=credentials_text,
+            top_opportunities=top_opportunities,
+        )
+
         return "\n".join(
             [
                 "Deep Research Findings",
-                deep_research_text,
+                parsed["Deep Research Findings"],
                 "",
                 "Credentials Agent Findings",
-                *credentials_lines,
+                credentials_text,
                 "",
                 "Combined Report & Action Items",
-                *combined_lines
+                parsed["Combined Report & Action Items"],
             ]
-        )
+        ).strip()
+
+    def _split_three_block_summary(self, summary: str) -> Optional[Dict[str, str]]:
+        """Split summary into required titled blocks if contract headings are present."""
+        text = (summary or "").strip()
+        headings = [
+            "Deep Research Findings",
+            "Credentials Agent Findings",
+            "Combined Report & Action Items",
+        ]
+        positions = []
+        start_cursor = 0
+        for heading in headings:
+            pos = text.find(heading, start_cursor)
+            if pos < 0:
+                return None
+            positions.append(pos)
+            start_cursor = pos + len(heading)
+
+        sections: Dict[str, str] = {}
+        for index, heading in enumerate(headings):
+            section_start = positions[index] + len(heading)
+            section_end = positions[index + 1] if index + 1 < len(positions) else len(text)
+            sections[heading] = text[section_start:section_end].strip()
+        return sections
+
+    def _ensure_credentials_counts_lines(
+        self,
+        credentials_text: str,
+        credentials_status_counts: Dict[str, int],
+        lookups_executed_count: int,
+        lookups_skipped_reason: Optional[str],
+    ) -> str:
+        """Inject deterministic counts lines when synthesis omitted them."""
+        normalized = (credentials_text or "").strip()
+        lowered = normalized.lower()
+
+        required_markers = [
+            "matched opportunities",
+            "no-match opportunities",
+            "lookup failures",
+        ]
+        has_all_markers = all(marker in lowered for marker in required_markers)
+        if has_all_markers:
+            return normalized
+
+        counts_lines: List[str] = []
+        if lookups_executed_count == 0:
+            counts_lines.append("- Lookups executed: 0")
+            counts_lines.append(
+                f"- Lookup skipped: {lookups_skipped_reason or 'No opportunities identified for credentials validation.'}"
+            )
+        else:
+            counts_lines.extend(
+                [
+                    f"- Lookups executed: {lookups_executed_count}",
+                    f"- Matched opportunities: {credentials_status_counts.get('Matched', 0)}",
+                    f"- No-match opportunities: {credentials_status_counts.get('No Match', 0)}",
+                    f"- Lookup failures: {credentials_status_counts.get('Lookup Failed', 0)}",
+                ]
+            )
+
+        if not normalized:
+            return "\n".join(counts_lines)
+        return "\n".join([normalized, *counts_lines]).strip()
+
+    def _ensure_top_matched_line(
+        self,
+        credentials_text: str,
+        top_opportunities: List[MDReportOpportunity],
+    ) -> str:
+        """Inject top matched credentials line for validated opportunities when omitted."""
+        normalized = (credentials_text or "").strip()
+        if "top matched credentials by opportunity" in normalized.lower():
+            return normalized
+
+        details = self._format_top_matches_from_top_opportunities(top_opportunities)
+        if not details:
+            return normalized
+
+        line = f"- Top matched credentials by opportunity: {details}"
+        if not normalized:
+            return line
+        return "\n".join([normalized, line]).strip()
+
+    def _format_top_matches_from_top_opportunities(
+        self,
+        top_opportunities: List[MDReportOpportunity],
+    ) -> str:
+        chunks: List[str] = []
+        for item in top_opportunities:
+            if item.credentials_lookup_status != "Matched" or not item.credentials:
+                continue
+            titles = [cred.title for cred in item.credentials[:2] if cred.title]
+            if not titles:
+                continue
+            chunks.append(f"{item.opportunity.title} -> {', '.join(titles)}")
+        return "; ".join(chunks)
+
+    def _format_top_matches_from_responses(
+        self,
+        credentials: Dict[str, CredentialsResponse],
+    ) -> str:
+        chunks: List[str] = []
+        for title, response in credentials.items():
+            if response.lookup_status != "Matched" or not response.matches:
+                continue
+            match_titles = [match.title for match in response.matches[:2] if match.title]
+            if not match_titles:
+                continue
+            chunks.append(f"{title} -> {', '.join(match_titles)}")
+        return "; ".join(chunks)
 
     def _fallback_phase2_headline(
         self,

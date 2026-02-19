@@ -32,10 +32,13 @@ Create a concise JSON report with stable existing fields and strict phase-based 
    - `Combined Report & Action Items`
 4. For phase fields:
    - Include only evidence from `confirmed_signals_json`.
+   - `phase2_headline` must include a governing-headline style sentence that states the primary governance/risk interpretation.
    - `phase2_signal_evidence` entries must use statuses exactly: `Confirmed`, `Insufficient`, or `Rejected`.
-   - For `Confirmed` entries, include short evidence quote and source URL.
+   - For `Confirmed` entries, include short evidence quote and source URL, and write `analysis` as 2-4 concise factual sentences (not a one-liner).
    - Keep footnotes concise and link-backed.
+   - `phase2_footnotes` should use structured lines that include: verbatim quote, source title, canonical URL, and evidentiary linkage.
    - `phase3_opportunities` should align to `phase3_candidates_json`; do not fabricate additional opportunities.
+   - `phase3_opportunities` should use richer business language while staying evidence-locked.
 5. Timeline guardrails:
    - Recommended actions must be present/future relative to current date.
    - Avoid stale past-year/past-quarter execution targets.
@@ -45,6 +48,9 @@ Create a concise JSON report with stable existing fields and strict phase-based 
 8. If lookups were skipped (`lookups_executed_count` = 0), describe skip reason accurately.
 9. Do not fabricate opportunities, credentials, or sources.
 10. Keep total output concise (prefer <= 900 words represented across JSON strings/lists).
+11. In `executive_summary`, inside `Credentials Agent Findings`, include:
+   - lookup status counts (Matched, No Match, Lookup Failed), and
+   - a short "Top matched credentials by opportunity" line for validated opportunities when matches exist.
 
 # Output Format
 Respond with ONLY valid JSON:

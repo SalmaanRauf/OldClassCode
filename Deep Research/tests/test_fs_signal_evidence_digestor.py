@@ -200,3 +200,94 @@ Capital One appointed Natalie Hyche Kelly as Business Chief Risk Officer for its
     assert len(signal_evidence) == 1
     assert signal_evidence[0].status == "Confirmed"
     assert "fintechmagazine.com" in signal_evidence[0].source_url
+
+
+def test_digest_accepts_linkedin_exec_transition_source_when_allowed():
+    markdown = """
+I am joining Capital One as the Business Chief Risk Officer for its new Global Payments Network.
+
+# Sources
+- https://www.linkedin.com/posts/example_exec_post
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Confirmed",
+                "evidence_quote": "I am joining Capital One as the Business Chief Risk Officer...",
+                "source_url": "https://www.linkedin.com/posts/example_exec_post",
+                "source_title": "Executive LinkedIn Post",
+                "analysis": "Direct self-disclosure of role and scope.",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Confirmed"
+    assert "linkedin.com" in signal_evidence[0].source_url
+
+
+def test_digest_non_exec_signal_not_forced_to_social_source():
+    markdown = """
+I am joining Capital One as the Business Chief Risk Officer for its new Global Payments Network.
+
+# Sources
+- https://www.linkedin.com/posts/example_exec_post
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.REGULATORY.DEADLINE",
+                "signal_label": "Regulatory Deadline",
+                "status": "Insufficient",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "No deadline evidence provided.",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.REGULATORY.DEADLINE"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.REGULATORY.DEADLINE"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].signal_code == "FS.REGULATORY.DEADLINE"
+    assert signal_evidence[0].status == "Insufficient"
+    assert signal_evidence[0].source_url == ""

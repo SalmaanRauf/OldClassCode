@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
 
@@ -202,6 +203,40 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
             pass  # Silent fail for citation extraction
         
         return unique_urls
+
+    def _extract_urls_from_text(self, text: str) -> List[str]:
+        """Extract URLs from plain text when annotation citations are incomplete."""
+        if not text:
+            return []
+        urls = re.findall(r"https?://[^\s\]\)>,]+", text)
+        normalized: List[str] = []
+        seen = set()
+        for url in urls:
+            cleaned = url.strip().rstrip(".,;)")
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                normalized.append(cleaned)
+        return normalized
+
+    def _dedupe_citations(self, citations: List[DeepResearchCitation]) -> List[DeepResearchCitation]:
+        """Deduplicate citations by normalized URL while preserving first title encountered."""
+        deduped: List[DeepResearchCitation] = []
+        seen = set()
+        for citation in citations:
+            url = (citation.url or "").strip()
+            if not url:
+                continue
+            key = url.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(
+                DeepResearchCitation(
+                    title=(citation.title or url).strip(),
+                    url=url,
+                )
+            )
+        return deduped
 
     def _is_agent_message(self, msg) -> bool:
         """Check if a message is from the agent/assistant."""
@@ -551,10 +586,12 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
 
         if not text_blocks:
             summary = getattr(message, "text", "") or ""
+            for url in self._extract_urls_from_text(summary):
+                message_level_citations.append(DeepResearchCitation(title=url, url=url))
             return DeepResearchReport(
                 summary=summary,
                 sections=[],
-                citations=message_level_citations,
+                citations=self._dedupe_citations(message_level_citations),
                 metadata={},
             )
 
@@ -587,6 +624,10 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
 
             if url:
                 citations.append(DeepResearchCitation(title=title or url, url=url))
+
+        # Fallback URL capture from plain text when annotations are sparse.
+        for url in self._extract_urls_from_text(summary):
+            citations.append(DeepResearchCitation(title=url, url=url))
 
         # Parse sections
         sections: List[DeepResearchSection] = []
@@ -622,19 +663,27 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
                     block_citations.append(
                         DeepResearchCitation(title=b_title or b_url, url=b_url)
                     )
+
+            for fallback_url in self._extract_urls_from_text(block_content):
+                block_citations.append(
+                    DeepResearchCitation(title=fallback_url, url=fallback_url)
+                )
+                citations.append(
+                    DeepResearchCitation(title=fallback_url, url=fallback_url)
+                )
             
             sections.append(
                 DeepResearchSection(
                     heading=heading,
                     content=block_content,
-                    citations=block_citations,
+                    citations=self._dedupe_citations(block_citations),
                 )
             )
 
         return DeepResearchReport(
             summary=summary,
             sections=sections,
-            citations=citations,
+            citations=self._dedupe_citations(citations),
             metadata={},
         )
 

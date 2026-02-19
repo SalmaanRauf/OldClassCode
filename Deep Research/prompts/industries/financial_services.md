@@ -52,6 +52,9 @@ When the user requests research on any of the following signals, apply the corre
 - Strategic priorities announced by new leadership
 - First 100-day priorities typically signaled
 - Budget and team expansion signals
+- Optional people-movement verification from executive self-disclosures (e.g., LinkedIn/company post) when they explicitly state role + employer + scope
+- When social/self-disclosure sources are used, prefer corroboration with issuer IR/SEC filings or established media where available
+- Keep this signal-scoped to executive transition research; do not treat social-source mining as a global requirement across all signals
 
 ---
 

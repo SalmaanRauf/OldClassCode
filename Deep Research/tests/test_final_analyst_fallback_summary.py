@@ -294,6 +294,85 @@ def test_parse_report_does_not_use_llm_stub_credentials_when_canonical_missing()
     assert opp.credentials == []
 
 
+def test_parse_report_injects_credentials_counts_and_top_matches_into_executive_summary():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(
+        executive_summary="Research summary text.",
+        opportunities=[
+            Opportunity(
+                title="FS.EXEC.TRANSITION: Executive transition.",
+                scope="Scope",
+                confidence="High",
+            )
+        ],
+    )
+    credentials = {
+        "FS.EXEC.TRANSITION: Executive transition.": CredentialsResponse(
+            opportunity_title="FS.EXEC.TRANSITION: Executive transition.",
+            matches=[
+                CredentialMatch(
+                    title="ERM & RCSA Advisory",
+                    client_challenge="Challenge",
+                    approach="Approach",
+                    value_provided="Value",
+                    industry="Financial Services",
+                    technologies_used=[],
+                    url="https://ishare.protiviti.com/cred/erm",
+                )
+            ],
+            lookup_status="Matched",
+        )
+    }
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS run",
+            "executive_summary": (
+                "Deep Research Findings\n"
+                "Research summary text.\n\n"
+                "Credentials Agent Findings\n"
+                "- Narrative without counts.\n\n"
+                "Combined Report & Action Items\n"
+                "- Action."
+            ),
+            "top_opportunities": [
+                {
+                    "title": "FS.EXEC.TRANSITION: Executive transition.",
+                    "scope": "Scope",
+                    "validation_status": "No Internal Data",
+                    "credentials": [],
+                }
+            ],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials=credentials,
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=1,
+        lookups_executed_count=1,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 1, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    summary = report.executive_summary
+    assert "Credentials Agent Findings" in summary
+    assert "- Matched opportunities: 1" in summary
+    assert "- No-match opportunities: 0" in summary
+    assert "- Lookup failures: 0" in summary
+    assert "Top matched credentials by opportunity" in summary
+    assert "ERM & RCSA Advisory" in summary
+
+
 def test_fallback_report_defaults_to_serial_lookup_mode():
     agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
     trigger = BDTrigger(sector="Defense", signals=["CMMC"])
