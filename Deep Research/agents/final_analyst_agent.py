@@ -939,16 +939,92 @@ class FinalAnalystAgent:
     ) -> Optional[List[str]]:
         if not signal_evidence:
             return None
-        footnotes: List[str] = []
-        for item in signal_evidence:
-            if item.status != "Confirmed" or not item.source_url:
+        normalized = self._normalize_phase2_footnotes(
+            raw_footnotes=[],
+            signal_evidence=signal_evidence,
+        )
+        return normalized or None
+
+    def _format_structured_phase2_footnote(
+        self,
+        quote: str,
+        source_title: str,
+        canonical_url: str,
+        evidentiary_linkage: str,
+    ) -> str:
+        return "\n".join(
+            [
+                f"Verbatim quote: {quote or '(Not provided)'}",
+                f"Source title: {source_title or '(Not provided)'}",
+                f"Canonical URL: {canonical_url or '(Not provided)'}",
+                f"Evidentiary linkage: {evidentiary_linkage or '(Not provided)'}",
+            ]
+        )
+
+    def _extract_structured_footnote_fields(self, footnote: str) -> Dict[str, str]:
+        fields: Dict[str, str] = {}
+        for line in (footnote or "").splitlines():
+            raw = line.strip()
+            if not raw:
                 continue
-            quote = (item.evidence_quote or "").strip()
-            quoted = f"\"{quote}\"" if quote else "(No quote captured)"
-            footnotes.append(
-                f"{quoted} — {item.signal_label}; {item.source_url}"
+            lowered = raw.lower()
+            if lowered.startswith("verbatim quote:"):
+                fields["quote"] = raw.split(":", 1)[1].strip()
+            elif lowered.startswith("source title:"):
+                fields["title"] = raw.split(":", 1)[1].strip()
+            elif lowered.startswith("canonical url:"):
+                fields["url"] = raw.split(":", 1)[1].strip()
+            elif lowered.startswith("evidentiary linkage:"):
+                fields["linkage"] = raw.split(":", 1)[1].strip()
+        return fields
+
+    def _default_evidentiary_linkage(self, item: SignalEvidence) -> str:
+        analysis = (item.analysis or "").strip()
+        if analysis:
+            first_sentence = re.split(r"(?<=[.!?])\s+", analysis)[0].strip()
+            if first_sentence:
+                return first_sentence
+        signal_label = item.signal_label or item.signal_code
+        return f"Supports confirmed evidence for {signal_label}."
+
+    def _normalize_phase2_footnotes(
+        self,
+        raw_footnotes: List[str],
+        signal_evidence: Optional[List[SignalEvidence]],
+    ) -> List[str]:
+        confirmed = [item for item in (signal_evidence or []) if item.status == "Confirmed"]
+        normalized: List[str] = []
+
+        if confirmed:
+            for index, item in enumerate(confirmed):
+                raw_footnote = raw_footnotes[index] if index < len(raw_footnotes) else ""
+                fields = self._extract_structured_footnote_fields(raw_footnote)
+                quote = fields.get("quote") or (item.evidence_quote or "").strip() or "(Not provided)"
+                source_title = fields.get("title") or (item.source_title or "").strip() or (item.source_url or "").strip() or "(Not provided)"
+                canonical_url = fields.get("url") or (item.source_url or "").strip() or "(Not provided)"
+                evidentiary_linkage = fields.get("linkage") or self._default_evidentiary_linkage(item)
+                normalized.append(
+                    self._format_structured_phase2_footnote(
+                        quote=quote,
+                        source_title=source_title,
+                        canonical_url=canonical_url,
+                        evidentiary_linkage=evidentiary_linkage,
+                    )
+                )
+            return normalized
+
+        for footnote in raw_footnotes:
+            fields = self._extract_structured_footnote_fields(footnote)
+            compact = (footnote or "").strip()
+            normalized.append(
+                self._format_structured_phase2_footnote(
+                    quote=fields.get("quote", "(Not provided)"),
+                    source_title=fields.get("title", "(Not provided)"),
+                    canonical_url=fields.get("url", "(Not provided)"),
+                    evidentiary_linkage=fields.get("linkage", compact or "(Not provided)"),
+                )
             )
-        return footnotes or None
+        return normalized
 
     def _parse_phase2_signal_evidence(
         self,
@@ -987,10 +1063,15 @@ class FinalAnalystAgent:
         raw: Any,
         fallback_signal_evidence: Optional[List[SignalEvidence]] = None,
     ) -> Optional[List[str]]:
+        parsed: List[str] = []
         if isinstance(raw, list):
             parsed = [str(item).strip() for item in raw if str(item).strip()]
-            if parsed:
-                return parsed
+        normalized = self._normalize_phase2_footnotes(
+            raw_footnotes=parsed,
+            signal_evidence=fallback_signal_evidence,
+        )
+        if normalized:
+            return normalized
         return self._fallback_phase2_footnotes(fallback_signal_evidence)
 
     def _parse_phase3_opportunities(

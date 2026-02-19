@@ -93,8 +93,123 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
     }
 
 
+def _split_three_block_summary(summary: str) -> Optional[Dict[str, str]]:
+    text = (summary or "").strip()
+    headings = [
+        "Deep Research Findings",
+        "Credentials Agent Findings",
+        "Combined Report & Action Items",
+    ]
+
+    positions: List[int] = []
+    cursor = 0
+    for heading in headings:
+        position = text.find(heading, cursor)
+        if position < 0:
+            return None
+        positions.append(position)
+        cursor = position + len(heading)
+
+    sections: Dict[str, str] = {}
+    for index, heading in enumerate(headings):
+        start = positions[index] + len(heading)
+        end = positions[index + 1] if index + 1 < len(positions) else len(text)
+        sections[heading] = text[start:end].strip()
+    return sections
+
+
+def _distinct_sources(sources: Optional[List[str]]) -> List[str]:
+    seen = set()
+    distinct: List[str] = []
+    for source in sources or []:
+        normalized = source.strip()
+        key = normalized.lower()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        distinct.append(normalized)
+    return distinct
+
+
+def _format_scan_first_summary(report: MDReport, distinct_source_count: int) -> List[str]:
+    lines: List[str] = ["### EXECUTIVE SUMMARY — Scan-First Brief", ""]
+    confirmed_signal_count = len(
+        [item for item in (report.phase2_signal_evidence or []) if item.status == "Confirmed"]
+    )
+    top_opportunity_count = len(report.top_opportunities or [])
+    if top_opportunity_count == 0 and report.phase3_opportunities:
+        top_opportunity_count = len(report.phase3_opportunities)
+    lines.append(
+        "**Context Coverage:** "
+        f"Confirmed signals: {confirmed_signal_count} | "
+        f"Top opportunities: {top_opportunity_count} | "
+        f"Distinct sources: {distinct_source_count}"
+    )
+    lines.append("")
+
+    sections = _split_three_block_summary(report.executive_summary or "")
+    if not sections:
+        lines.append("**Deep Research Findings**")
+        lines.append((report.executive_summary or "No executive summary content was provided.").strip())
+        lines.append("")
+        return lines
+
+    ordered_headings = [
+        "Deep Research Findings",
+        "Credentials Agent Findings",
+        "Combined Report & Action Items",
+    ]
+    for index, heading in enumerate(ordered_headings):
+        lines.append(f"**{heading}**")
+        lines.append(sections.get(heading, "") or "No content provided.")
+        lines.append("")
+        if index < len(ordered_headings) - 1:
+            lines.append("---")
+            lines.append("")
+    return lines
+
+
+def _parse_footnote_fields(footnote: str) -> Dict[str, str]:
+    fields: Dict[str, str] = {}
+    for line in (footnote or "").splitlines():
+        raw = line.strip()
+        if not raw:
+            continue
+        lowered = raw.lower()
+        if lowered.startswith("verbatim quote:"):
+            fields["quote"] = raw.split(":", 1)[1].strip()
+        elif lowered.startswith("source title:"):
+            fields["title"] = raw.split(":", 1)[1].strip()
+        elif lowered.startswith("canonical url:"):
+            fields["url"] = raw.split(":", 1)[1].strip()
+        elif lowered.startswith("evidentiary linkage:"):
+            fields["linkage"] = raw.split(":", 1)[1].strip()
+    return fields
+
+
+def _format_structured_footnote_lines(footnote: str) -> List[str]:
+    fields = _parse_footnote_fields(footnote)
+    if not fields:
+        compact = (footnote or "").strip()
+        fields = {
+            "quote": "(Not provided)",
+            "title": "(Not provided)",
+            "url": "(Not provided)",
+            "linkage": compact or "(Not provided)",
+        }
+    return [
+        f"Verbatim quote: {fields.get('quote') or '(Not provided)'}",
+        f"Source title: {fields.get('title') or '(Not provided)'}",
+        f"Canonical URL: {fields.get('url') or '(Not provided)'}",
+        f"Evidentiary linkage: {fields.get('linkage') or '(Not provided)'}",
+    ]
+
+
 def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
     lines: List[str] = []
+    distinct_sources = _distinct_sources(report.phase_sources)
+
+    lines.extend(_format_scan_first_summary(report, distinct_source_count=len(distinct_sources)))
 
     lines.append("### PHASE 2 — Analytical Synthesis (Evidence-Locked)")
     lines.append("")
@@ -122,49 +237,55 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
     if report.phase2_footnotes:
         lines.append("Footnotes")
         for index, footnote in enumerate(report.phase2_footnotes, 1):
-            lines.append(f"{index}. {footnote}")
+            lines.append(f"{index}.")
+            lines.extend(_format_structured_footnote_lines(footnote))
+            lines.append("")
         lines.append("")
 
     lines.append("### PHASE 3 — Opportunity Analysis & Client Enablement")
     lines.append("")
     if report.phase3_opportunities:
         for index, opportunity in enumerate(report.phase3_opportunities, 1):
-            lines.append(f"**Opportunity {index} (Derived from {opportunity.derived_from_signal})**")
+            lines.append(f"#### Opportunity {index} — {opportunity.derived_from_signal}")
+            lines.append("")
             if opportunity.overview:
-                lines.append(f"Opportunity Overview\n{opportunity.overview}")
+                lines.append("**Opportunity Overview**")
+                lines.append(opportunity.overview)
+                lines.append("")
             if opportunity.technical_explanation:
-                lines.append(f"Detailed Technical Explanation\n{opportunity.technical_explanation}")
+                lines.append("**Detailed Technical Explanation**")
+                lines.append(opportunity.technical_explanation)
+                lines.append("")
             if opportunity.layman_explanation:
-                lines.append(f"Layman's Explanation\n{opportunity.layman_explanation}")
+                lines.append("**Layman's Explanation**")
+                lines.append(opportunity.layman_explanation)
+                lines.append("")
             if opportunity.relevant_service_lines:
-                lines.append("Relevant Service Lines (mapped ONLY to this opportunity's confirmed signals)")
+                lines.append("**Relevant Service Lines (mapped ONLY to this opportunity's confirmed signals)**")
                 for service_line in opportunity.relevant_service_lines:
                     lines.append(f"- {service_line}")
-            lines.append("Relevant Protiviti Credentials (if applicable)")
+                lines.append("")
+            lines.append("**Relevant Protiviti Credentials (if applicable)**")
             lines.append(opportunity.credentials_summary or "No materially aligned credentials identified.")
+            lines.append("")
             if opportunity.recommended_actions:
-                lines.append("Recommended Client Enablement Actions")
+                lines.append("**Recommended Client Enablement Actions**")
                 for action in opportunity.recommended_actions:
                     lines.append(f"- {action}")
+                lines.append("")
             if opportunity.sources:
-                lines.append("Sources (signal-aligned):")
+                lines.append("**Sources (signal-aligned)**")
                 for source in opportunity.sources:
                     lines.append(f"- {source}")
-            lines.append("")
+                lines.append("")
+            if index < len(report.phase3_opportunities):
+                lines.append("---")
+                lines.append("")
     else:
         lines.append("No phase-3 opportunities were generated.")
         lines.append("")
 
-    if report.phase_sources:
-        seen_sources = set()
-        distinct_sources: List[str] = []
-        for source in report.phase_sources:
-            normalized = source.strip()
-            key = normalized.lower()
-            if not normalized or key in seen_sources:
-                continue
-            seen_sources.add(key)
-            distinct_sources.append(normalized)
+    if distinct_sources:
         lines.append(f"Sources ({len(distinct_sources)} distinct unique citations)")
         for source in distinct_sources:
             lines.append(f"- {source}")

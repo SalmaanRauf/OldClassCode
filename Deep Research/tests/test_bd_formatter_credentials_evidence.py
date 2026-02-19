@@ -104,7 +104,10 @@ def _build_phase_report() -> MDReport:
             )
         ],
         phase2_footnotes=[
-            "\"Capital One appointed ...\" — FinTech Magazine; https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro"
+            "Verbatim quote: \"Capital One appointed ...\"\n"
+            "Source title: FinTech Magazine\n"
+            "Canonical URL: https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro\n"
+            "Evidentiary linkage: Supports documented executive transition."
         ],
         phase3_opportunities=[
             PhaseOpportunity(
@@ -138,6 +141,11 @@ def test_formatter_renders_phase_layout_by_default():
 
     assert section is not None
     content = section["content"]
+    assert "### EXECUTIVE SUMMARY — Scan-First Brief" in content
+    assert "**Context Coverage:** Confirmed signals: 1 | Top opportunities: 1 | Distinct sources: 1" in content
+    assert "**Deep Research Findings**" in content
+    assert "**Credentials Agent Findings**" in content
+    assert "**Combined Report & Action Items**" in content
     assert "PHASE 2 — Analytical Synthesis (Evidence-Locked)" in content
     assert "PHASE 3 — Opportunity Analysis & Client Enablement" in content
     assert "Governing Headline:" in content
@@ -145,9 +153,16 @@ def test_formatter_renders_phase_layout_by_default():
     assert "— Confirmed" in content
     assert "Verbatim quote:" in content
     assert "Canonical URL:" in content
-    assert "Relevant Service Lines (mapped ONLY to this opportunity's confirmed signals)" in content
-    assert "Relevant Protiviti Credentials (if applicable)" in content
-    assert "Opportunity 1 (Derived from FS.EXEC.TRANSITION)" in content
+    assert "1." in content
+    assert "Evidentiary linkage:" in content
+    assert "#### Opportunity 1 — FS.EXEC.TRANSITION" in content
+    assert "**Opportunity Overview**" in content
+    assert "**Detailed Technical Explanation**" in content
+    assert "**Layman's Explanation**" in content
+    assert "**Relevant Service Lines (mapped ONLY to this opportunity's confirmed signals)**" in content
+    assert "**Relevant Protiviti Credentials (if applicable)**" in content
+    assert "**Sources (signal-aligned)**" in content
+    assert content.count("---") >= 2
     assert "Sources (1 distinct unique citations)" in content
 
 
@@ -174,3 +189,22 @@ def test_formatter_can_show_diagnostics_with_toggle():
     assert "### Pipeline Diagnostics" in content
     assert "### Credentials Evidence (Full I/O)" in content
     assert "### Credentials Batch I/O (Full)" in content
+
+
+def test_non_phase_layout_remains_legacy():
+    report = MDReport(
+        trigger_summary="Legacy trigger",
+        executive_summary="Legacy executive summary",
+        top_opportunities=[],
+        signals_detected=[],
+        recommended_actions=[],
+        generated_at=datetime.now(),
+        confidence_note="Legacy confidence",
+    )
+
+    section = format_bd_report_as_section(report)
+    assert section is not None
+    content = section["content"]
+    assert "### Executive Summary" in content
+    assert "### EXECUTIVE SUMMARY — Scan-First Brief" not in content
+    assert "PHASE 2 — Analytical Synthesis (Evidence-Locked)" not in content

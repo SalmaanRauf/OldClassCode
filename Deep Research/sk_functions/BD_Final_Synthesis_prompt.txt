@@ -30,6 +30,8 @@ Create a concise JSON report with stable existing fields and strict phase-based 
    - `Deep Research Findings`
    - `Credentials Agent Findings`
    - `Combined Report & Action Items`
+   - Each block should start with one concise takeaway sentence, followed by 2-4 tight bullets.
+   - Write for readout-slide consumption: high signal density, minimal filler, evidence-locked language.
 4. For phase fields:
    - Include only evidence from `confirmed_signals_json`.
    - `phase2_headline` must include a governing-headline style sentence that states the primary governance/risk interpretation.

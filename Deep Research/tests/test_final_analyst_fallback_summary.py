@@ -16,6 +16,7 @@ from models.bd_schemas import (
     CredentialsResponse,
     CredentialMatch,
     PhaseOpportunity,
+    SignalEvidence,
 )
 
 
@@ -371,6 +372,62 @@ def test_parse_report_injects_credentials_counts_and_top_matches_into_executive_
     assert "- Lookup failures: 0" in summary
     assert "Top matched credentials by opportunity" in summary
     assert "ERM & RCSA Advisory" in summary
+
+
+def test_fallback_phase2_footnotes_use_strict_structured_schema():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    signal_evidence = [
+        SignalEvidence(
+            signal_code="FS.REGULATORY.DEADLINE",
+            signal_label="Regulatory Deadline",
+            status="Confirmed",
+            evidence_quote="OCC required a remediation plan within 120 days.",
+            source_url="https://occ.treas.gov/news-issuances/bulletins/2025/bulletin-2025-51.html",
+            source_title="OCC Bulletin 2025-51",
+            analysis="Confirms a hard regulator deadline for submission.",
+        )
+    ]
+
+    footnotes = agent._fallback_phase2_footnotes(signal_evidence)
+
+    assert footnotes is not None
+    assert len(footnotes) == 1
+    first = footnotes[0]
+    assert "Verbatim quote:" in first
+    assert "Source title:" in first
+    assert "Canonical URL:" in first
+    assert "Evidentiary linkage:" in first
+
+
+def test_parse_phase2_footnotes_normalizes_compact_input_to_structured_schema():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    compact = [
+        "\"OCC required remediation timeline\" (OCC Bulletin 2025-51, https://occ.treas.gov/news-issuances/bulletins/2025/bulletin-2025-51.html) — confirms deadline."
+    ]
+    signal_evidence = [
+        SignalEvidence(
+            signal_code="FS.REGULATORY.DEADLINE",
+            signal_label="Regulatory Deadline",
+            status="Confirmed",
+            evidence_quote="OCC required a remediation plan within 120 days.",
+            source_url="https://occ.treas.gov/news-issuances/bulletins/2025/bulletin-2025-51.html",
+            source_title="OCC Bulletin 2025-51",
+            analysis="Confirms a hard regulator deadline for submission.",
+        )
+    ]
+
+    parsed = agent._parse_phase2_footnotes(
+        raw=compact,
+        fallback_signal_evidence=signal_evidence,
+    )
+
+    assert parsed is not None
+    assert len(parsed) == 1
+    first = parsed[0]
+    assert first.startswith("Verbatim quote:")
+    assert "Source title: OCC Bulletin 2025-51" in first
+    assert "Canonical URL: https://occ.treas.gov/news-issuances/bulletins/2025/bulletin-2025-51.html" in first
+    assert "Evidentiary linkage:" in first
 
 
 def test_fallback_report_defaults_to_serial_lookup_mode():
