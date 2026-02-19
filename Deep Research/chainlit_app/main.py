@@ -35,6 +35,7 @@ from services.prompt_generator import get_prompt_generator, ResearchParameters
 from services.bd_orchestrator import BDOrchestrator
 from services.bd_report_formatter import format_bd_report_as_section
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
+from services.deep_research_formatter import format_deep_research_response_as_markdown
 from models.bd_schemas import MDReport, MDReportOpportunity
 
 setup_logging(level=logging.INFO)
@@ -230,36 +231,7 @@ async def enrich_with_bd_analysis(
 
 def _format_dr_as_markdown(response: Dict[str, Any]) -> str:
     """Convert Deep Research response dict to markdown for BD orchestrator."""
-    lines = []
-    
-    # Add summary as executive summary
-    summary = response.get("summary", "")
-    if summary:
-        lines.append("# Executive Summary")
-        lines.append(summary)
-        lines.append("")
-    
-    # Add sections
-    for section in response.get("sections", []):
-        title = section.get("title", "Findings")
-        content = section.get("content", "")
-        if content:
-            lines.append(f"## {title}")
-            lines.append(content)
-            lines.append("")
-    
-    # Add citations as sources
-    citations = response.get("citations", [])
-    if citations:
-        lines.append("## Sources")
-        for cite in citations:
-            url = cite.get("url", "")
-            title = cite.get("title", url)
-            if url:
-                lines.append(f"• {title}: {url}")
-        lines.append("")
-    
-    return "\n".join(lines)
+    return format_deep_research_response_as_markdown(response)
 
 
 def _format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:

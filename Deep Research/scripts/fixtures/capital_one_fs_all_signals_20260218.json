@@ -1,0 +1,31 @@
+{
+  "name": "capital_one_fs_all_signals_20260218",
+  "sector": "financial_services",
+  "company": "Capital One",
+  "geography": "CONUS",
+  "signals": "All",
+  "time_window_days": 180,
+  "user_query": "Research Financial Services sector developments related to Capital One, capturing all relevant signals. Focus on activity within CONUS over the past 180 days.",
+  "session_params": {
+    "company": "Capital One",
+    "signals": "All",
+    "geography": "CONUS",
+    "time_window": "180 days"
+  },
+  "deep_research_markdown_path": "capital_one_fs_all_signals_20260218.md",
+  "source_urls": [
+    "https://occ.treas.gov/news-issuances/bulletins/2025/bulletin-2025-51.html",
+    "https://www.federalreserve.gov/newsevents/pressreleases/files/orders20250418a2.pdf",
+    "https://www.federalreserve.gov/newsevents/pressreleases/orders20250418a.htm",
+    "https://www.bankingdive.com/news/capital-one-discover-merger-acquisition-close-settlement-425-million-court-savings-account/748467/",
+    "https://www.newsweek.com/capital-one-settlement-heres-whos-eligible-425-million-payout-2074310",
+    "https://www.bankingdive.com/news/fdic-countersues-capital-one-over-special-assessment/805937/",
+    "https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro",
+    "https://bankingjournal.aba.com/2025/11/an-end-to-cecl-double-counting-gives-a-tailwind-to-bank-ma/",
+    "https://ca.investing.com/news/company-news/capital-ones-stress-capital-buffer-requirement-to-drop-to-45-percent-93CH-4087480",
+    "https://finintegrity.org/aml-cft-and-sanctions-enforcement-actions-in-2025/",
+    "https://www.grcreport.com/post/occ-announces-october-enforcement-actions-targets-governance-bsa-aml-deficiencies",
+    "https://virginiabusiness.com/fdic-files-countersuit-against-capital-one/"
+  ]
+}
+

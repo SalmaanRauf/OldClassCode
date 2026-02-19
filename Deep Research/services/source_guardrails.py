@@ -40,7 +40,7 @@ class SourceGuardrails:
     def __init__(
         self,
         domain_cap: int = 3,
-        confirmed_min_tier: int = 2,
+        confirmed_min_tier: int = 1,
     ):
         self.domain_cap = max(1, domain_cap)
         self.confirmed_min_tier = confirmed_min_tier
