@@ -5,7 +5,7 @@ import logging
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Callable
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from azure.identity.aio import DefaultAzureCredential
 from azure.core.exceptions import AzureError
@@ -18,6 +18,7 @@ from azure.ai.agents.models import (
 )
 
 from config.config import AppConfig
+from services.runtime_policy import get_runtime_policy
 
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,7 @@ logger = logging.getLogger(__name__)
 class DeepResearchCitation:
     title: str
     url: str
+    origin_type: str = "media"
 
 
 @dataclass
@@ -61,6 +63,7 @@ class DeepResearchClient:
         self._deep_model = AppConfig.DEEP_RESEARCH_MODEL_DEPLOYMENT_NAME
         self._bing_connection = AppConfig.BING_CONNECTION_NAME
         self._industry = industry
+        self._runtime_policy = get_runtime_policy()
 
         self._credential: Optional[DefaultAzureCredential] = None
         self._client: Optional[AIProjectClient] = None
@@ -84,7 +87,7 @@ class DeepResearchClient:
             return
         
         try:
-            # Load industry-specific prompt with enhanced "20-SOURCE" rule
+            # Load industry-specific prompt with runtime source-policy guidance.
             from services.prompt_loader import PromptLoader
             loader = PromptLoader()
             
@@ -99,27 +102,7 @@ class DeepResearchClient:
                 logger.warning(f"Failed to load {self._industry} prompt, using general: {e}")
                 base_instructions = loader.load_prompt("general")
             
-            # Enhance with the "20-SOURCE" volume rule from demo_run.py
-            enhanced_instructions = base_instructions + """
-
-## CRITICAL VOLUME REQUIREMENT: The "20-SOURCE" Rule
-
-**You MUST acquire at least 20 DISTINCT unique citations to complete your research.**
-
-SOURCE DIVERSITY REQUIREMENTS:
-- No single domain should be cited more than 3 times
-- Prioritize authoritative sources (.gov, .mil, regulatory agencies, official databases)
-- If you're stuck below 15 sources, you MUST loop and search again with different queries
-- Use fallback searches: look for related topics, adjacent issues, supporting context
-
-VALIDATION BEFORE COMPLETION:
-- Count your unique URLs before finalizing your report
-- If below 15 sources: Your job is NOT done - continue researching
-- If 15-19 sources: Acceptable, but note this in your report
-- If 20+ sources: Mission accomplished
-
-REMEMBER: Volume AND quality. More sources = more verification = higher confidence in findings.
-"""
+            enhanced_instructions = base_instructions + self._source_policy_instructions()
             
             deep_tool = DeepResearchToolDefinition(
                 deep_research=DeepResearchDetails(
@@ -129,7 +112,11 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
                     ],
                 )
             )
-            logger.info(f"Creating Deep Research agent with {self._industry} industry focus + volume requirements")
+            logger.info(
+                "Creating Deep Research agent with %s industry focus (%s source policy)",
+                self._industry,
+                self._runtime_policy.source_policy_mode,
+            )
             agent = await self._client.agents.create_agent(
                 model=self._primary_model,
                 name=f"deep-research-{self._industry}",
@@ -205,6 +192,130 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
         
         return unique_urls
 
+    def _source_policy_instructions(self) -> str:
+        mode = (self._runtime_policy.source_policy_mode or "quality_first").strip().lower()
+        if mode == "volume_first":
+            return """
+
+## Source Policy (Volume-First)
+- Prioritize broad source coverage while maintaining relevance.
+- Keep domain diversity (no single domain should dominate).
+- Prefer direct publisher/issuer URLs and avoid search wrapper links.
+- Use quality checks to avoid low-confidence or repetitive citations.
+- For executive movement signals, preserve all material discovered movements (including lower-confidence but valid sources); prioritization happens in synthesis.
+"""
+        if mode == "balanced":
+            return """
+
+## Source Policy (Balanced)
+- Balance source volume and source quality.
+- Cover each material signal with at least one credible source when available.
+- Keep domain diversity (no single domain should dominate).
+- Prefer direct publisher/issuer URLs and avoid search wrapper links.
+- For executive movement signals, preserve all material discovered movements (including lower-confidence but valid sources); prioritization happens in synthesis.
+"""
+        return """
+
+## Source Policy (Quality-First)
+- Prioritize authoritative evidence over citation volume.
+- Cover each material signal with the strongest available source(s), especially regulatory and issuer disclosures.
+- Maintain source diversity (avoid over-reliance on a single domain).
+- Prefer direct publisher/issuer URLs and avoid search wrapper links.
+- If a high-quality source is unavailable, use the best available source and note evidence limits.
+- For executive movement signals, preserve all material discovered movements (including lower-confidence but valid sources); prioritization happens in synthesis.
+"""
+
+    def _classify_source_origin(self, url: str) -> str:
+        normalized = (url or "").strip().lower()
+        if not normalized:
+            return "media"
+        try:
+            parsed = urlparse(normalized)
+            host = parsed.netloc.removeprefix("www.")
+            path = parsed.path or ""
+            query = parsed.query or ""
+        except Exception:
+            return "media"
+
+        if host.endswith("bing.com") and path.startswith("/search"):
+            return "search-wrapper filtered"
+        if host.endswith("google.com") and path.startswith("/search"):
+            return "search-wrapper filtered"
+        if host.endswith("yahoo.com") and path.startswith("/search"):
+            return "search-wrapper filtered"
+        if "search?" in normalized and ("q=" in query or "query=" in query):
+            return "search-wrapper filtered"
+
+        if host.endswith((".gov", ".mil")) or host.endswith("sec.gov"):
+            return "regulatory"
+        if host.startswith("investor.") or host.startswith("ir.") or ".gcs-web.com" in host:
+            return "issuer"
+        if host.endswith("linkedin.com") or host.endswith("x.com") or host.endswith("twitter.com"):
+            return "social"
+        return "media"
+
+    def _canonicalize_url(self, url: str) -> str:
+        normalized = (url or "").strip()
+        if not normalized.startswith(("http://", "https://")):
+            return ""
+
+        try:
+            parsed = urlparse(normalized)
+        except Exception:
+            return ""
+
+        scheme = parsed.scheme.lower()
+        host = parsed.netloc.lower()
+        path = re.sub(r"/{2,}", "/", parsed.path or "/")
+        if not path.startswith("/"):
+            path = f"/{path}"
+
+        # Remove common tracking parameters while preserving business-relevant query keys.
+        tracking_prefixes = ("utm_",)
+        tracking_keys = {"fbclid", "gclid", "mc_cid", "mc_eid", "ref", "ref_src", "source"}
+        query_items = []
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            key_lower = key.lower()
+            if key_lower in tracking_keys or any(key_lower.startswith(prefix) for prefix in tracking_prefixes):
+                continue
+            query_items.append((key, value))
+
+        canonical_query = urlencode(query_items, doseq=True)
+        fragment = ""
+        return urlunparse((scheme, host, path, "", canonical_query, fragment)).strip()
+
+    def _build_source_provenance_counts(self, citations: List[DeepResearchCitation]) -> Dict[str, int]:
+        counts = {
+            "regulatory": 0,
+            "issuer": 0,
+            "media": 0,
+            "social": 0,
+            "search-wrapper filtered": 0,
+        }
+        for citation in citations:
+            origin = (citation.origin_type or "media").strip().lower()
+            if origin in counts:
+                counts[origin] += 1
+            else:
+                counts["media"] += 1
+        return counts
+
+    def _soft_citation_target(self, query: str) -> int:
+        """
+        Soft citation target for quality-first logging.
+        This is advisory only and never used as a hard gate.
+        """
+        normalized_query = (query or "").lower()
+        if self._industry == "financial_services":
+            if "all relevant signals" in normalized_query:
+                return 12
+            if "exec.transition" in normalized_query or "people movement" in normalized_query:
+                return 10
+            return 9
+        if self._industry in {"defense", "energy", "healthcare", "technology"}:
+            return 8
+        return 6
+
     def _extract_urls_from_text(self, text: str) -> List[str]:
         """Extract URLs from plain text when annotation citations are incomplete."""
         if not text:
@@ -214,9 +325,10 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
         seen = set()
         for url in urls:
             cleaned = url.strip().rstrip(".,;)")
-            if cleaned and self._is_displayable_source_url(cleaned) and cleaned not in seen:
-                seen.add(cleaned)
-                normalized.append(cleaned)
+            canonical = self._canonicalize_url(cleaned)
+            if canonical and self._is_displayable_source_url(canonical) and canonical not in seen:
+                seen.add(canonical)
+                normalized.append(canonical)
         return normalized
 
     def _is_displayable_source_url(self, url: str) -> bool:
@@ -224,32 +336,14 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
         normalized = (url or "").strip().lower()
         if not normalized.startswith(("http://", "https://")):
             return False
-        try:
-            parsed = urlparse(normalized)
-            host = parsed.netloc.removeprefix("www.")
-            path = parsed.path or ""
-            query = parsed.query or ""
-        except Exception:
-            return False
-
-        # Filter Bing/Google/Yahoo search query wrappers.
-        if host.endswith("bing.com") and path.startswith("/search"):
-            return False
-        if host.endswith("google.com") and path.startswith("/search"):
-            return False
-        if host.endswith("yahoo.com") and path.startswith("/search"):
-            return False
-        # Filter obvious "redirect/search" style query URLs.
-        if "search?" in normalized and ("q=" in query or "query=" in query):
-            return False
-        return True
+        return self._classify_source_origin(normalized) != "search-wrapper filtered"
 
     def _dedupe_citations(self, citations: List[DeepResearchCitation]) -> List[DeepResearchCitation]:
         """Deduplicate citations by normalized URL while preserving first title encountered."""
         deduped: List[DeepResearchCitation] = []
         seen = set()
         for citation in citations:
-            url = (citation.url or "").strip()
+            url = self._canonicalize_url(citation.url or "")
             if not url:
                 continue
             if not self._is_displayable_source_url(url):
@@ -262,6 +356,7 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
                 DeepResearchCitation(
                     title=(citation.title or url).strip(),
                     url=url,
+                    origin_type=self._classify_source_origin(url),
                 )
             )
         return deduped
@@ -274,10 +369,16 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
         """Merge all streamed URLs into report citations so discovered sources are not dropped."""
         merged = list(report.citations)
         for url in sorted(streamed_urls):
-            clean = str(url or "").strip()
+            clean = self._canonicalize_url(str(url or "").strip())
             if not clean or not self._is_displayable_source_url(clean):
                 continue
-            merged.append(DeepResearchCitation(title=clean, url=clean))
+            merged.append(
+                DeepResearchCitation(
+                    title=clean,
+                    url=clean,
+                    origin_type=self._classify_source_origin(clean),
+                )
+            )
 
         report.citations = self._dedupe_citations(merged)
         return report
@@ -572,6 +673,11 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
 
         # Merge all streamed citations, even if they did not make the final narrative body.
         report = self._merge_streamed_citations(report, all_citations)
+        provenance_counts = self._build_source_provenance_counts(report.citations)
+        filtered_search_wrapper_count = sum(
+            1 for url in (all_citations or set())
+            if self._classify_source_origin(url) == "search-wrapper filtered"
+        )
 
         # Add metadata
         report.metadata.update({
@@ -580,6 +686,9 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
             "industry": self._industry,
             "poll_count": poll_count,
             "citation_count": len(report.citations),
+            "source_policy_mode": self._runtime_policy.source_policy_mode,
+            "source_provenance_counts": provenance_counts,
+            "filtered_search_wrapper_count": filtered_search_wrapper_count,
         })
         
         # Final citation audit
@@ -590,14 +699,21 @@ REMEMBER: Volume AND quality. More sources = more verification = higher confiden
             f"Deep Research complete: {citation_count} citations, URLs present: {has_urls}"
         )
         
-        # Log warning if below target
-        if citation_count < 15:
-            logger.warning(f"Below target citation count: {citation_count}/20 sources")
-        elif citation_count < 20:
-            logger.info(f"Acceptable citation count: {citation_count}/20 sources")
+        soft_target = self._soft_citation_target(query)
+        if citation_count < soft_target:
+            logger.warning(
+                "Below soft citation target: %s/%s sources (quality-first advisory only).",
+                citation_count,
+                soft_target,
+            )
         else:
-            logger.info(f"Target exceeded: {citation_count}/20 sources")
-        
+            logger.info(
+                "Soft citation target met: %s/%s sources (mode=%s).",
+                citation_count,
+                soft_target,
+                self._runtime_policy.source_policy_mode,
+            )
+
         return report
 
     def _has_placeholder_citations(self, report: DeepResearchReport) -> bool:

@@ -40,8 +40,15 @@ class SourceGuardrails:
     def __init__(
         self,
         domain_cap: int = 3,
-        confirmed_min_tier: int = 1,
+        confirmed_min_tier: int | None = None,
+        source_policy_mode: str | None = None,
     ):
+        # `source_policy_mode` is accepted for compatibility, but source policy currently
+        # influences discovery behavior instead of hard confirmation gating.
+        if confirmed_min_tier is None:
+            # Keep confirmation gating stable; source policy mode influences search/discovery
+            # strategy rather than hard confirmation eligibility thresholds.
+            confirmed_min_tier = 1
         self.domain_cap = max(1, domain_cap)
         self.confirmed_min_tier = confirmed_min_tier
 

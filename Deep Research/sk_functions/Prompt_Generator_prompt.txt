@@ -27,8 +27,8 @@ Output ONLY the research prompt text. No explanations, no headers, no formatting
 - Be deterministic: same inputs should produce nearly identical output
 - If a field is empty or "N/A", omit it from the prompt
 - Keep the prompt concise but comprehensive (2-4 sentences)
-- For Financial Services with `Company/Topic = Capital One`, include this exact sentence:
-  `Anchor findings to Capital One/Discover only; exclude unrelated peer-company personnel moves.`
+- For Financial Services with a provided company/topic, include:
+  `Anchor findings to <Company/Topic> only; exclude unrelated peer-company personnel moves.`
 
 **Example Output:**
 Research Defense sector opportunities for Lockheed Martin focusing on CMMC and IV&V signals. Filter for CONUS geography with minimum contract value of $10M within the last 90 days. Prioritize opportunities aligned with Model Validation and Cybersecurity Compliance service lines.

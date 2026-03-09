@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.prompt_generator import PromptGenerator, ResearchParameters
 
 
-def test_prompt_generator_fallback_includes_capital_one_scope_guardrail():
+def test_prompt_generator_fallback_includes_company_scope_guardrail():
     generator = PromptGenerator()
     params = ResearchParameters(
         sector="financial_services",
@@ -21,7 +21,7 @@ def test_prompt_generator_fallback_includes_capital_one_scope_guardrail():
 
     prompt = generator._fallback_template(params)
 
-    assert "Anchor findings to Capital One/Discover only; exclude unrelated peer-company personnel moves." in prompt
+    assert "Anchor findings to Capital One only; exclude unrelated peer-company personnel moves." in prompt
 
 
 def test_prompt_generator_fallback_omits_scope_guardrail_for_non_fs_sector():

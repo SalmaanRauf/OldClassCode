@@ -178,9 +178,6 @@ class PromptGenerator:
         company = (params.company or "").strip()
         if not company or sector != "financial_services":
             return ""
-
-        if company.lower() == "capital one":
-            return "Anchor findings to Capital One/Discover only; exclude unrelated peer-company personnel moves."
         return (
             f"Anchor findings to {company} only; exclude unrelated peer-company personnel moves."
         )
