@@ -27,6 +27,7 @@ class FSSignalEvidenceDigestor:
         self._prompt_template: Optional[str] = None
         self._signal_registry = get_signal_registry_service()
         self._source_guardrails = source_guardrails or SourceGuardrails()
+        self._company_alias_overrides: Optional[Dict[str, List[str]]] = None
 
     async def _ensure_kernel(self):
         if self._kernel is None:
@@ -263,7 +264,7 @@ class FSSignalEvidenceDigestor:
     ) -> List[SignalEvidence]:
         """Promote exec-transition when explicit appointment evidence exists in text.
 
-        This protects the demo flow from brittle model/source selection for
+        This protects extraction quality from brittle model/source selection for
         FS.EXEC.TRANSITION while keeping evidence anchored to provided sources.
         """
         target_idx = next(
@@ -348,23 +349,92 @@ class FSSignalEvidenceDigestor:
 
         aliases.add(focus)
         aliases.add(focus.replace(" ", ""))
+        aliases.add(focus.replace("&", "and").replace("  ", " ").strip())
 
-        if "capital one" in focus:
-            aliases.update(
-                {
-                    "capital one",
-                    "capitalone",
-                    "discover",
-                    "discover financial",
-                    "discover financial services",
-                }
-            )
-            if "global payments network" in (deep_research_markdown or "").lower():
-                aliases.add("global payments network")
-        elif "discover" in focus:
-            aliases.update({"discover", "discover financial", "discover financial services"})
+        # Legal-name normalization (generic across institutions).
+        legal_suffixes = (
+            " inc",
+            " incorporated",
+            " corp",
+            " corporation",
+            " llc",
+            " plc",
+            " ltd",
+            " limited",
+            " holdings",
+            " holding company",
+            " company",
+            " co",
+            " group",
+            " bank",
+            " financial services",
+        )
+        trimmed_focus = focus
+        for suffix in legal_suffixes:
+            if trimmed_focus.endswith(suffix):
+                trimmed_focus = trimmed_focus[: -len(suffix)].strip()
+        if trimmed_focus and trimmed_focus != focus:
+            aliases.add(trimmed_focus)
+            aliases.add(trimmed_focus.replace(" ", ""))
 
-        return {alias for alias in aliases if alias}
+        # Add tokenized focus variants but avoid very short noisy terms.
+        for piece in re.split(r"[/,&\-\(\)\|]", focus):
+            normalized_piece = re.sub(r"\s+", " ", piece).strip()
+            if len(normalized_piece) >= 3:
+                aliases.add(normalized_piece)
+                aliases.add(normalized_piece.replace(" ", ""))
+
+        # Ticker-style aliases from user-provided company focus text.
+        focus_raw = (company_focus or "").strip()
+        for ticker in re.findall(r"\(([A-Za-z]{2,6})\)", focus_raw):
+            normalized_ticker = ticker.strip().lower()
+            if normalized_ticker:
+                aliases.add(normalized_ticker)
+
+        # Optional customer-specific alias pack (external config, not hardcoded).
+        overrides = self._load_company_alias_overrides()
+        override_keys = {
+            focus,
+            focus.replace(" ", ""),
+        }
+        for key in override_keys:
+            for alias in overrides.get(key, []):
+                normalized_alias = str(alias or "").strip().lower()
+                if normalized_alias:
+                    aliases.add(normalized_alias)
+                    aliases.add(normalized_alias.replace(" ", ""))
+
+        # Keep low-noise aliases only.
+        cleaned = set()
+        for alias in aliases:
+            normalized_alias = re.sub(r"\s+", " ", alias).strip()
+            if len(normalized_alias) < 3:
+                continue
+            cleaned.add(normalized_alias)
+        return cleaned
+
+    def _load_company_alias_overrides(self) -> Dict[str, List[str]]:
+        if self._company_alias_overrides is not None:
+            return self._company_alias_overrides
+        config_path = Path(__file__).parent.parent / "config" / "company_alias_overrides.json"
+        if not config_path.exists():
+            self._company_alias_overrides = {}
+            return self._company_alias_overrides
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            normalized: Dict[str, List[str]] = {}
+            if isinstance(payload, dict):
+                for key, values in payload.items():
+                    normalized_key = str(key or "").strip().lower()
+                    if not normalized_key:
+                        continue
+                    aliases = [str(value or "").strip() for value in (values or []) if str(value or "").strip()]
+                    if aliases:
+                        normalized[normalized_key] = aliases
+            self._company_alias_overrides = normalized
+        except Exception:
+            self._company_alias_overrides = {}
+        return self._company_alias_overrides
 
     def _is_entity_linked(
         self,
@@ -431,6 +501,30 @@ class FSSignalEvidenceDigestor:
 
         return mentions
 
+    def _has_entity_linked_movement_near_url(
+        self,
+        text: str,
+        url: str,
+        entity_aliases: Set[str],
+        window: int = 320,
+    ) -> bool:
+        """Check whether movement language appears close to a URL mention in markdown."""
+        if not text or not url:
+            return False
+        normalized_text = text.lower()
+        normalized_url = str(url or "").strip().lower()
+        if not normalized_url:
+            return False
+
+        idx = normalized_text.find(normalized_url)
+        if idx < 0:
+            return False
+
+        start = max(0, idx - window)
+        end = min(len(normalized_text), idx + len(normalized_url) + window)
+        context = normalized_text[start:end]
+        return self._has_entity_linked_movement(context, entity_aliases)
+
     def _movement_source_url_candidates(
         self,
         available_sources: List[str],
@@ -455,8 +549,6 @@ class FSSignalEvidenceDigestor:
             "committee",
             "governance",
             "global-payments-network",
-            "natalie-hyche-kelly",
-            "bharat-panchal",
         )
         alias_url_tokens = set()
         for alias in entity_aliases:
@@ -485,16 +577,27 @@ class FSSignalEvidenceDigestor:
                 host = ""
 
             movement_indicated = any(keyword in normalized for keyword in movement_keywords)
+            movement_near_url = self._has_entity_linked_movement_near_url(
+                text=deep_research_markdown or "",
+                url=url,
+                entity_aliases=entity_aliases,
+            )
+            if movement_near_url:
+                movement_indicated = True
             if (
                 not movement_indicated
-                and ("linkedin.com/posts/" in normalized or host.endswith("sec.gov") or host.endswith("capitalone.com") or "gcs-web.com" in host)
+                and (
+                    "linkedin.com/posts/" in normalized
+                    or host.endswith("sec.gov")
+                    or self._is_issuer_host(host)
+                )
                 and has_entity_linked_movement_text
             ):
                 movement_indicated = True
             if not movement_indicated:
                 continue
 
-            host_linked = host.endswith("sec.gov") or host.endswith("capitalone.com") or "gcs-web.com" in host
+            host_linked = host.endswith("sec.gov") or self._is_issuer_host(host)
             entity_linked = (
                 self._is_entity_linked(normalized, entity_aliases)
                 or any(token and token in normalized for token in alias_url_tokens)
@@ -503,6 +606,7 @@ class FSSignalEvidenceDigestor:
                     url=url,
                     entity_aliases=entity_aliases,
                 )
+                or movement_near_url
             )
             if not entity_linked and "linkedin.com" in host and has_entity_linked_movement_text:
                 entity_linked = True
@@ -517,6 +621,18 @@ class FSSignalEvidenceDigestor:
 
         return candidates
 
+    def _is_issuer_host(self, host: str) -> bool:
+        normalized = (host or "").strip().lower()
+        if not normalized:
+            return False
+        if normalized.startswith("investor."):
+            return True
+        if normalized.startswith("ir."):
+            return True
+        if ".gcs-web.com" in normalized:
+            return True
+        return False
+
     def _select_exec_transition_primary_source(self, candidate_urls: List[str]) -> str:
         """Select one canonical URL while preserving all other movement URLs in analysis."""
         if not candidate_urls:
@@ -524,16 +640,17 @@ class FSSignalEvidenceDigestor:
 
         def _priority(url: str) -> int:
             normalized = url.lower()
-            if "fintechmagazine.com" in normalized and "people-move" in normalized:
+            host = urlparse(url).netloc.lower().removeprefix("www.")
+            if host.endswith("sec.gov"):
                 return 0
-            if "fintechmagazine.com" in normalized:
+            if self._is_issuer_host(host):
                 return 1
-            if "linkedin.com/posts/" in normalized:
+            if any(media_host in host for media_host in ("reuters.com", "bloomberg.com", "wsj.com", "ft.com", "apnews.com")):
                 return 2
-            if "sec.gov" in normalized:
-                return 3
-            if "capitalone.com" in normalized or "gcs-web.com" in normalized:
+            if "linkedin.com/posts/" in normalized or host.endswith("linkedin.com"):
                 return 4
+            if host:
+                return 3
             return 5
 
         return min(candidate_urls, key=lambda url: (_priority(url), candidate_urls.index(url)))
@@ -556,7 +673,7 @@ class FSSignalEvidenceDigestor:
         movement_mentions = self._extract_entity_linked_movement_mentions(
             text=deep_research_markdown or "",
             entity_aliases=entity_aliases,
-            max_items=4,
+            max_items=8,
         )
         movement_sources = self._movement_source_url_candidates(
             available_sources=available_sources,
@@ -574,7 +691,7 @@ class FSSignalEvidenceDigestor:
             )
         source_summary = ""
         if movement_sources:
-            source_summary = "Movement sources: " + "; ".join(movement_sources[:6]) + "."
+            source_summary = "Movement sources: " + "; ".join(movement_sources[:12]) + "."
 
         pieces = [piece for piece in [analysis, movement_summary, source_summary] if piece]
         updated_analysis = " ".join(pieces).strip()

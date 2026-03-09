@@ -121,7 +121,12 @@ def _build_phase_report() -> MDReport:
                 evidence_quote="Capital One appointed ... Business Chief Risk Officer ...",
                 source_url="https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro",
                 source_title="FinTech Magazine",
-                analysis="Named risk leadership aligns to payments expansion governance.",
+                analysis=(
+                    "Named risk leadership aligns to payments expansion governance. "
+                    "Movement sources: "
+                    "https://fintechmagazine.com/banking/capital-one-announces-appointment-of-global-payments-network-business-cro; "
+                    "https://www.linkedin.com/posts/example_exec_post."
+                ),
             ),
             SignalEvidence(
                 signal_code="FS.MODEL_RISK.FINDINGS",
@@ -185,14 +190,17 @@ def test_formatter_renders_phase_layout_by_default():
     assert "Governing Headline:" in content
     assert "Executive Transition (FS.EXEC.TRANSITION)" in content
     assert "— Confirmed" in content
-    assert "Model Risk Findings (FS.MODEL_RISK.FINDINGS)" not in content
+    assert "Model Risk Findings (FS.MODEL_RISK.FINDINGS)" in content
+    assert "— Insufficient" in content
     assert "Verbatim quote:" in content
     assert "Canonical URL:" in content
+    assert "Additional discovered movement sources (candidate set):" in content
+    assert "- https://www.linkedin.com/posts/example_exec_post" in content
     assert "1. Verbatim quote:" in content
     assert "   Source title:" in content
     assert "   Canonical URL:" in content
     assert "   Evidentiary linkage:" in content
-    assert "2. Verbatim quote:" not in content
+    assert "2. Verbatim quote:" in content
     assert "Evidentiary linkage:" in content
     assert "#### Opportunity 1 — FS.EXEC.TRANSITION" in content
     assert "**Opportunity Overview**" in content
@@ -242,7 +250,24 @@ def test_formatter_can_show_diagnostics_with_toggle():
     assert "### Pipeline Diagnostics" in content
     assert "### Credentials Evidence (Full I/O)" in content
     assert "### Credentials Batch I/O (Full)" in content
-    assert "Lookup Failed=" not in content
+    assert "Lookup Failed=0" in content
+
+
+def test_formatter_demo_profile_shows_confirmed_only_and_hides_lookup_failed_count():
+    report = _build_phase_report()
+    os.environ["BD_RUNTIME_PROFILE"] = "demo"
+    os.environ["BD_FAILURE_VISIBILITY"] = "suppressed"
+    os.environ["BD_SHOW_PIPELINE_DIAGNOSTICS"] = "true"
+    try:
+        section = format_bd_report_as_section(report)
+    finally:
+        os.environ.pop("BD_RUNTIME_PROFILE", None)
+        os.environ.pop("BD_FAILURE_VISIBILITY", None)
+        os.environ.pop("BD_SHOW_PIPELINE_DIAGNOSTICS", None)
+
+    content = section["content"]
+    assert "Model Risk Findings (FS.MODEL_RISK.FINDINGS)" not in content
+    assert "Lookup Failed=0" not in content
 
 
 def test_formatter_uses_position_fallback_for_credentials_cards_when_signal_code_unavailable():

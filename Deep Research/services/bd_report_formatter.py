@@ -13,6 +13,7 @@ from models.bd_schemas import (
     CredentialsLookupDiagnostics,
     CredentialsBatchDiagnostics,
 )
+from services.runtime_policy import get_runtime_policy
 
 
 def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
@@ -20,9 +21,10 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
     if not report:
         return None
 
+    policy = get_runtime_policy()
     show_diagnostics = os.getenv("BD_SHOW_PIPELINE_DIAGNOSTICS", "false").lower() in {"1", "true", "yes"}
     if report.layout_version == "fs_evidence_locked_v1" or report.phase2_signal_evidence or report.phase3_opportunities:
-        content = _format_phase_layout(report, show_diagnostics=show_diagnostics)
+        content = _format_phase_layout(report, show_diagnostics=show_diagnostics, show_failures=policy.show_failures)
         return {
             "title": "🎯 BD Analysis & Credentials Validation",
             "content": content,
@@ -67,7 +69,7 @@ def format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
             lines.append("")
 
     if show_diagnostics:
-        lines.extend(_format_pipeline_diagnostics(report))
+        lines.extend(_format_pipeline_diagnostics(report, show_failures=policy.show_failures))
         if report.credentials_lookup_mode == "batched_single_call" and report.credentials_batch_diagnostics:
             lines.extend(_format_credentials_batch_io(report))
         lines.extend(_format_credentials_evidence(report))
@@ -271,12 +273,12 @@ def _credential_match_reason(opportunity_signal: str, credential: CredentialMatc
     return base
 
 
-def _sanitize_phase_credentials_summary(summary: str) -> str:
+def _sanitize_phase_credentials_summary(summary: str, show_failures: bool) -> str:
     normalized = (summary or "").strip()
     if not normalized:
         return "No materially aligned credentials identified."
     lowered = normalized.lower()
-    if "lookup failed" in lowered or lowered.startswith("failed"):
+    if not show_failures and ("lookup failed" in lowered or lowered.startswith("failed")):
         return "No materially aligned credentials identified."
     return normalized
 
@@ -317,11 +319,47 @@ def _structured_footnote_from_evidence(evidence) -> str:
     )
 
 
-def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
+def _extract_movement_sources_from_analysis(analysis: str) -> List[str]:
+    text = (analysis or "").strip()
+    if not text:
+        return []
+
+    # Expected enrichment format:
+    # "Movement sources: url1; url2; url3."
+    marker = "movement sources:"
+    lower = text.lower()
+    idx = lower.find(marker)
+    if idx < 0:
+        return []
+
+    source_blob = text[idx + len(marker):].strip()
+    # Stop at likely next sentence boundary if present.
+    sentence_end = source_blob.find(". ")
+    if sentence_end >= 0:
+        source_blob = source_blob[:sentence_end].strip()
+    if source_blob.endswith("."):
+        source_blob = source_blob[:-1].strip()
+
+    candidates = [item.strip() for item in source_blob.split(";")]
+    urls: List[str] = []
+    seen = set()
+    for candidate in candidates:
+        if not candidate.startswith(("http://", "https://")):
+            continue
+        key = candidate.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        urls.append(candidate)
+    return urls
+
+
+def _format_phase_layout(report: MDReport, show_diagnostics: bool, show_failures: bool) -> str:
     lines: List[str] = []
     distinct_sources = _distinct_sources(report.phase_sources)
     phase_credentials = _build_phase_credentials_index(report)
     phase_credentials_by_position = _build_phase_credentials_by_position(report)
+    policy = get_runtime_policy()
 
     lines.extend(_format_scan_first_summary(report, distinct_source_count=len(distinct_sources)))
 
@@ -331,13 +369,13 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
         lines.append(f"Governing Headline: {report.phase2_headline}")
         lines.append("")
 
-    confirmed_phase2 = [
-        evidence for evidence in (report.phase2_signal_evidence or [])
-        if evidence.status == "Confirmed"
-    ]
+    all_phase2 = list(report.phase2_signal_evidence or [])
+    displayed_phase2 = [
+        evidence for evidence in all_phase2 if evidence.status == "Confirmed"
+    ] if policy.is_demo else all_phase2
 
-    if confirmed_phase2:
-        for evidence in confirmed_phase2:
+    if displayed_phase2:
+        for evidence in displayed_phase2:
             lines.append(f"**{evidence.signal_label} ({evidence.signal_code}) — {evidence.status}**")
             if evidence.analysis:
                 lines.append(evidence.analysis)
@@ -347,15 +385,25 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
                 source_title = evidence.source_title or evidence.source_url
                 lines.append(f"Source title: {source_title}")
                 lines.append(f"Canonical URL: {evidence.source_url}")
+            if evidence.signal_code == "FS.EXEC.TRANSITION":
+                movement_sources = _extract_movement_sources_from_analysis(evidence.analysis or "")
+                movement_sources = [
+                    source for source in movement_sources
+                    if source.strip().lower() != (evidence.source_url or "").strip().lower()
+                ]
+                if movement_sources:
+                    lines.append("Additional discovered movement sources (candidate set):")
+                    for source in movement_sources:
+                        lines.append(f"- {source}")
             lines.append("")
         lines.append("")
     else:
         lines.append("No confirmed phase-2 signal evidence was produced.")
         lines.append("")
 
-    if confirmed_phase2:
+    if displayed_phase2:
         lines.append("Footnotes")
-        for index, evidence in enumerate(confirmed_phase2, 1):
+        for index, evidence in enumerate(displayed_phase2, 1):
             if report.phase2_footnotes and index - 1 < len(report.phase2_footnotes):
                 footnote = report.phase2_footnotes[index - 1]
             else:
@@ -402,7 +450,12 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
                     )
                 )
             else:
-                lines.append(_sanitize_phase_credentials_summary(opportunity.credentials_summary))
+                lines.append(
+                    _sanitize_phase_credentials_summary(
+                        opportunity.credentials_summary,
+                        show_failures=show_failures,
+                    )
+                )
             lines.append("")
             if opportunity.recommended_actions:
                 lines.append("**Recommended Client Enablement Actions**")
@@ -428,7 +481,7 @@ def _format_phase_layout(report: MDReport, show_diagnostics: bool) -> str:
         lines.append("")
 
     if show_diagnostics:
-        lines.extend(_format_pipeline_diagnostics(report))
+        lines.extend(_format_pipeline_diagnostics(report, show_failures=show_failures))
         if report.credentials_lookup_mode == "batched_single_call" and report.credentials_batch_diagnostics:
             lines.extend(_format_credentials_batch_io(report))
         lines.extend(_format_credentials_evidence(report))
@@ -560,7 +613,7 @@ def _format_credential_details(credentials: List[CredentialMatch]) -> List[str]:
     return lines
 
 
-def _format_pipeline_diagnostics(report: MDReport) -> List[str]:
+def _format_pipeline_diagnostics(report: MDReport, show_failures: bool) -> List[str]:
     """Render deterministic pipeline diagnostics for operator visibility."""
     lines: List[str] = ["### Pipeline Diagnostics", ""]
     lines.append(f"- Synthesis Status: {report.synthesis_status}")
@@ -575,11 +628,14 @@ def _format_pipeline_diagnostics(report: MDReport) -> List[str]:
     lines.append(f"- Lookups Executed: {report.lookups_executed_count}")
     lines.append(f"- Credentials Lookup Mode: {report.credentials_lookup_mode}")
     lines.append(f"- Opportunities Source: {report.opportunities_source}")
-    lines.append(
+    lookup_counts = (
         "- Lookup Status Counts: "
         f"Matched={report.credentials_status_counts.get('Matched', 0)}, "
         f"No Match={report.credentials_status_counts.get('No Match', 0)}"
     )
+    if show_failures:
+        lookup_counts += f", Lookup Failed={report.credentials_status_counts.get('Lookup Failed', 0)}"
+    lines.append(lookup_counts)
     if report.lookups_skipped_reason:
         lines.append(f"- Lookups Skipped Reason: {report.lookups_skipped_reason}")
     if report.opportunity_extraction_status == "Extraction Failed":

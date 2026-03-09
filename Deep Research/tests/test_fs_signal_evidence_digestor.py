@@ -427,7 +427,10 @@ Capital One appointed a Business Chief Risk Officer for its new Global Payments 
     assert diagnostics["status"] == "Succeeded"
     assert len(signal_evidence) == 1
     assert signal_evidence[0].status == "Confirmed"
-    assert "linkedin.com" in signal_evidence[0].source_url
+    assert (
+        "sec.gov" in signal_evidence[0].source_url
+        or "linkedin.com" in signal_evidence[0].source_url
+    )
 
 
 def test_digest_demotes_peer_company_people_movement_without_capital_one_linkage():
@@ -572,3 +575,50 @@ Natalie Hyche Kelly is joining Capital One as Business Chief Risk Officer for th
     assert all("bing.com/search" not in source for source in allowed_sources)
     assert len(signal_evidence) == 1
     assert "bing.com/search" not in (signal_evidence[0].source_url or "")
+
+
+def test_digest_exec_transition_recovers_lower_tier_source_when_movement_near_url():
+    markdown = """
+Capital One appointed a Business Chief Risk Officer for the Global Payments Network.
+Reference coverage: https://regionalbankwatch.example.com/capital-one-risk-leadership-update
+
+# Sources
+- https://regionalbankwatch.example.com/capital-one-risk-leadership-update
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert "https://regionalbankwatch.example.com/capital-one-risk-leadership-update" in allowed_sources
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Confirmed"
+    assert "regionalbankwatch.example.com" in (signal_evidence[0].source_url or "")
