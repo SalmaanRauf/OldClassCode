@@ -563,6 +563,12 @@ class FSSignalEvidenceDigestor:
             text=deep_research_markdown or "",
             entity_aliases=entity_aliases,
         )
+        movement_mentions = self._extract_entity_linked_movement_mentions(
+            text=deep_research_markdown or "",
+            entity_aliases=entity_aliases,
+            max_items=12,
+        )
+        movement_mentions_text = " ".join(movement_mentions).lower()
 
         candidates: List[str] = []
         seen = set()
@@ -612,6 +618,13 @@ class FSSignalEvidenceDigestor:
                 entity_linked = True
             if not entity_linked and host_linked and has_entity_linked_movement_text:
                 entity_linked = True
+            if (
+                not entity_linked
+                and "fintechmagazine.com" in host
+                and "people-move" in normalized
+                and self._slug_overlap_with_mentions(url, movement_mentions_text) >= 2
+            ):
+                entity_linked = True
             if not entity_linked:
                 continue
 
@@ -620,6 +633,26 @@ class FSSignalEvidenceDigestor:
                 candidates.append(url)
 
         return candidates
+
+    def _slug_overlap_with_mentions(self, url: str, mentions_text: str) -> int:
+        if not url or not mentions_text:
+            return 0
+        try:
+            path = (urlparse(url).path or "").lower()
+        except Exception:
+            return 0
+        if not path:
+            return 0
+
+        slug = path.split("/")[-1]
+        tokens = [
+            token
+            for token in re.split(r"[^a-z0-9]+", slug)
+            if token and len(token) >= 3 and token not in {"people", "move", "moves", "news"}
+        ]
+        if not tokens:
+            return 0
+        return sum(1 for token in tokens if token in mentions_text)
 
     def _is_issuer_host(self, host: str) -> bool:
         normalized = (host or "").strip().lower()

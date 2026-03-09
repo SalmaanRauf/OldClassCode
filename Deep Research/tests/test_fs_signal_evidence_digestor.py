@@ -622,3 +622,50 @@ Reference coverage: https://regionalbankwatch.example.com/capital-one-risk-leade
     assert len(signal_evidence) == 1
     assert signal_evidence[0].status == "Confirmed"
     assert "regionalbankwatch.example.com" in (signal_evidence[0].source_url or "")
+
+
+def test_digest_exec_transition_links_fintech_people_move_slug_to_entity_mentions():
+    markdown = """
+Natalie Hyche Kelly is joining Capital One as Business Chief Risk Officer for the Global Payments Network.
+
+# Sources
+- https://fintechmagazine.com/news/people-move-natalie-hyche-kelly
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "",
+            }
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.EXEC.TRANSITION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION"],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Confirmed"
+    assert "fintechmagazine.com/news/people-move-natalie-hyche-kelly" in (
+        (signal_evidence[0].analysis or "").lower() + " " + (signal_evidence[0].source_url or "").lower()
+    )

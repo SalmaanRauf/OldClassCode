@@ -27,6 +27,8 @@ Extract structured signal evidence from the Deep Research markdown for only the 
    - Do not collapse to a single movement when multiple material moves are present.
    - Include lower-confidence but still valid movement items in `analysis` when evidence exists; keep confidence framing factual.
    - `source_url` should be one valid supporting source, and `analysis` should retain the full multi-movement picture with corroborating source references when available.
+   - When present in the markdown/source set, explicitly incorporate FinTech Magazine "People Moves" findings and LinkedIn self-disclosure corroboration in `analysis`.
+   - Preserve all relevant movement source URLs in the narrative (for example in a concise "Movement sources" list).
 8. If the trigger indicates a specific company, treat people-movement findings as in-scope only when tied to that target company's governance context.
    - Do not confirm peer-company personnel moves unless evidence explicitly links them to target-company integration or oversight.
 
