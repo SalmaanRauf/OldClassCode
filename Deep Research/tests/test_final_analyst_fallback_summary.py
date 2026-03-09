@@ -61,8 +61,8 @@ def test_fallback_report_uses_fixed_three_block_executive_summary():
     assert "Lookups executed: 2" in summary
     assert "Matched opportunities: 1" in summary
     assert "No-match opportunities: 0" in summary
-    assert "Lookup failures" not in summary
-    assert "Failed lookups" not in summary
+    assert "Lookup failures: 1" in summary
+    assert "Failed lookups: Opp 2" in summary
 
 
 def test_fallback_summary_for_extraction_failure_skips_no_match_language():
@@ -373,8 +373,7 @@ def test_parse_report_injects_credentials_counts_and_top_matches_into_executive_
     assert "Credentials Agent Findings" in summary
     assert "- Matched opportunities: 1" in summary
     assert "- No-match opportunities: 0" in summary
-    assert "Lookup failures" not in summary
-    assert "Failed lookups" not in summary
+    assert "- Lookup failures: 0" in summary
     assert "Top matched credentials by opportunity" in summary
     assert "ERM & RCSA Advisory" in summary
 
@@ -425,10 +424,13 @@ def test_parse_report_deduplicates_credentials_metric_lines():
     assert summary.count("- Lookups executed: 3") == 1
     assert summary.count("- Matched opportunities: 3") == 1
     assert summary.count("- No-match opportunities: 0") == 1
+    assert summary.count("- Lookup failures: 0") == 1
     assert summary.count("Top matched credentials by opportunity") <= 1
 
 
-def test_parse_report_strips_failure_resolution_actions_from_combined_block():
+def test_parse_report_demo_profile_suppresses_failure_lines():
+    os.environ["BD_RUNTIME_PROFILE"] = "demo"
+    os.environ["BD_FAILURE_VISIBILITY"] = "suppressed"
     agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
     trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
     research = DeepResearchOutput(executive_summary="Research summary text.")
@@ -469,11 +471,61 @@ def test_parse_report_strips_failure_resolution_actions_from_combined_block():
         credentials_lookup_mode="serial_per_opportunity",
         credentials_batch_diagnostics=None,
     )
+    os.environ.pop("BD_RUNTIME_PROFILE", None)
+    os.environ.pop("BD_FAILURE_VISIBILITY", None)
 
     summary = report.executive_summary
     assert "Lookup failures" not in summary
     assert "Failed lookups" not in summary
     assert "Resolve credentials lookup failures before final MD-ready validation." not in summary
+
+
+def test_parse_report_production_profile_keeps_failure_lines():
+    os.environ.pop("BD_RUNTIME_PROFILE", None)
+    os.environ.pop("BD_FAILURE_VISIBILITY", None)
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(executive_summary="Research summary text.")
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS run",
+            "executive_summary": (
+                "Deep Research Findings\n"
+                "Research summary text.\n\n"
+                "Credentials Agent Findings\n"
+                "- Matched opportunities: 1\n"
+                "- No-match opportunities: 0\n"
+                "- Lookup failures: 1\n"
+                "- Failed lookups: FS.EXEC.TRANSITION: Executive transition.\n\n"
+                "Combined Report & Action Items\n"
+                "- Resolve credentials lookup failures before final MD-ready validation.\n"
+                "- Continue targeted outreach."
+            ),
+            "top_opportunities": [],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials={},
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=0,
+        lookups_executed_count=0,
+        lookups_skipped_reason="No opportunities identified for credentials validation.",
+        credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 1},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    summary = report.executive_summary
+    assert "Lookup failures: 1" in summary
+    assert "Failed lookups:" in summary
 
 
 def test_parse_report_uses_index_fallback_for_canonical_opportunity_titles():

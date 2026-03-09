@@ -27,6 +27,7 @@ from models.bd_schemas import (
     SignalEvidence,
     PhaseOpportunity,
 )
+from services.runtime_policy import get_runtime_policy
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class FinalAnalystAgent:
         self._kernel = kernel
         self._exec_settings = exec_settings
         self._prompt_template: Optional[str] = None
+        self._runtime_policy = get_runtime_policy()
     
     async def _ensure_kernel(self):
         """Lazy-load kernel from kernel_setup if not provided."""
@@ -700,6 +702,7 @@ class FinalAnalystAgent:
         credentials_status_counts: Dict[str, int]
     ) -> str:
         """Build fixed-format summary with deep research + credentials + combined actions."""
+        policy = self._runtime_policy
         counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
         for key in counts:
             counts[key] = credentials_status_counts.get(key, 0)
@@ -722,6 +725,16 @@ class FinalAnalystAgent:
                 f"- Matched opportunities: {counts['Matched']}",
                 f"- No-match opportunities: {counts['No Match']}",
             ]
+            if policy.show_failures:
+                credentials_lines.append(f"- Lookup failures: {counts['Lookup Failed']}")
+                if counts["Lookup Failed"] > 0:
+                    failed_titles = [
+                        title
+                        for title, response in credentials.items()
+                        if response.lookup_status == "Lookup Failed"
+                    ]
+                    if failed_titles:
+                        credentials_lines.append(f"- Failed lookups: {', '.join(failed_titles)}")
 
         combined_lines = []
         if research.recommended_actions:
@@ -736,6 +749,8 @@ class FinalAnalystAgent:
             combined_lines.append("- Re-run with a canonical opportunities section or improve opportunity extraction patterns before credentials validation.")
         if counts["No Match"] > 0 and lookups_executed_count > 0:
             combined_lines.append("- Prioritize opportunities with stronger internal proof or develop supporting credential narratives.")
+        if policy.show_failures and counts["Lookup Failed"] > 0:
+            combined_lines.append("- Resolve credential lookup failures and revalidate impacted opportunities.")
 
         top_matches_line = self._format_top_matches_from_responses(credentials)
         summary_lines: List[str] = [
@@ -769,6 +784,7 @@ class FinalAnalystAgent:
         credentials_status_counts: Dict[str, int],
     ) -> str:
         """Ensure executive summary includes stable three-block contract + credentials specifics."""
+        policy = self._runtime_policy
         parsed = self._split_three_block_summary(summary)
         if not parsed:
             return self._build_three_block_summary(
@@ -782,7 +798,8 @@ class FinalAnalystAgent:
             )
 
         credentials_text = parsed["Credentials Agent Findings"]
-        credentials_text = self._strip_failure_lines(credentials_text)
+        if not policy.show_failures:
+            credentials_text = self._strip_failure_lines(credentials_text)
         credentials_text = self._strip_credentials_metrics_lines(credentials_text)
         credentials_text = self._strip_top_matched_line(credentials_text)
         credentials_text = self._ensure_credentials_counts_lines(
@@ -791,14 +808,23 @@ class FinalAnalystAgent:
             lookups_executed_count=lookups_executed_count,
             lookups_skipped_reason=lookups_skipped_reason,
         )
+        if policy.show_failures:
+            credentials_text = self._ensure_failure_counts_lines(
+                credentials_text=credentials_text,
+                credentials_status_counts=credentials_status_counts,
+                top_opportunities=top_opportunities,
+            )
         credentials_text = self._ensure_top_matched_line(
             credentials_text=credentials_text,
             top_opportunities=top_opportunities,
         )
-        combined_text = self._strip_failure_lines(
-            parsed["Combined Report & Action Items"],
-            include_lookup_count_lines=False,
-        )
+        if policy.show_failures:
+            combined_text = parsed["Combined Report & Action Items"].strip()
+        else:
+            combined_text = self._strip_failure_lines(
+                parsed["Combined Report & Action Items"],
+                include_lookup_count_lines=False,
+            )
 
         return "\n".join(
             [
@@ -899,6 +925,7 @@ class FinalAnalystAgent:
         lookups_skipped_reason: Optional[str],
     ) -> str:
         """Inject deterministic counts lines when synthesis omitted them."""
+        policy = self._runtime_policy
         normalized = (credentials_text or "").strip()
         lowered = normalized.lower()
 
@@ -906,6 +933,8 @@ class FinalAnalystAgent:
             "matched opportunities",
             "no-match opportunities",
         ]
+        if policy.show_failures:
+            required_markers.append("lookup failures")
         has_all_markers = all(marker in lowered for marker in required_markers)
         if has_all_markers:
             return normalized
@@ -924,10 +953,39 @@ class FinalAnalystAgent:
                     f"- No-match opportunities: {credentials_status_counts.get('No Match', 0)}",
                 ]
             )
+            if policy.show_failures:
+                counts_lines.append(
+                    f"- Lookup failures: {credentials_status_counts.get('Lookup Failed', 0)}"
+                )
 
         if not normalized:
             return "\n".join(counts_lines)
         return "\n".join([normalized, *counts_lines]).strip()
+
+    def _ensure_failure_counts_lines(
+        self,
+        credentials_text: str,
+        credentials_status_counts: Dict[str, int],
+        top_opportunities: List[MDReportOpportunity],
+    ) -> str:
+        """Ensure failure lines are present once when production visibility is enabled."""
+        normalized = (credentials_text or "").strip()
+        lowered = normalized.lower()
+        lines: List[str] = [normalized] if normalized else []
+
+        if "lookup failures" not in lowered:
+            lines.append(f"- Lookup failures: {credentials_status_counts.get('Lookup Failed', 0)}")
+
+        if "failed lookups" not in lowered and credentials_status_counts.get("Lookup Failed", 0) > 0:
+            failed_titles = [
+                item.opportunity.title
+                for item in (top_opportunities or [])
+                if item.credentials_lookup_status == "Lookup Failed"
+            ]
+            if failed_titles:
+                lines.append(f"- Failed lookups: {', '.join(failed_titles)}")
+
+        return "\n".join([line for line in lines if line]).strip()
 
     def _ensure_top_matched_line(
         self,

@@ -53,7 +53,7 @@ Create a concise JSON report with stable existing fields and strict phase-based 
 11. In `executive_summary`, inside `Credentials Agent Findings`, include:
    - lookup status counts (Lookups executed, Matched, No Match), and
    - a short "Top matched credentials by opportunity" line for validated opportunities when matches exist.
-12. Keep executive-summary wording demo-ready and action-oriented; avoid failure-focused phrasing (for example, do not include "Lookup failures" or "Failed lookups" lines).
+12. Keep executive-summary wording action-oriented and factual. If lookup failures exist, state them plainly without exaggerated language.
 13. Do not duplicate credentials count lines. Include each metric line once.
 
 # Output Format

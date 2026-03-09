@@ -38,6 +38,7 @@ from services.bd_orchestrator import BDOrchestrator
 from services.bd_report_formatter import format_bd_report_as_section
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
 from services.deep_research_formatter import format_deep_research_response_as_markdown
+from services.runtime_policy import get_runtime_policy
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
@@ -199,13 +200,18 @@ def _build_session_params(
 
 
 def _print_report_summary(report: MDReport) -> None:
+    policy = get_runtime_policy()
     print("\n=== Replay Summary ===")
     print(f"- opportunity_extraction_status: {report.opportunity_extraction_status}")
     print(f"- opportunities_extracted_count: {report.opportunities_extracted_count}")
     print(f"- lookups_executed_count: {report.lookups_executed_count}")
     matched = report.credentials_status_counts.get("Matched", 0)
     no_match = report.credentials_status_counts.get("No Match", 0)
-    print(f"- credentials_status_counts: matched={matched}, no_match={no_match}")
+    if policy.show_failures:
+        failed = report.credentials_status_counts.get("Lookup Failed", 0)
+        print(f"- credentials_status_counts: matched={matched}, no_match={no_match}, failed={failed}")
+    else:
+        print(f"- credentials_status_counts: matched={matched}, no_match={no_match}")
     print(f"- synthesis_status: {report.synthesis_status}")
     if report.synthesis_fallback_reason:
         print(f"- synthesis_fallback_reason: {report.synthesis_fallback_reason}")

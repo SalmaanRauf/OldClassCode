@@ -41,6 +41,12 @@ class Config:
     ENABLE_DEEP_RESEARCH = os.getenv("ENABLE_DEEP_RESEARCH", "false").lower() in ("1", "true", "yes")
     ENABLE_BD_ATLAS_DIGESTION = os.getenv("ENABLE_BD_ATLAS_DIGESTION", "true").lower() in ("1", "true", "yes")
 
+    # Runtime profile / policy (production by default)
+    BD_RUNTIME_PROFILE = os.getenv("BD_RUNTIME_PROFILE", "production").strip().lower()
+    BD_FAILURE_VISIBILITY = os.getenv("BD_FAILURE_VISIBILITY", "").strip().lower()
+    BD_SOURCE_POLICY_MODE = os.getenv("BD_SOURCE_POLICY_MODE", "quality_first").strip().lower()
+    BD_REPORT_STYLE = os.getenv("BD_REPORT_STYLE", "").strip().lower()
+
     # --- Operational settings (timeouts, limits) ---
     # Timeout for independent GWBS scope fetches (seconds)
     GWBS_SCOPE_TIMEOUT_SECONDS = int(os.getenv("GWBS_SCOPE_TIMEOUT_SECONDS", "45"))
