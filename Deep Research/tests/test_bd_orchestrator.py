@@ -797,6 +797,7 @@ class TestSerialCredentials:
             credentials_agent=serial_agent,
             final_analyst=mock_final_analyst,
         )
+        orchestrator._credentials_retry_backoff_seconds = 0.0
 
         report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
         assert serial_agent.find_credentials.await_count == 3
@@ -854,6 +855,7 @@ class TestSerialCredentials:
             credentials_agent=serial_agent,
             final_analyst=mock_final_analyst,
         )
+        orchestrator._credentials_retry_backoff_seconds = 0.0
 
         report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
         assert serial_agent.find_credentials.await_count == 2
@@ -910,6 +912,69 @@ class TestSerialCredentials:
             credentials_agent=serial_agent,
             final_analyst=mock_final_analyst,
         )
+
+        report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
+        assert serial_agent.find_credentials.await_count == 2
+        serial_agent.find_credentials_batch.assert_not_called()
+        assert report.credentials_status_counts["Matched"] == 1
+
+    @pytest.mark.asyncio
+    async def test_serial_mode_retries_once_on_internal_server_session_failure(
+        self, mock_extractor, mock_final_analyst, sample_trigger
+    ):
+        serial_agent = MagicMock(spec=CredentialsAgent)
+        serial_agent.find_credentials_batch = AsyncMock()
+        serial_agent.find_credentials = AsyncMock(side_effect=[
+            CredentialsResponse(
+                opportunity_title="Opp 1",
+                matches=[],
+                no_matches_found=True,
+                lookup_status="Lookup Failed",
+                failure_reason=(
+                    "HTTP error 500: unable to create chat session. "
+                    "Error occurred: request failed with status code InternalServerError"
+                ),
+                diagnostics=CredentialsLookupDiagnostics(
+                    opportunity_title="Opp 1",
+                    sector="Defense",
+                    query_text="q",
+                    raw_response_text="",
+                    parse_outcome="lookup_failed",
+                    lookup_status="Lookup Failed",
+                    error_type="ContextFreeError",
+                    error_message=(
+                        "HTTP error 500: unable to create chat session. "
+                        "Error occurred: request failed with status code InternalServerError"
+                    ),
+                    duration_ms=1.0,
+                    match_count=0,
+                ),
+            ),
+            CredentialsResponse(
+                opportunity_title="Opp 1",
+                matches=[
+                    CredentialMatch(
+                        title="Cred",
+                        client_challenge="c",
+                        value_provided="v",
+                        url="https://ishare.protiviti.com/cred/1",
+                    )
+                ],
+                no_matches_found=False,
+                lookup_status="Matched",
+            ),
+        ])
+
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            opportunities=[Opportunity(title="Opp 1", scope="Scope", confidence="High")]
+        )
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            credentials_agent=serial_agent,
+            final_analyst=mock_final_analyst,
+        )
+        orchestrator._credentials_retry_backoff_seconds = 0.0
 
         report = await orchestrator.run(sample_trigger, deep_research_output=SAMPLE_DEEP_RESEARCH)
         assert serial_agent.find_credentials.await_count == 2

@@ -95,6 +95,7 @@ class BDOrchestrator:
             )
             credentials_lookup_mode = "serial_per_opportunity"
         self.credentials_lookup_mode = credentials_lookup_mode
+        self._credentials_retry_backoff_seconds = 1.0
     
     async def _ensure_credentials_agent(self):
         """Lazy-load credentials agent if not provided."""
@@ -348,9 +349,10 @@ class BDOrchestrator:
         response = await self.credentials_agent.find_credentials(opportunity, sector=sector)
         if self._is_timeout_lookup_failure(response):
             logger.warning(
-                "Retrying serial credentials lookup after timeout-like failure for '%s'.",
+                "Retrying serial credentials lookup after retryable transport failure for '%s'.",
                 opportunity.title,
             )
+            await asyncio.sleep(self._credentials_retry_backoff_seconds)
             response = await self.credentials_agent.find_credentials(opportunity, sector=sector)
         return response
 
@@ -375,6 +377,13 @@ class BDOrchestrator:
             "connection refused",
             "bad gateway",
             "gateway timeout",
+            "internal server error",
+            "internalservererror",
+            "http error 500",
+            "status code 500",
+            "request failed with status code internalservererror",
+            "unable to create chat session",
+            "failed to create chat session",
         )
         return any(marker in combined for marker in retryable_markers)
     

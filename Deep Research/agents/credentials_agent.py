@@ -401,8 +401,6 @@ class CredentialsAgent:
         return f"{truncated}..."
 
     def _is_timeout_like_error(self, error: Exception) -> bool:
-        if not isinstance(error, ContextFreeError):
-            return False
         message = str(error).lower()
         retryable_markers = (
             "timed out",
@@ -416,6 +414,13 @@ class CredentialsAgent:
             "connection refused",
             "bad gateway",
             "gateway timeout",
+            "internal server error",
+            "internalservererror",
+            "http error 500",
+            "status code 500",
+            "request failed with status code internalservererror",
+            "unable to create chat session",
+            "failed to create chat session",
         )
         return any(marker in message for marker in retryable_markers)
 

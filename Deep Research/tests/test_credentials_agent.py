@@ -874,5 +874,13 @@ class TestBatchLookup:
         assert agent._is_valid_credential_url("https://ishare.protiviti.com/cred/123")
 
 
+def test_retryable_marker_includes_internal_server_session_error(agent):
+    err = ContextFreeError(
+        "HTTP error 500: unable to create chat session. "
+        "Error occurred: request failed with status code InternalServerError"
+    )
+    assert agent._is_timeout_like_error(err) is True
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
