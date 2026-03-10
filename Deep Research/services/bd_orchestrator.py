@@ -106,6 +106,7 @@ class BDOrchestrator:
         self,
         trigger: BDTrigger,
         deep_research_output: Optional[str] = None,
+        structured_source_urls: Optional[List[str]] = None,
         progress_cb: Optional[ProgressCallback] = None
     ) -> MDReport:
         """Run the full BD orchestration workflow.
@@ -122,6 +123,7 @@ class BDOrchestrator:
         
         # Initialize context
         ctx = BDContext(trigger=trigger)
+        ctx.structured_source_urls = self._merge_source_urls(structured_source_urls or [])
         ctx.credentials_lookup_mode = self.credentials_lookup_mode
         
         try:
@@ -138,6 +140,9 @@ class BDOrchestrator:
             # Step 2: Extract opportunities
             await self._notify(progress_cb, "Extracting opportunities...")
             ctx.parsed_research = self.extractor.extract(ctx.deep_research_raw or "")
+            ctx.parsed_research.structured_citations = self._merge_source_urls(
+                list(ctx.parsed_research.structured_citations or []) + ctx.structured_source_urls
+            )
             ctx.opportunities_source = (
                 "deterministic_extractor"
                 if ctx.parsed_research.opportunities
@@ -200,14 +205,28 @@ class BDOrchestrator:
                     trigger=trigger,
                     deep_research_markdown=ctx.deep_research_raw or "",
                     requested_signal_codes=requested_fs_signals,
-                    source_urls=ctx.parsed_research.raw_citations,
+                    source_urls=self._merge_source_urls(
+                        list(ctx.parsed_research.raw_citations or [])
+                        + list(ctx.parsed_research.structured_citations or [])
+                    ),
                 )
                 ctx.fs_signal_evidence = fs_signal_evidence
                 ctx.fs_allowed_sources = allowed_sources
+                ctx.fs_confirmation_sources = allowed_sources
+                ctx.fs_discovery_sources = list(
+                    (
+                        (fs_digest_diagnostics or {}).get("discovery_sources")
+                        or []
+                    )
+                )
                 ctx.opportunity_digest_diagnostics = {
                     **(ctx.opportunity_digest_diagnostics or {}),
                     "fs_signal_evidence_digest": fs_digest_diagnostics,
                 }
+                coverage_alert = (fs_digest_diagnostics or {}).get("source_coverage_alert")
+                if coverage_alert:
+                    ctx.trace.append(f"FS source coverage alert: {coverage_alert}")
+                    logger.warning("FS source coverage alert: %s", coverage_alert)
 
                 ctx.fs_phase3_candidates = self.fs_opportunity_deriver.derive(
                     trigger=trigger,
@@ -688,6 +707,9 @@ class BDOrchestrator:
                     else (ctx.credentials_batch_diagnostics.__dict__ if ctx.credentials_batch_diagnostics else None)
                 ),
                 "opportunity_digest_diagnostics": ctx.opportunity_digest_diagnostics,
+                "structured_source_urls_count": len(ctx.structured_source_urls),
+                "fs_discovery_sources_count": len(ctx.fs_discovery_sources),
+                "fs_confirmation_sources_count": len(ctx.fs_confirmation_sources),
                 "credentials_diagnostics": [
                     diag.model_dump() if hasattr(diag, "model_dump") else diag.__dict__
                     for diag in ctx.credentials_diagnostics.values()
@@ -702,3 +724,17 @@ class BDOrchestrator:
             
         except Exception as e:
             logger.warning(f"Failed to save trace: {e}")
+
+    def _merge_source_urls(self, urls: List[str]) -> List[str]:
+        merged: List[str] = []
+        seen = set()
+        for raw in urls:
+            value = str(raw or "").strip()
+            if not value.startswith(("http://", "https://")):
+                continue
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(value)
+        return merged

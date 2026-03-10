@@ -1335,6 +1335,49 @@ class TestFSSignalEvidenceMode:
         assert len(requested_signal_codes) >= 5
 
     @pytest.mark.asyncio
+    async def test_financial_services_passes_structured_sources_to_digest(
+        self, mock_extractor, mock_credentials_agent, mock_final_analyst
+    ):
+        fs_trigger = BDTrigger(
+            sector="Financial Services",
+            signals=["FS.EXEC.TRANSITION", "FS.REGULATORY.DEADLINE"],
+            company_focus="Capital One",
+            geography="US",
+        )
+
+        raw_source = "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly"
+        structured_source = "https://www.fdic.gov/resolutions/2025-capital-one-interim-resolution-plan-public-section.pdf"
+        mock_extractor.extract.return_value = DeepResearchOutput(
+            executive_summary="FS summary",
+            opportunities=[],
+            raw_citations=[raw_source],
+        )
+
+        mock_digestor = MagicMock(spec=FSSignalEvidenceDigestor)
+        mock_digestor.digest = AsyncMock(return_value=([], {"status": "Succeeded"}, [raw_source, structured_source]))
+
+        mock_deriver = MagicMock(spec=FSOpportunityDeriver)
+        mock_deriver.derive.return_value = []
+
+        orchestrator = BDOrchestrator(
+            extractor=mock_extractor,
+            fs_signal_evidence_digestor=mock_digestor,
+            fs_opportunity_deriver=mock_deriver,
+            credentials_agent=mock_credentials_agent,
+            final_analyst=mock_final_analyst,
+        )
+
+        await orchestrator.run(
+            fs_trigger,
+            deep_research_output=SAMPLE_DEEP_RESEARCH,
+            structured_source_urls=[structured_source],
+        )
+
+        called_source_urls = mock_digestor.digest.await_args.kwargs["source_urls"]
+        assert raw_source in called_source_urls
+        assert structured_source in called_source_urls
+
+    @pytest.mark.asyncio
     async def test_non_financial_services_skips_fs_signal_digest(
         self, mock_extractor, mock_credentials_agent, mock_final_analyst, sample_trigger
     ):

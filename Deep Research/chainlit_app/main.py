@@ -180,6 +180,7 @@ async def enrich_with_bd_analysis(
     try:
         # Convert DR response sections to markdown for BD orchestrator
         dr_markdown = _format_dr_as_markdown(deep_research_response)
+        structured_source_urls = _extract_structured_source_urls(deep_research_response)
         
         if not dr_markdown or len(dr_markdown.strip()) < 100:
             logger.warning("Deep Research output too short for BD enrichment")
@@ -213,6 +214,7 @@ async def enrich_with_bd_analysis(
         report = await orchestrator.run(
             trigger,
             deep_research_output=dr_markdown,
+            structured_source_urls=structured_source_urls,
             progress_cb=bd_progress
         )
         
@@ -232,6 +234,40 @@ async def enrich_with_bd_analysis(
 def _format_dr_as_markdown(response: Dict[str, Any]) -> str:
     """Convert Deep Research response dict to markdown for BD orchestrator."""
     return format_deep_research_response_as_markdown(response)
+
+
+def _extract_structured_source_urls(response: Dict[str, Any]) -> List[str]:
+    """Collect structured source URLs from Deep Research response payload and metadata."""
+    urls: List[str] = []
+    seen = set()
+
+    def _add(url: Any):
+        value = str(url or "").strip()
+        if not value.startswith(("http://", "https://")):
+            return
+        key = value.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        urls.append(value)
+
+    for citation in response.get("citations", []) or []:
+        if isinstance(citation, dict):
+            _add(citation.get("url"))
+
+    for section in response.get("sections", []) or []:
+        if not isinstance(section, dict):
+            continue
+        for citation in section.get("citations", []) or []:
+            if isinstance(citation, dict):
+                _add(citation.get("url"))
+
+    metadata = response.get("metadata", {}) or {}
+    for key in ("discovery_sources", "confirmation_sources", "display_sources"):
+        for url in metadata.get(key, []) or []:
+            _add(url)
+
+    return urls
 
 
 def _format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:

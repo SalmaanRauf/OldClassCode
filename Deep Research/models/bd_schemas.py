@@ -120,6 +120,10 @@ class DeepResearchOutput(BaseModel):
     opportunities: List[Opportunity] = Field(default_factory=list, description="Extracted opportunities")
     recommended_actions: List[str] = Field(default_factory=list, description="Recommended next steps")
     raw_citations: List[str] = Field(default_factory=list, description="All source URLs")
+    structured_citations: List[str] = Field(
+        default_factory=list,
+        description="Structured source URLs supplied by Deep Research response metadata"
+    )
     extraction_diagnostics: Optional[OpportunityExtractionDiagnostics] = Field(
         None,
         description="Opportunity extraction diagnostics"
@@ -401,6 +405,10 @@ class BDContext(BaseModel):
     """
     trigger: BDTrigger
     deep_research_raw: Optional[str] = Field(None, description="Raw Deep Research markdown")
+    structured_source_urls: List[str] = Field(
+        default_factory=list,
+        description="Structured source URLs passed from Deep Research response"
+    )
     parsed_research: Optional[DeepResearchOutput] = Field(None, description="Parsed research")
     credentials_results: Dict[str, CredentialsResponse] = Field(
         default_factory=dict, 
@@ -461,6 +469,14 @@ class BDContext(BaseModel):
     fs_allowed_sources: List[str] = Field(
         default_factory=list,
         description="Allowed sources after deterministic source guardrails"
+    )
+    fs_discovery_sources: List[str] = Field(
+        default_factory=list,
+        description="Internal discovery source set before display filtering"
+    )
+    fs_confirmation_sources: List[str] = Field(
+        default_factory=list,
+        description="Displayable confirmation sources used for signal source_url selection"
     )
     synthesis_status: Optional[str] = Field(
         None,
