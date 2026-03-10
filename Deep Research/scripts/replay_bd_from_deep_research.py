@@ -37,7 +37,10 @@ from models.bd_schemas import MDReport
 from services.bd_orchestrator import BDOrchestrator
 from services.bd_report_formatter import format_bd_report_as_section
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
-from services.deep_research_formatter import format_deep_research_response_as_markdown
+from services.deep_research_formatter import (
+    build_structured_evidence_map,
+    format_deep_research_response_as_markdown,
+)
 from services.runtime_policy import get_runtime_policy
 
 
@@ -164,6 +167,39 @@ def _coerce_deep_research_response(
     }
 
 
+def _extract_response_source_urls(response: Dict[str, Any]) -> List[str]:
+    urls: List[str] = []
+    seen = set()
+
+    def _add(url: Any) -> None:
+        value = str(url or "").strip()
+        if not value.startswith(("http://", "https://")):
+            return
+        key = value.lower()
+        if key in seen:
+            return
+        seen.add(key)
+        urls.append(value)
+
+    for citation in response.get("citations", []) or []:
+        if isinstance(citation, dict):
+            _add(citation.get("url"))
+
+    for section in response.get("sections", []) or []:
+        if not isinstance(section, dict):
+            continue
+        for citation in section.get("citations", []) or []:
+            if isinstance(citation, dict):
+                _add(citation.get("url"))
+
+    metadata = response.get("metadata", {}) or {}
+    for key in ("discovery_sources", "confirmation_sources", "display_sources"):
+        for url in metadata.get(key, []) or []:
+            _add(url)
+
+    return urls
+
+
 def _build_run_query(
     fixture: Dict[str, Any],
     company: str,
@@ -260,6 +296,8 @@ async def _run(args: argparse.Namespace) -> int:
     deep_markdown = _normalize_deep_research_markdown(deep_markdown)
     deep_markdown = _append_sources_if_missing(deep_markdown, source_urls)
     deep_research_response_obj = _coerce_deep_research_response(fixture, deep_markdown, source_urls)
+    structured_source_urls = _extract_response_source_urls(deep_research_response_obj)
+    structured_evidence_map = build_structured_evidence_map(deep_research_response_obj)
 
     user_query = str(args.user_query).strip() if args.user_query else _build_run_query(
         fixture,
@@ -307,6 +345,8 @@ async def _run(args: argparse.Namespace) -> int:
     report = await orchestrator.run(
         trigger=trigger,
         deep_research_output=deep_markdown,
+        structured_source_urls=structured_source_urls,
+        structured_evidence_map=structured_evidence_map,
         progress_cb=progress if args.verbose else None,
     )
 

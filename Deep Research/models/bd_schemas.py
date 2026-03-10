@@ -8,7 +8,7 @@ These models define the data structures for:
 - Final report generation (MDReport, MDReportOpportunity)
 """
 from datetime import datetime
-from typing import Dict, List, Optional, Literal
+from typing import Any, Dict, List, Optional, Literal
 
 try:
     from pydantic import BaseModel, Field
@@ -123,6 +123,18 @@ class DeepResearchOutput(BaseModel):
     structured_citations: List[str] = Field(
         default_factory=list,
         description="Structured source URLs supplied by Deep Research response metadata"
+    )
+    section_source_map: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Section-level source map carried from Deep Research response for normalization"
+    )
+    signal_source_candidates: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Signal-to-source candidate map used by FS normalization"
+    )
+    normalization_diagnostics: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Optional normalization diagnostics metadata"
     )
     extraction_diagnostics: Optional[OpportunityExtractionDiagnostics] = Field(
         None,
@@ -477,6 +489,18 @@ class BDContext(BaseModel):
     fs_confirmation_sources: List[str] = Field(
         default_factory=list,
         description="Displayable confirmation sources used for signal source_url selection"
+    )
+    fs_section_source_map: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Section-level source map passed into FS normalization"
+    )
+    fs_signal_source_candidates: Dict[str, List[str]] = Field(
+        default_factory=dict,
+        description="Signal-level source candidates passed into FS normalization"
+    )
+    fs_normalization_diagnostics: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Detailed normalization diagnostics including reason codes"
     )
     synthesis_status: Optional[str] = Field(
         None,

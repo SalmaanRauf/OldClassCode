@@ -1347,6 +1347,7 @@ class TestFSSignalEvidenceMode:
 
         raw_source = "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly"
         structured_source = "https://www.fdic.gov/resolutions/2025-capital-one-interim-resolution-plan-public-section.pdf"
+        section_source = "https://www.occ.gov/news-issuances/news-releases/2025/nr-occ-2025-36.html"
         mock_extractor.extract.return_value = DeepResearchOutput(
             executive_summary="FS summary",
             opportunities=[],
@@ -1371,11 +1372,23 @@ class TestFSSignalEvidenceMode:
             fs_trigger,
             deep_research_output=SAMPLE_DEEP_RESEARCH,
             structured_source_urls=[structured_source],
+            structured_evidence_map={
+                "section_source_map": {
+                    "Regulatory Deadline": [section_source],
+                },
+                "signal_source_candidates": {
+                    "FS.REGULATORY.DEADLINE": [section_source],
+                },
+            },
         )
 
         called_source_urls = mock_digestor.digest.await_args.kwargs["source_urls"]
         assert raw_source in called_source_urls
         assert structured_source in called_source_urls
+        called_section_map = mock_digestor.digest.await_args.kwargs["section_source_map"]
+        called_signal_candidates = mock_digestor.digest.await_args.kwargs["signal_source_candidates"]
+        assert called_section_map["Regulatory Deadline"] == [section_source]
+        assert called_signal_candidates["FS.REGULATORY.DEADLINE"] == [section_source]
 
     @pytest.mark.asyncio
     async def test_non_financial_services_skips_fs_signal_digest(

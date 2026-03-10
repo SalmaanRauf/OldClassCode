@@ -107,6 +107,7 @@ class BDOrchestrator:
         trigger: BDTrigger,
         deep_research_output: Optional[str] = None,
         structured_source_urls: Optional[List[str]] = None,
+        structured_evidence_map: Optional[Dict[str, Any]] = None,
         progress_cb: Optional[ProgressCallback] = None
     ) -> MDReport:
         """Run the full BD orchestration workflow.
@@ -124,6 +125,9 @@ class BDOrchestrator:
         # Initialize context
         ctx = BDContext(trigger=trigger)
         ctx.structured_source_urls = self._merge_source_urls(structured_source_urls or [])
+        evidence_map = structured_evidence_map or {}
+        ctx.fs_section_source_map = dict(evidence_map.get("section_source_map") or {})
+        ctx.fs_signal_source_candidates = dict(evidence_map.get("signal_source_candidates") or {})
         ctx.credentials_lookup_mode = self.credentials_lookup_mode
         
         try:
@@ -143,6 +147,8 @@ class BDOrchestrator:
             ctx.parsed_research.structured_citations = self._merge_source_urls(
                 list(ctx.parsed_research.structured_citations or []) + ctx.structured_source_urls
             )
+            ctx.parsed_research.section_source_map = dict(ctx.fs_section_source_map)
+            ctx.parsed_research.signal_source_candidates = dict(ctx.fs_signal_source_candidates)
             ctx.opportunities_source = (
                 "deterministic_extractor"
                 if ctx.parsed_research.opportunities
@@ -209,6 +215,8 @@ class BDOrchestrator:
                         list(ctx.parsed_research.raw_citations or [])
                         + list(ctx.parsed_research.structured_citations or [])
                     ),
+                    section_source_map=ctx.parsed_research.section_source_map,
+                    signal_source_candidates=ctx.parsed_research.signal_source_candidates,
                 )
                 ctx.fs_signal_evidence = fs_signal_evidence
                 ctx.fs_allowed_sources = allowed_sources
@@ -219,6 +227,12 @@ class BDOrchestrator:
                         or []
                     )
                 )
+                reason_codes = list((fs_digest_diagnostics or {}).get("reason_codes") or [])
+                ctx.fs_normalization_diagnostics = {
+                    "reason_codes": reason_codes,
+                    "source_coverage_alert": (fs_digest_diagnostics or {}).get("source_coverage_alert"),
+                }
+                ctx.parsed_research.normalization_diagnostics = dict(ctx.fs_normalization_diagnostics)
                 ctx.opportunity_digest_diagnostics = {
                     **(ctx.opportunity_digest_diagnostics or {}),
                     "fs_signal_evidence_digest": fs_digest_diagnostics,
@@ -710,6 +724,9 @@ class BDOrchestrator:
                 "structured_source_urls_count": len(ctx.structured_source_urls),
                 "fs_discovery_sources_count": len(ctx.fs_discovery_sources),
                 "fs_confirmation_sources_count": len(ctx.fs_confirmation_sources),
+                "fs_section_source_map_count": len(ctx.fs_section_source_map),
+                "fs_signal_source_candidates_count": len(ctx.fs_signal_source_candidates),
+                "fs_normalization_diagnostics": ctx.fs_normalization_diagnostics,
                 "credentials_diagnostics": [
                     diag.model_dump() if hasattr(diag, "model_dump") else diag.__dict__
                     for diag in ctx.credentials_diagnostics.values()

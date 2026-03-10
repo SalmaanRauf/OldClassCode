@@ -35,7 +35,10 @@ from services.prompt_generator import get_prompt_generator, ResearchParameters
 from services.bd_orchestrator import BDOrchestrator
 from services.bd_report_formatter import format_bd_report_as_section
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
-from services.deep_research_formatter import format_deep_research_response_as_markdown
+from services.deep_research_formatter import (
+    build_structured_evidence_map,
+    format_deep_research_response_as_markdown,
+)
 from models.bd_schemas import MDReport, MDReportOpportunity
 
 setup_logging(level=logging.INFO)
@@ -181,6 +184,7 @@ async def enrich_with_bd_analysis(
         # Convert DR response sections to markdown for BD orchestrator
         dr_markdown = _format_dr_as_markdown(deep_research_response)
         structured_source_urls = _extract_structured_source_urls(deep_research_response)
+        structured_evidence_map = build_structured_evidence_map(deep_research_response)
         
         if not dr_markdown or len(dr_markdown.strip()) < 100:
             logger.warning("Deep Research output too short for BD enrichment")
@@ -215,6 +219,7 @@ async def enrich_with_bd_analysis(
             trigger,
             deep_research_output=dr_markdown,
             structured_source_urls=structured_source_urls,
+            structured_evidence_map=structured_evidence_map,
             progress_cb=bd_progress
         )
         
