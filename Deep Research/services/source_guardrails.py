@@ -96,13 +96,11 @@ class SourceGuardrails:
     ) -> List[SignalEvidence]:
         normalized_sources = {str(url).strip() for url in available_sources if str(url).strip()}
         enforced: List[SignalEvidence] = []
-        confirmed_domain_counts = defaultdict(int)
 
         for evidence in signal_evidence:
             normalized_url = (evidence.source_url or "").strip()
             status = evidence.status
             analysis = (evidence.analysis or "").strip()
-            host = self._host(normalized_url)
 
             if normalized_url and normalized_url not in normalized_sources:
                 status = "Rejected"
@@ -117,15 +115,6 @@ class SourceGuardrails:
                         f"{analysis} Source tier below confirmed threshold."
                         if analysis else "Source tier below confirmed threshold."
                     )
-                elif host and confirmed_domain_counts[host] >= self.domain_cap:
-                    status = "Insufficient"
-                    analysis = (
-                        f"{analysis} Domain cap reached for confirmed evidence."
-                        if analysis else "Domain cap reached for confirmed evidence."
-                    )
-                else:
-                    if host:
-                        confirmed_domain_counts[host] += 1
 
             enforced.append(
                 SignalEvidence(

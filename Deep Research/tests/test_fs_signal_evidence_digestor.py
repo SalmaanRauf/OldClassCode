@@ -728,3 +728,164 @@ Natalie Hyche Kelly is joining Capital One as Business Chief Risk Officer for th
     assert "fintechmagazine.com/news/people-move-natalie-hyche-kelly" in (
         (signal_evidence[0].analysis or "").lower() + " " + (signal_evidence[0].source_url or "").lower()
     )
+
+
+def test_digest_recovers_non_exec_signal_with_section_source_candidates():
+    markdown = """
+Capital One agreed to a $425 million settlement tied to savings account litigation.
+
+# Sources
+- https://www.usatoday.com/story/money/2025/10/01/capital-one-class-action-lawsuit-settlement-deadline/86460465007/
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.CONSUMER.LITIGATION_SETTLEMENT",
+                "signal_label": "Consumer Litigation Settlement",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "No clear settlement signal extracted.",
+            }
+        ]
+    }
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.CONSUMER.LITIGATION_SETTLEMENT"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.CONSUMER.LITIGATION_SETTLEMENT"],
+            section_source_map={
+                "Settlement and Enforcement": [
+                    "https://www.usatoday.com/story/money/2025/10/01/capital-one-class-action-lawsuit-settlement-deadline/86460465007/"
+                ]
+            },
+            signal_source_candidates={
+                "FS.CONSUMER.LITIGATION_SETTLEMENT": [
+                    "https://www.usatoday.com/story/money/2025/10/01/capital-one-class-action-lawsuit-settlement-deadline/86460465007/"
+                ]
+            },
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert "non_exec_recovered_confirmed" in diagnostics.get("reason_codes", [])
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Confirmed"
+    assert "usatoday.com" in (signal_evidence[0].source_url or "").lower()
+
+
+def test_digest_marks_insufficient_when_signal_mention_has_no_source_candidate():
+    markdown = """
+The filing notes a CECL implementation update for acquired portfolios.
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.CECL.IMPLEMENTATION",
+                "signal_label": "CECL Implementation",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "",
+            }
+        ]
+    }
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.CECL.IMPLEMENTATION"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.CECL.IMPLEMENTATION"],
+            source_urls=[],
+            section_source_map={},
+            signal_source_candidates={},
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert "non_exec_missing_source_mapping" in diagnostics.get("reason_codes", [])
+    assert len(signal_evidence) == 1
+    assert signal_evidence[0].status == "Insufficient"
+
+
+def test_digest_non_exec_recovery_confirms_multiple_signals_when_evidence_exists():
+    markdown = """
+Capital One agreed to a $425 million settlement resolving litigation over savings account practices.
+The OCC required a remediation plan submission within 120 days of closing.
+
+# Sources
+- https://www.usatoday.com/story/money/2025/10/01/capital-one-class-action-lawsuit-settlement-deadline/86460465007/
+- https://www.occ.gov/news-issuances/news-releases/2025/nr-occ-2025-36.html
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.CONSUMER.LITIGATION_SETTLEMENT",
+                "signal_label": "Consumer Litigation Settlement",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "",
+            },
+            {
+                "signal_code": "FS.REGULATORY.DEADLINE",
+                "signal_label": "Regulatory Deadline",
+                "status": "Rejected",
+                "evidence_quote": "",
+                "source_url": "",
+                "source_title": "",
+                "analysis": "",
+            },
+        ]
+    }
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, _allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=BDTrigger(
+                sector="Financial Services",
+                signals=["FS.CONSUMER.LITIGATION_SETTLEMENT", "FS.REGULATORY.DEADLINE"],
+                company_focus="Capital One",
+            ),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.CONSUMER.LITIGATION_SETTLEMENT", "FS.REGULATORY.DEADLINE"],
+            signal_source_candidates={
+                "FS.CONSUMER.LITIGATION_SETTLEMENT": [
+                    "https://www.usatoday.com/story/money/2025/10/01/capital-one-class-action-lawsuit-settlement-deadline/86460465007/"
+                ],
+                "FS.REGULATORY.DEADLINE": [
+                    "https://www.occ.gov/news-issuances/news-releases/2025/nr-occ-2025-36.html"
+                ],
+            },
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    confirmed = [item for item in signal_evidence if item.status == "Confirmed"]
+    assert len(confirmed) >= 2

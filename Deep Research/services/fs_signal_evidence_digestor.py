@@ -48,6 +48,8 @@ class FSSignalEvidenceDigestor:
         deep_research_markdown: str,
         requested_signal_codes: List[str],
         source_urls: Optional[List[str]] = None,
+        section_source_map: Optional[Dict[str, List[str]]] = None,
+        signal_source_candidates: Optional[Dict[str, List[str]]] = None,
     ) -> Tuple[List[SignalEvidence], Dict[str, Any], List[str]]:
         start = perf_counter()
         diagnostics: Dict[str, Any] = {
@@ -63,6 +65,7 @@ class FSSignalEvidenceDigestor:
             "confirmation_source_count": 0,
             "filtered_search_wrapper_count": 0,
             "source_coverage_alert": None,
+            "reason_codes": [],
         }
 
         if not deep_research_markdown or not deep_research_markdown.strip():
@@ -96,6 +99,8 @@ class FSSignalEvidenceDigestor:
         )
         diagnostics["discovery_sources"] = discovery_sources
         diagnostics["confirmation_sources"] = confirmation_sources
+        diagnostics["section_source_map_count"] = len(section_source_map or {})
+        diagnostics["signal_source_candidates_count"] = len(signal_source_candidates or {})
 
         # Advisory warning only; do not fail run.
         if requested and len(confirmation_sources) < min(len(requested), 4):
@@ -103,6 +108,7 @@ class FSSignalEvidenceDigestor:
                 "Low confirmation-source coverage for requested signal breadth "
                 f"({len(confirmation_sources)} sources for {len(requested)} signals)."
             )
+            diagnostics["reason_codes"].append("low_confirmation_source_coverage")
 
         try:
             await self._ensure_kernel()
@@ -111,6 +117,8 @@ class FSSignalEvidenceDigestor:
                 deep_research_markdown=deep_research_markdown,
                 requested_signal_codes=requested,
                 allowed_sources=confirmation_sources,
+                section_source_map=section_source_map or {},
+                signal_source_candidates=signal_source_candidates or {},
             )
 
             from semantic_kernel.contents.chat_history import ChatHistory
@@ -175,6 +183,14 @@ class FSSignalEvidenceDigestor:
                 discovery_sources=discovery_sources,
                 entity_aliases=entity_aliases,
             )
+            enforced = self._recover_non_exec_signals(
+                signal_evidence=enforced,
+                deep_research_markdown=deep_research_markdown,
+                available_sources=confirmation_sources,
+                section_source_map=section_source_map or {},
+                signal_source_candidates=signal_source_candidates or {},
+                diagnostics=diagnostics,
+            )
 
             diagnostics["signals_returned"] = len(enforced)
             diagnostics["status"] = "Succeeded"
@@ -204,6 +220,8 @@ class FSSignalEvidenceDigestor:
         deep_research_markdown: str,
         requested_signal_codes: List[str],
         allowed_sources: List[str],
+        section_source_map: Dict[str, List[str]],
+        signal_source_candidates: Dict[str, List[str]],
     ) -> str:
         trigger_parts = [f"Sector: {trigger.sector}"]
         if trigger.company_focus:
@@ -219,6 +237,8 @@ class FSSignalEvidenceDigestor:
         prompt = prompt.replace("{{$trigger_summary}}", "; ".join(trigger_parts))
         prompt = prompt.replace("{{$requested_signal_codes_json}}", json.dumps(requested_signal_codes, indent=2))
         prompt = prompt.replace("{{$allowed_sources_json}}", json.dumps(allowed_sources, indent=2))
+        prompt = prompt.replace("{{$section_source_map_json}}", json.dumps(section_source_map, indent=2))
+        prompt = prompt.replace("{{$signal_source_candidates_json}}", json.dumps(signal_source_candidates, indent=2))
         prompt = prompt.replace("{{$current_date_iso}}", datetime.now().date().isoformat())
         return prompt.replace("{{$deep_research_markdown}}", deep_research_markdown)
 
@@ -789,6 +809,261 @@ class FSSignalEvidenceDigestor:
         ]
         return mentions, surfaced_sources
 
+    def _recover_non_exec_signals(
+        self,
+        signal_evidence: List[SignalEvidence],
+        deep_research_markdown: str,
+        available_sources: List[str],
+        section_source_map: Dict[str, List[str]],
+        signal_source_candidates: Dict[str, List[str]],
+        diagnostics: Dict[str, Any],
+    ) -> List[SignalEvidence]:
+        """Deterministic recovery path for non-exec FS signals.
+
+        Tiered policy:
+        - Confirmed when a signal mention span exists and at least one confirmation source is available.
+        - Insufficient when mention exists but no source candidate can be mapped.
+        - Rejected when no support exists in provided evidence.
+        """
+        text = deep_research_markdown or ""
+        normalized_available = [
+            url for url in (available_sources or []) if self._is_displayable_source_url(url)
+        ]
+        reason_codes: List[str] = diagnostics.setdefault("reason_codes", [])
+
+        updated: List[SignalEvidence] = []
+        for item in signal_evidence:
+            if item.signal_code == "FS.EXEC.TRANSITION":
+                updated.append(item)
+                continue
+            if item.status == "Confirmed":
+                updated.append(item)
+                continue
+
+            mentions = self._extract_non_exec_signal_mentions(item.signal_code, text)
+            source_candidates = self._signal_source_candidates(
+                signal_code=item.signal_code,
+                available_sources=normalized_available,
+                section_source_map=section_source_map,
+                signal_source_candidates=signal_source_candidates,
+            )
+
+            if mentions and source_candidates:
+                source_url = (item.source_url or "").strip()
+                if source_url not in source_candidates:
+                    source_url = source_candidates[0]
+                evidence_quote = (item.evidence_quote or "").strip() or mentions[0][:220]
+                analysis = (item.analysis or "").strip()
+                if analysis:
+                    analysis = (
+                        f"{analysis} Deterministic recovery: signal mention span matched "
+                        "and mapped to confirmation source candidates."
+                    )
+                else:
+                    analysis = (
+                        "Deterministic recovery: signal mention span matched and mapped to "
+                        "confirmation source candidates."
+                    )
+                updated.append(
+                    SignalEvidence(
+                        signal_code=item.signal_code,
+                        signal_label=item.signal_label,
+                        status="Confirmed",
+                        evidence_quote=evidence_quote,
+                        source_url=source_url,
+                        source_title=item.source_title or self._source_title_from_url(source_url),
+                        analysis=analysis,
+                    )
+                )
+                if "non_exec_recovered_confirmed" not in reason_codes:
+                    reason_codes.append("non_exec_recovered_confirmed")
+                continue
+
+            if mentions and not source_candidates:
+                analysis = (item.analysis or "").strip()
+                if analysis:
+                    analysis = (
+                        f"{analysis} Mention found but no mapped confirmation source candidate "
+                        "was available."
+                    )
+                else:
+                    analysis = "Mention found but no mapped confirmation source candidate was available."
+                updated.append(
+                    SignalEvidence(
+                        signal_code=item.signal_code,
+                        signal_label=item.signal_label,
+                        status="Insufficient",
+                        evidence_quote=(item.evidence_quote or "").strip() or mentions[0][:220],
+                        source_url=item.source_url,
+                        source_title=item.source_title,
+                        analysis=analysis,
+                    )
+                )
+                if "non_exec_missing_source_mapping" not in reason_codes:
+                    reason_codes.append("non_exec_missing_source_mapping")
+                continue
+
+            if item.status == "Rejected":
+                updated.append(item)
+                if "non_exec_no_signal_support" not in reason_codes:
+                    reason_codes.append("non_exec_no_signal_support")
+                continue
+
+            updated.append(item)
+
+        return updated
+
+    def _extract_non_exec_signal_mentions(self, signal_code: str, text: str) -> List[str]:
+        if not text:
+            return []
+        pattern_map = {
+            "FS.CONSUMER.LITIGATION_SETTLEMENT": re.compile(
+                r"\b(settlement|class[- ]action|consent order|enforcement action|civil money penalty|restitution|lawsuit)\b.{0,240}",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            "FS.MODEL_RISK.FINDINGS": re.compile(
+                r"\b(model risk|sr 11[- ]?7|model validation|model governance|occ 2011[- ]?12)\b.{0,220}",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            "FS.STRESS_TEST.ISSUES": re.compile(
+                r"\b(stress test|ccar|dfast|stress capital buffer|scb)\b.{0,220}",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            "FS.REGULATORY.DEADLINE": re.compile(
+                r"\b(deadline|due by|effective date|implementation date|within 120 days|submission)\b.{0,220}",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            "FS.AML.BSA_FINDINGS": re.compile(
+                r"\b(aml|bsa|fincen|kyc|cdd|sanctions|suspicious activity)\b.{0,220}",
+                re.IGNORECASE | re.DOTALL,
+            ),
+            "FS.CECL.IMPLEMENTATION": re.compile(
+                r"\b(cecl|asc 326|expected credit loss|allowance)\b.{0,220}",
+                re.IGNORECASE | re.DOTALL,
+            ),
+        }
+        pattern = pattern_map.get(signal_code)
+        if pattern is None:
+            return []
+
+        mentions: List[str] = []
+        seen = set()
+        for match in pattern.finditer(text):
+            line_start = text.rfind("\n", 0, match.start()) + 1
+            line_end = text.find("\n", match.end())
+            if line_end < 0:
+                line_end = len(text)
+            snippet = text[line_start:line_end].strip()
+            if len(snippet) < 24:
+                snippet = text[max(0, match.start() - 120): min(len(text), match.end() + 180)].strip()
+            cleaned = re.sub(r"\s+", " ", snippet).strip()
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            mentions.append(cleaned[:320])
+            if len(mentions) >= 8:
+                break
+        return mentions
+
+    def _signal_source_candidates(
+        self,
+        signal_code: str,
+        available_sources: List[str],
+        section_source_map: Dict[str, List[str]],
+        signal_source_candidates: Dict[str, List[str]],
+    ) -> List[str]:
+        candidates: List[str] = []
+        seen = set()
+
+        for source in signal_source_candidates.get(signal_code, []) or []:
+            normalized = str(source or "").strip()
+            if not normalized or normalized not in available_sources:
+                continue
+            key = normalized.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            candidates.append(normalized)
+
+        if candidates:
+            return candidates
+
+        keywords_map = {
+            "FS.CONSUMER.LITIGATION_SETTLEMENT": ("settlement", "litigation", "consent", "enforcement", "lawsuit"),
+            "FS.MODEL_RISK.FINDINGS": ("model", "validation", "sr 11-7", "risk"),
+            "FS.STRESS_TEST.ISSUES": ("stress", "ccar", "dfast", "scb"),
+            "FS.REGULATORY.DEADLINE": ("deadline", "effective", "due", "regulatory"),
+            "FS.AML.BSA_FINDINGS": ("aml", "bsa", "fincen", "sanctions", "kyc"),
+            "FS.CECL.IMPLEMENTATION": ("cecl", "allowance", "credit loss", "asc 326"),
+        }
+        keywords = keywords_map.get(signal_code, ())
+        for section_title, urls in (section_source_map or {}).items():
+            lowered = str(section_title or "").lower()
+            if keywords and not any(token in lowered for token in keywords):
+                continue
+            for source in urls or []:
+                normalized = str(source or "").strip()
+                if not normalized or normalized not in available_sources:
+                    continue
+                key = normalized.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(normalized)
+
+        if candidates:
+            return candidates
+
+        # Final fallback: find URLs that semantically match signal keywords.
+        for source in available_sources:
+            lowered = source.lower()
+            if signal_code == "FS.CONSUMER.LITIGATION_SETTLEMENT" and any(
+                token in lowered for token in ("settlement", "litigation", "lawsuit", "consent", "enforcement")
+            ):
+                candidates.append(source)
+            elif signal_code == "FS.MODEL_RISK.FINDINGS" and any(
+                token in lowered for token in ("model", "validation", "risk")
+            ):
+                candidates.append(source)
+            elif signal_code == "FS.STRESS_TEST.ISSUES" and any(
+                token in lowered for token in ("stress", "ccar", "dfast", "scb")
+            ):
+                candidates.append(source)
+            elif signal_code == "FS.REGULATORY.DEADLINE" and any(
+                token in lowered for token in ("deadline", "rule", "occ", "fdic", "federalreserve")
+            ):
+                candidates.append(source)
+            elif signal_code == "FS.AML.BSA_FINDINGS" and any(
+                token in lowered for token in ("aml", "bsa", "fincen", "sanction")
+            ):
+                candidates.append(source)
+            elif signal_code == "FS.CECL.IMPLEMENTATION" and any(
+                token in lowered for token in ("cecl", "allowance", "accounting")
+            ):
+                candidates.append(source)
+
+        deduped: List[str] = []
+        seen_final = set()
+        for source in candidates:
+            key = source.lower()
+            if key in seen_final:
+                continue
+            seen_final.add(key)
+            deduped.append(source)
+        return deduped
+
+    def _source_title_from_url(self, url: str) -> Optional[str]:
+        try:
+            host = urlparse(url).netloc.lower().removeprefix("www.")
+        except Exception:
+            return None
+        if not host:
+            return None
+        return host
+
     def _enforce_exec_transition_entity_scope(
         self,
         signal_evidence: List[SignalEvidence],
@@ -967,5 +1242,7 @@ class FSSignalEvidenceDigestor:
             "Trigger: {{$trigger_summary}}\n"
             "Requested: {{$requested_signal_codes_json}}\n"
             "Allowed URLs: {{$allowed_sources_json}}\n"
+            "Section Source Map: {{$section_source_map_json}}\n"
+            "Signal Source Candidates: {{$signal_source_candidates_json}}\n"
             "Markdown:\n{{$deep_research_markdown}}\n"
         )
