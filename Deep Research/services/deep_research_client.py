@@ -227,6 +227,15 @@ class DeepResearchClient:
 
         return citations
 
+    def _collect_agent_citations(self, messages: List[Any]) -> Set[str]:
+        """Collect unique citations from all assistant messages."""
+        collected: Set[str] = set()
+        for message in messages or []:
+            if not self._is_agent_message(message):
+                continue
+            collected.update(self._extract_citations_from_message(message))
+        return collected
+
     def _source_policy_instructions(self) -> str:
         mode = (self._runtime_policy.source_policy_mode or "quality_first").strip().lower()
         if mode == "volume_first":
@@ -259,6 +268,117 @@ class DeepResearchClient:
 - If a high-quality source is unavailable, use the best available source and note evidence limits.
 - For executive movement signals, preserve all material discovered movements (including lower-confidence but valid sources); prioritization happens in synthesis.
 """
+
+    def _extract_company_focus(self, query: str) -> str:
+        text = (query or "").strip()
+        if not text:
+            return ""
+        match = re.search(
+            r"\bfor\s+([A-Za-z0-9][A-Za-z0-9&\-\s]{1,79}?)(?:\s+focusing|\s+with|\s+across|\s+within|\s+in\b|$)",
+            text,
+            re.IGNORECASE,
+        )
+        if not match:
+            return ""
+        return match.group(1).strip()
+
+    def _extract_fs_signal_codes_from_query(self, query: str) -> List[str]:
+        try:
+            from services.signal_registry_service import get_signal_registry_service
+
+            service = get_signal_registry_service()
+            tokens: List[str] = []
+            lowered = (query or "").lower()
+            normalized_query = service._normalize_signal_token(query or "")
+            aliases = sorted(service.FS_ALIAS_MAP.keys(), key=len, reverse=True)
+            seen = set()
+            for alias in aliases:
+                raw_pattern = r"\b" + re.escape(alias).replace(r"\ ", r"\s+") + r"\b"
+                normalized_alias = service._normalize_signal_token(alias)
+                normalized_pattern = (
+                    r"\b" + re.escape(normalized_alias).replace(r"\ ", r"\s+") + r"\b"
+                    if normalized_alias
+                    else None
+                )
+                if re.search(raw_pattern, lowered) or (
+                    normalized_pattern and re.search(normalized_pattern, normalized_query)
+                ):
+                    if alias not in seen:
+                        tokens.append(alias)
+                        seen.add(alias)
+
+            canonical = service.canonicalize_fs_signals(tokens)
+            if canonical:
+                return canonical
+            if re.search(r"\ball(?:\s+relevant)?\s+signals?\b", query or "", re.IGNORECASE):
+                return service.get_fs_signal_codes()
+            return []
+        except Exception:
+            return []
+
+    def _build_fs_task_appendix(self, query: str) -> str:
+        requested_codes = self._extract_fs_signal_codes_from_query(query)
+        company_focus = self._extract_company_focus(query)
+        if not requested_codes and not company_focus:
+            return ""
+
+        signal_playbooks = {
+            "FS.CONSUMER.LITIGATION_SETTLEMENT": (
+                "- Settlement / enforcement: capture consumer litigation, penalties, remediation obligations, and dated deadlines."
+            ),
+            "FS.MODEL_RISK.FINDINGS": (
+                "- Model risk: capture SR 11-7 / model governance findings, validation gaps, and remediation expectations."
+            ),
+            "FS.EXEC.TRANSITION": (
+                "- Executive transition: capture all material target-company executive, regional risk/regulatory, and board/committee moves."
+            ),
+            "FS.STRESS_TEST.ISSUES": (
+                "- Stress test: capture CCAR/DFAST outcomes, SCB implications, and related supervisory commentary."
+            ),
+            "FS.REGULATORY.DEADLINE": (
+                "- Regulatory deadlines: capture explicit dates, required deliverables, and implementation milestones."
+            ),
+            "FS.AML.BSA_FINDINGS": (
+                "- AML/BSA: capture deficiencies, enforcement actions, and required control enhancements."
+            ),
+            "FS.CECL.IMPLEMENTATION": (
+                "- CECL: capture accounting standard updates, implementation implications, and control/reporting impacts."
+            ),
+        }
+
+        lines = [
+            "Execution Policy (signal-scoped):",
+        ]
+        if company_focus:
+            lines.append(
+                f"- Keep findings anchored to {company_focus} and directly related entities; exclude unrelated peer-company personnel moves."
+            )
+        if requested_codes:
+            lines.append("- Requested signals:")
+            for code in requested_codes:
+                playbook = signal_playbooks.get(code)
+                if playbook:
+                    lines.append(playbook)
+
+        if "FS.EXEC.TRANSITION" in requested_codes:
+            lines.extend(
+                [
+                    "- Always run a dedicated people-movement sweep for the target company.",
+                    "- People-movement query stack must include issuer/newsroom/filings, FinTech Magazine People Moves, and corroborating LinkedIn self-disclosures when available.",
+                    "- Preserve all material target-company movements in findings; prioritize top sources only during synthesis.",
+                ]
+            )
+
+        return "\n".join(lines).strip()
+
+    def _build_run_query(self, query: str) -> str:
+        base_query = (query or "").strip()
+        if self._industry != "financial_services":
+            return base_query
+        appendix = self._build_fs_task_appendix(base_query)
+        if not appendix:
+            return base_query
+        return f"{base_query}\n\n{appendix}".strip()
 
     def _classify_source_origin(self, url: str) -> str:
         normalized = (url or "").strip().lower()
@@ -522,12 +642,13 @@ class DeepResearchClient:
         assert self._client and self._agent_id
 
         logger.info("Deep Research run started", extra={"query": query, "industry": self._industry})
+        run_query = self._build_run_query(query)
 
         thread = await self._client.agents.threads.create()
         await self._client.agents.messages.create(
             thread_id=thread.id,
             role=MessageRole.USER,
-            content=query,
+            content=run_query,
         )
 
         # Start the run
@@ -672,6 +793,10 @@ class DeepResearchClient:
             order="desc",
         ):
             messages.append(message)
+
+        # Completion sweep: collect citations from all assistant messages in case
+        # polling loop skipped late-arriving message citations.
+        all_citations.update(self._collect_agent_citations(messages))
         
         agent_message = next(
             (m for m in messages if self._is_agent_message(m)),
@@ -763,6 +888,7 @@ class DeepResearchClient:
             "discovery_sources": discovery_source_urls,
             "confirmation_sources": confirmation_source_urls,
             "display_sources": display_source_urls,
+            "run_query_length": len(run_query),
         })
         
         # Final citation audit

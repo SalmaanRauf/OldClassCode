@@ -215,3 +215,88 @@ def test_build_source_provenance_counts():
     assert counts["issuer"] == 1
     assert counts["social"] == 1
     assert counts["media"] == 1
+
+
+def test_build_run_query_adds_dynamic_fs_exec_policy():
+    client = _client()
+    client._industry = "financial_services"
+    query = (
+        "Research Financial Services sector opportunities for Capital One focusing on "
+        "executive transition and regulatory deadline signals within CONUS over the past 180 days."
+    )
+
+    run_query = client._build_run_query(query)
+
+    assert "Execution Policy (signal-scoped):" in run_query
+    assert "Keep findings anchored to Capital One" in run_query
+    assert "Executive transition:" in run_query
+    assert "Regulatory deadlines:" in run_query
+    assert "FinTech Magazine People Moves" in run_query
+
+
+def test_build_run_query_skips_people_move_stack_when_exec_transition_not_requested():
+    client = _client()
+    client._industry = "financial_services"
+    query = (
+        "Research Financial Services sector opportunities for Capital One focusing on "
+        "stress test and CECL signals within CONUS over the past 180 days."
+    )
+
+    run_query = client._build_run_query(query)
+
+    assert "Execution Policy (signal-scoped):" in run_query
+    assert "Stress test:" in run_query
+    assert "CECL:" in run_query
+    assert "FinTech Magazine People Moves" not in run_query
+
+
+def test_collect_agent_citations_sweeps_all_assistant_messages():
+    client = _client()
+    first = SimpleNamespace(
+        role="assistant",
+        content=[
+            SimpleNamespace(
+                type="text",
+                text=SimpleNamespace(
+                    value="x",
+                    annotations=[_url_annotation("https://example.com/first", "First")],
+                ),
+            )
+        ],
+        url_citation_annotations=[],
+    )
+    second = SimpleNamespace(
+        role="assistant",
+        content=[
+            SimpleNamespace(
+                type="text",
+                text=SimpleNamespace(
+                    value="y",
+                    annotations=[_url_annotation("https://example.com/second", "Second")],
+                ),
+            )
+        ],
+        url_citation_annotations=[],
+    )
+    user_msg = SimpleNamespace(
+        role="user",
+        content=[],
+        url_citation_annotations=[],
+    )
+
+    citations = client._collect_agent_citations([first, user_msg, second])
+    assert "https://example.com/first" in citations
+    assert "https://example.com/second" in citations
+    assert len(citations) == 2
+
+
+def test_build_run_query_keeps_prompt_budget_reasonable():
+    client = _client()
+    client._industry = "financial_services"
+    query = (
+        "Research Financial Services sector opportunities for Capital One focusing on all relevant signals "
+        "across CONUS over the past 180 days."
+    )
+    run_query = client._build_run_query(query)
+
+    assert len(run_query) < 5000
