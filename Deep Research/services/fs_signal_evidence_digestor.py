@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 from models.bd_schemas import BDTrigger, SignalEvidence
@@ -59,6 +59,10 @@ class FSSignalEvidenceDigestor:
             "parse_outcome": "",
             "signals_returned": 0,
             "allowed_source_count": 0,
+            "discovery_source_count": 0,
+            "confirmation_source_count": 0,
+            "filtered_search_wrapper_count": 0,
+            "source_coverage_alert": None,
         }
 
         if not deep_research_markdown or not deep_research_markdown.strip():
@@ -74,22 +78,31 @@ class FSSignalEvidenceDigestor:
             diagnostics["parse_outcome"] = "no_requested_signals"
             return [], diagnostics, []
 
-        # Keep full unique source set for synthesis context/display; domain caps are enforced
-        # separately when promoting evidence to Confirmed status.
-        raw_sources = source_urls or self._extract_urls(deep_research_markdown)
-        available_sources: List[str] = []
-        seen_sources = set()
-        for item in raw_sources:
-            normalized = str(item or "").strip()
-            if (
-                not normalized
-                or normalized in seen_sources
-                or not self._is_displayable_source_url(normalized)
-            ):
-                continue
-            seen_sources.add(normalized)
-            available_sources.append(normalized)
-        diagnostics["allowed_source_count"] = len(available_sources)
+        merged_raw_sources = list(source_urls or []) + self._extract_urls(deep_research_markdown)
+        discovery_sources = self._normalize_source_urls(
+            merged_raw_sources,
+            include_search_wrappers=True,
+        )
+        confirmation_sources = self._normalize_source_urls(
+            merged_raw_sources,
+            include_search_wrappers=False,
+        )
+        diagnostics["discovery_source_count"] = len(discovery_sources)
+        diagnostics["confirmation_source_count"] = len(confirmation_sources)
+        diagnostics["allowed_source_count"] = len(confirmation_sources)
+        diagnostics["filtered_search_wrapper_count"] = max(
+            0,
+            len(discovery_sources) - len(confirmation_sources),
+        )
+        diagnostics["discovery_sources"] = discovery_sources
+        diagnostics["confirmation_sources"] = confirmation_sources
+
+        # Advisory warning only; do not fail run.
+        if requested and len(confirmation_sources) < min(len(requested), 4):
+            diagnostics["source_coverage_alert"] = (
+                "Low confirmation-source coverage for requested signal breadth "
+                f"({len(confirmation_sources)} sources for {len(requested)} signals)."
+            )
 
         try:
             await self._ensure_kernel()
@@ -97,7 +110,7 @@ class FSSignalEvidenceDigestor:
                 trigger=trigger,
                 deep_research_markdown=deep_research_markdown,
                 requested_signal_codes=requested,
-                allowed_sources=available_sources,
+                allowed_sources=confirmation_sources,
             )
 
             from semantic_kernel.contents.chat_history import ChatHistory
@@ -137,7 +150,7 @@ class FSSignalEvidenceDigestor:
 
             enforced = self._source_guardrails.enforce_on_signal_evidence(
                 parsed,
-                available_sources=set(available_sources),
+                available_sources=set(confirmation_sources),
             )
             entity_aliases = self._build_entity_aliases(
                 company_focus=trigger.company_focus,
@@ -146,7 +159,8 @@ class FSSignalEvidenceDigestor:
             enforced = self._recover_exec_transition_signal(
                 enforced,
                 deep_research_markdown=deep_research_markdown,
-                available_sources=available_sources,
+                available_sources=confirmation_sources,
+                discovery_sources=discovery_sources,
                 entity_aliases=entity_aliases,
             )
             enforced = self._enforce_exec_transition_entity_scope(
@@ -157,14 +171,15 @@ class FSSignalEvidenceDigestor:
             enforced = self._enrich_exec_transition_signal(
                 signal_evidence=enforced,
                 deep_research_markdown=deep_research_markdown,
-                available_sources=available_sources,
+                available_sources=confirmation_sources,
+                discovery_sources=discovery_sources,
                 entity_aliases=entity_aliases,
             )
 
             diagnostics["signals_returned"] = len(enforced)
             diagnostics["status"] = "Succeeded"
             diagnostics["parse_outcome"] = "json_parsed_with_signal_evidence"
-            return enforced, diagnostics, available_sources
+            return enforced, diagnostics, confirmation_sources
 
         except json.JSONDecodeError as exc:
             diagnostics["status"] = "Failed"
@@ -172,14 +187,14 @@ class FSSignalEvidenceDigestor:
             diagnostics["parse_outcome"] = "json_parse_error"
             diagnostics["error_type"] = "JSONDecodeError"
             diagnostics["error_message"] = str(exc)
-            return [], diagnostics, available_sources
+            return [], diagnostics, confirmation_sources
         except Exception as exc:
             diagnostics["status"] = "Failed"
             diagnostics["reason"] = "FS signal evidence digest call failed."
             diagnostics["parse_outcome"] = "digest_failed"
             diagnostics["error_type"] = type(exc).__name__
             diagnostics["error_message"] = str(exc)
-            return [], diagnostics, available_sources
+            return [], diagnostics, confirmation_sources
         finally:
             diagnostics["duration_ms"] = (perf_counter() - start) * 1000
 
@@ -260,6 +275,7 @@ class FSSignalEvidenceDigestor:
         signal_evidence: List[SignalEvidence],
         deep_research_markdown: str,
         available_sources: List[str],
+        discovery_sources: Optional[List[str]],
         entity_aliases: Set[str],
     ) -> List[SignalEvidence]:
         """Promote exec-transition when explicit appointment evidence exists in text.
@@ -276,13 +292,9 @@ class FSSignalEvidenceDigestor:
 
         current = signal_evidence[target_idx]
         text = deep_research_markdown or ""
-        movement_mentions = self._extract_entity_linked_movement_mentions(
-            text=text,
-            entity_aliases=entity_aliases,
-        )
-        movement_sources = self._movement_source_url_candidates(
-            available_sources=available_sources,
+        movement_mentions, movement_sources = self._run_exec_transition_sweep(
             deep_research_markdown=text,
+            discovery_sources=discovery_sources or available_sources,
             entity_aliases=entity_aliases,
         )
 
@@ -306,6 +318,10 @@ class FSSignalEvidenceDigestor:
                 source_title=current.source_title,
                 analysis=current.analysis,
             )
+            return signal_evidence
+
+        # Keep deterministic recovery evidence-locked to confirmation sources.
+        if not preferred_source:
             return signal_evidence
 
         signal_evidence[target_idx] = SignalEvidence(
@@ -693,6 +709,7 @@ class FSSignalEvidenceDigestor:
         signal_evidence: List[SignalEvidence],
         deep_research_markdown: str,
         available_sources: List[str],
+        discovery_sources: Optional[List[str]],
         entity_aliases: Set[str],
     ) -> List[SignalEvidence]:
         target_idx = next(
@@ -703,14 +720,9 @@ class FSSignalEvidenceDigestor:
             return signal_evidence
 
         item = signal_evidence[target_idx]
-        movement_mentions = self._extract_entity_linked_movement_mentions(
-            text=deep_research_markdown or "",
-            entity_aliases=entity_aliases,
-            max_items=8,
-        )
-        movement_sources = self._movement_source_url_candidates(
-            available_sources=available_sources,
+        movement_mentions, movement_sources = self._run_exec_transition_sweep(
             deep_research_markdown=deep_research_markdown or "",
+            discovery_sources=discovery_sources or available_sources,
             entity_aliases=entity_aliases,
         )
         if not movement_mentions and not movement_sources:
@@ -734,7 +746,8 @@ class FSSignalEvidenceDigestor:
             preferred_source = self._select_exec_transition_primary_source(movement_sources)
 
         updated_status = item.status
-        if item.status != "Confirmed" and (movement_mentions or movement_sources):
+        has_confirmable_source = bool(preferred_source or (item.source_url or "").strip())
+        if item.status != "Confirmed" and (movement_mentions or movement_sources) and has_confirmable_source:
             updated_status = "Confirmed"
 
         updated_quote = item.evidence_quote or (movement_mentions[0][:220] if movement_mentions else "")
@@ -748,6 +761,33 @@ class FSSignalEvidenceDigestor:
             analysis=updated_analysis,
         )
         return signal_evidence
+
+    def _run_exec_transition_sweep(
+        self,
+        deep_research_markdown: str,
+        discovery_sources: List[str],
+        entity_aliases: Set[str],
+    ) -> Tuple[List[str], List[str]]:
+        """
+        Deterministic second-pass sweep for all target-company people movements.
+
+        Uses full discovery sources for recall, then constrains surfaced source list to
+        displayable URLs for user-facing analysis text.
+        """
+        mentions = self._extract_entity_linked_movement_mentions(
+            text=deep_research_markdown or "",
+            entity_aliases=entity_aliases,
+            max_items=12,
+        )
+        movement_candidates = self._movement_source_url_candidates(
+            available_sources=discovery_sources or [],
+            deep_research_markdown=deep_research_markdown or "",
+            entity_aliases=entity_aliases,
+        )
+        surfaced_sources = [
+            url for url in movement_candidates if self._is_displayable_source_url(url)
+        ]
+        return mentions, surfaced_sources
 
     def _enforce_exec_transition_entity_scope(
         self,
@@ -846,6 +886,26 @@ class FSSignalEvidenceDigestor:
         end = min(len(normalized_text), idx + len(normalized_url) + 180)
         return self._is_entity_linked(normalized_text[start:end], entity_aliases)
 
+    def _normalize_source_urls(
+        self,
+        urls: Iterable[str],
+        include_search_wrappers: bool,
+    ) -> List[str]:
+        normalized: List[str] = []
+        seen = set()
+        for raw in urls:
+            cleaned = str(raw or "").strip().rstrip(".,;)")
+            if not cleaned.startswith(("http://", "https://")):
+                continue
+            if not include_search_wrappers and not self._is_displayable_source_url(cleaned):
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(cleaned)
+        return normalized
+
     def _extract_urls(self, text: str) -> List[str]:
         if not text:
             return []
@@ -854,7 +914,7 @@ class FSSignalEvidenceDigestor:
         seen = set()
         for url in raw_urls:
             cleaned = url.strip().rstrip(".,;)")
-            if cleaned and self._is_displayable_source_url(cleaned) and cleaned not in seen:
+            if cleaned and cleaned not in seen:
                 normalized.append(cleaned)
                 seen.add(cleaned)
         return normalized

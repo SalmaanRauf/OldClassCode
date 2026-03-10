@@ -572,9 +572,68 @@ Natalie Hyche Kelly is joining Capital One as Business Chief Risk Officer for th
     )
 
     assert diagnostics["status"] == "Succeeded"
+    assert diagnostics["discovery_source_count"] >= diagnostics["confirmation_source_count"]
+    assert diagnostics["filtered_search_wrapper_count"] >= 1
     assert all("bing.com/search" not in source for source in allowed_sources)
     assert len(signal_evidence) == 1
     assert "bing.com/search" not in (signal_evidence[0].source_url or "")
+
+
+def test_digest_diagnostics_split_discovery_and_confirmation_sources():
+    markdown = """
+# Sources
+- https://www.bing.com/search?q=capital+one+people+moves
+"""
+    payload = {
+        "signal_evidence": [
+            {
+                "signal_code": "FS.EXEC.TRANSITION",
+                "signal_label": "CRO/CFO Transition",
+                "status": "Confirmed",
+                "evidence_quote": "Capital One appointed a Business Chief Risk Officer.",
+                "source_url": "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly",
+                "source_title": "FinTech Magazine",
+                "analysis": "Executive movement confirmed.",
+            },
+            {
+                "signal_code": "FS.REGULATORY.DEADLINE",
+                "signal_label": "Regulatory Deadline",
+                "status": "Confirmed",
+                "evidence_quote": "Submission due by July 1, 2026.",
+                "source_url": "https://www.fdic.gov/resolutions/2025-capital-one-interim-resolution-plan-public-section.pdf",
+                "source_title": "FDIC",
+                "analysis": "Deadline confirmed.",
+            },
+        ]
+    }
+
+    digestor = FSSignalEvidenceDigestor(
+        kernel=_FakeKernel(json.dumps(payload)),
+        exec_settings=object(),
+    )
+
+    import asyncio
+    signal_evidence, diagnostics, allowed_sources = asyncio.run(
+        digestor.digest(
+            trigger=_build_trigger(),
+            deep_research_markdown=markdown,
+            requested_signal_codes=["FS.EXEC.TRANSITION", "FS.REGULATORY.DEADLINE"],
+            source_urls=[
+                "https://www.bing.com/search?q=capital+one+people+moves",
+                "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly",
+                "https://www.fdic.gov/resolutions/2025-capital-one-interim-resolution-plan-public-section.pdf",
+            ],
+        )
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert diagnostics["discovery_source_count"] == 3
+    assert diagnostics["confirmation_source_count"] == 2
+    assert diagnostics["allowed_source_count"] == 2
+    assert diagnostics["source_coverage_alert"] is None
+    assert len(allowed_sources) == 2
+    assert all("bing.com/search" not in source for source in allowed_sources)
+    assert sum(1 for item in signal_evidence if item.status == "Confirmed") >= 2
 
 
 def test_digest_exec_transition_recovers_lower_tier_source_when_movement_near_url():
