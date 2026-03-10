@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.runtime_policy import get_runtime_policy
 
 
-def test_runtime_policy_defaults_to_production_quality_first():
+def test_runtime_policy_defaults_to_production_balanced():
     os.environ.pop("BD_RUNTIME_PROFILE", None)
     os.environ.pop("BD_FAILURE_VISIBILITY", None)
     os.environ.pop("BD_SOURCE_POLICY_MODE", None)
@@ -18,7 +18,7 @@ def test_runtime_policy_defaults_to_production_quality_first():
 
     assert policy.profile == "production"
     assert policy.show_failures is True
-    assert policy.source_policy_mode == "quality_first"
+    assert policy.source_policy_mode == "balanced"
 
 
 def test_runtime_policy_demo_defaults_to_failure_suppression():

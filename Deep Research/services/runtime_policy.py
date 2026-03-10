@@ -18,7 +18,7 @@ SourcePolicyMode = Literal["quality_first", "balanced", "volume_first"]
 class RuntimePolicy:
     profile: RuntimeProfile = "production"
     failure_visibility: FailureVisibility = "factual"
-    source_policy_mode: SourcePolicyMode = "quality_first"
+    source_policy_mode: SourcePolicyMode = "balanced"
     report_style: str = "production"
 
     @property
@@ -71,7 +71,7 @@ def get_runtime_policy() -> RuntimePolicy:
     source_policy_mode = _normalize_source_policy(
         os.getenv(
             "BD_SOURCE_POLICY_MODE",
-            getattr(AppConfig, "BD_SOURCE_POLICY_MODE", "quality_first"),
+            getattr(AppConfig, "BD_SOURCE_POLICY_MODE", "balanced"),
         )
     )
     report_style = (

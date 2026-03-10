@@ -44,7 +44,7 @@ class Config:
     # Runtime profile / policy (production by default)
     BD_RUNTIME_PROFILE = os.getenv("BD_RUNTIME_PROFILE", "production").strip().lower()
     BD_FAILURE_VISIBILITY = os.getenv("BD_FAILURE_VISIBILITY", "").strip().lower()
-    BD_SOURCE_POLICY_MODE = os.getenv("BD_SOURCE_POLICY_MODE", "quality_first").strip().lower()
+    BD_SOURCE_POLICY_MODE = os.getenv("BD_SOURCE_POLICY_MODE", "balanced").strip().lower()
     BD_REPORT_STYLE = os.getenv("BD_REPORT_STYLE", "").strip().lower()
 
     # --- Operational settings (timeouts, limits) ---

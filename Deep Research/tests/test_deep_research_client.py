@@ -29,6 +29,11 @@ def _url_annotation(url: str, title: str = ""):
     )
 
 
+def _nested_citations_annotation(*items):
+    citations = [SimpleNamespace(title=title, url=url) for title, url in items]
+    return SimpleNamespace(citations=citations)
+
+
 def test_parse_message_captures_plain_text_urls_when_annotations_missing():
     client = _client()
     message = SimpleNamespace(
@@ -143,6 +148,47 @@ def test_dedupe_citations_populates_origin_type():
     assert origin_by_url["https://investor.examplebank.com/news-release"] == "issuer"
     assert origin_by_url["https://www.reuters.com/world/us/example-story/"] == "media"
     assert origin_by_url["https://www.linkedin.com/posts/example_exec_post"] == "social"
+
+
+def test_extract_citations_from_message_supports_nested_annotation_shape():
+    client = _client()
+    message = SimpleNamespace(
+        content=[
+            SimpleNamespace(
+                type="text",
+                text=SimpleNamespace(
+                    value="text",
+                    annotations=[
+                        _nested_citations_annotation(
+                            ("Nested A", "https://example.com/nested-a"),
+                            ("Nested B", "https://www.bing.com/search?q=capital+one+people+moves"),
+                        )
+                    ],
+                ),
+            )
+        ],
+        url_citation_annotations=[],
+    )
+
+    urls = client._extract_citations_from_message(message)
+    assert "https://example.com/nested-a" in urls
+    assert "https://www.bing.com/search?q=capital+one+people+moves" in urls
+
+
+def test_normalize_source_urls_can_keep_wrappers_for_discovery_and_hide_for_display():
+    client = _client()
+    raw = [
+        "https://www.bing.com/search?q=capital+one+people+moves",
+        "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly",
+        "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly",
+    ]
+
+    discovery = client._normalize_source_urls(raw, include_search_wrappers=True)
+    display = client._normalize_source_urls(raw, include_search_wrappers=False)
+
+    assert "https://www.bing.com/search?q=capital+one+people+moves" in discovery
+    assert "https://www.bing.com/search?q=capital+one+people+moves" not in display
+    assert "https://fintechmagazine.com/news/people-move-natalie-hyche-kelly" in display
 
 
 def test_canonicalize_url_removes_tracking_query_parameters():

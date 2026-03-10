@@ -4,7 +4,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Callable
+from typing import Any, Dict, Iterable, List, Optional, Set, Callable
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from azure.identity.aio import DefaultAzureCredential
@@ -171,7 +171,7 @@ class DeepResearchClient:
             return None
 
     def _extract_citations_from_message(self, msg) -> Set[str]:
-        """Extract unique URLs from message annotations."""
+        """Extract unique URLs from message annotations (legacy + nested shapes)."""
         unique_urls = set()
         try:
             content_items = getattr(msg, 'content', [])
@@ -182,15 +182,50 @@ class DeepResearchClient:
                     if text_obj:
                         annotations = getattr(text_obj, 'annotations', [])
                         for ann in annotations:
-                            url_citation = getattr(ann, 'url_citation', None)
-                            if url_citation:
-                                url = getattr(url_citation, 'url', None)
+                            for title, url in self._extract_annotation_citations(ann):
                                 if url:
                                     unique_urls.add(url)
+            for ann in getattr(msg, "url_citation_annotations", []) or []:
+                for title, url in self._extract_annotation_citations(ann):
+                    if url:
+                        unique_urls.add(url)
         except Exception:
             pass  # Silent fail for citation extraction
         
         return unique_urls
+
+    def _extract_annotation_citations(self, annotation) -> List[tuple[Optional[str], str]]:
+        """Handle citation extraction across Azure SDK annotation shapes."""
+        citations: List[tuple[Optional[str], str]] = []
+        if annotation is None:
+            return citations
+
+        # Newer shape: annotation.citations = [{title,url}, ...]
+        nested = getattr(annotation, "citations", None)
+        if nested:
+            for item in nested:
+                url = getattr(item, "url", None)
+                title = getattr(item, "title", None)
+                if url:
+                    citations.append((title, url))
+
+        # Legacy shape: annotation.url_citation
+        url_citation_obj = getattr(annotation, "url_citation", None)
+        if url_citation_obj is not None:
+            url = getattr(url_citation_obj, "url", None)
+            title = getattr(url_citation_obj, "title", None)
+            if url:
+                citations.append((title, url))
+
+        # Legacy URI shape: annotation.uri_citation
+        uri_citation_obj = getattr(annotation, "uri_citation", None)
+        if uri_citation_obj is not None:
+            url = getattr(uri_citation_obj, "uri", None)
+            title = getattr(uri_citation_obj, "title", None)
+            if url:
+                citations.append((title, url))
+
+        return citations
 
     def _source_policy_instructions(self) -> str:
         mode = (self._runtime_policy.source_policy_mode or "quality_first").strip().lower()
@@ -360,6 +395,27 @@ class DeepResearchClient:
                 )
             )
         return deduped
+
+    def _normalize_source_urls(
+        self,
+        urls: Iterable[str],
+        include_search_wrappers: bool,
+    ) -> List[str]:
+        """Canonicalize and dedupe source URLs with optional wrapper retention."""
+        normalized: List[str] = []
+        seen = set()
+        for raw in urls:
+            canonical = self._canonicalize_url(str(raw or "").strip())
+            if not canonical:
+                continue
+            if not include_search_wrappers and not self._is_displayable_source_url(canonical):
+                continue
+            key = canonical.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            normalized.append(canonical)
+        return normalized
 
     def _merge_streamed_citations(
         self,
@@ -673,9 +729,21 @@ class DeepResearchClient:
 
         # Merge all streamed citations, even if they did not make the final narrative body.
         report = self._merge_streamed_citations(report, all_citations)
+        display_source_urls = self._normalize_source_urls(
+            [citation.url for citation in report.citations],
+            include_search_wrappers=False,
+        )
+        discovery_source_urls = self._normalize_source_urls(
+            list(all_citations) + display_source_urls,
+            include_search_wrappers=True,
+        )
+        confirmation_source_urls = self._normalize_source_urls(
+            discovery_source_urls,
+            include_search_wrappers=False,
+        )
         provenance_counts = self._build_source_provenance_counts(report.citations)
         filtered_search_wrapper_count = sum(
-            1 for url in (all_citations or set())
+            1 for url in discovery_source_urls
             if self._classify_source_origin(url) == "search-wrapper filtered"
         )
 
@@ -689,6 +757,12 @@ class DeepResearchClient:
             "source_policy_mode": self._runtime_policy.source_policy_mode,
             "source_provenance_counts": provenance_counts,
             "filtered_search_wrapper_count": filtered_search_wrapper_count,
+            "discovery_source_count": len(discovery_source_urls),
+            "confirmation_source_count": len(confirmation_source_urls),
+            "display_source_count": len(display_source_urls),
+            "discovery_sources": discovery_source_urls,
+            "confirmation_sources": confirmation_source_urls,
+            "display_sources": display_source_urls,
         })
         
         # Final citation audit
@@ -735,16 +809,9 @@ class DeepResearchClient:
         # Collect message-level URL citations
         message_level_citations: List[DeepResearchCitation] = []
         for ann in getattr(message, "url_citation_annotations", []) or []:
-            url_citation_obj = getattr(ann, "url_citation", None)
-            url = getattr(url_citation_obj, "url", None) if url_citation_obj else None
-            title = (
-                getattr(url_citation_obj, "title", None) or url or "Source"
-                if url_citation_obj
-                else None
-            )
-            if url:
+            for title, url in self._extract_annotation_citations(ann):
                 message_level_citations.append(
-                    DeepResearchCitation(title=title or url, url=url)
+                    DeepResearchCitation(title=(title or url or "Source"), url=url)
                 )
 
         if not text_blocks:
@@ -771,21 +838,7 @@ class DeepResearchClient:
 
         # Extract citations from annotations
         for annotation in annotations:
-            url = None
-            title = None
-
-            url_citation_obj = getattr(annotation, "url_citation", None)
-            if url_citation_obj is not None:
-                url = getattr(url_citation_obj, "url", None)
-                title = getattr(url_citation_obj, "title", None) or url or "Source"
-            else:
-                # Backwards compatibility
-                uri_citation_obj = getattr(annotation, "uri_citation", None)
-                if uri_citation_obj is not None:
-                    url = getattr(uri_citation_obj, "uri", None)
-                    title = getattr(uri_citation_obj, "title", None) or url or "Source"
-
-            if url:
+            for title, url in self._extract_annotation_citations(annotation):
                 citations.append(DeepResearchCitation(title=title or url, url=url))
 
         # Fallback URL capture from plain text when annotations are sparse.
@@ -809,20 +862,7 @@ class DeepResearchClient:
             
             block_citations: List[DeepResearchCitation] = []
             for annotation in block_annotations:
-                b_url = None
-                b_title = None
-
-                b_url_citation_obj = getattr(annotation, "url_citation", None)
-                if b_url_citation_obj is not None:
-                    b_url = getattr(b_url_citation_obj, "url", None)
-                    b_title = getattr(b_url_citation_obj, "title", None) or b_url or "Source"
-                else:
-                    b_uri_citation_obj = getattr(annotation, "uri_citation", None)
-                    if b_uri_citation_obj is not None:
-                        b_url = getattr(b_uri_citation_obj, "uri", None)
-                        b_title = getattr(b_uri_citation_obj, "title", None) or b_url or "Source"
-
-                if b_url:
+                for b_title, b_url in self._extract_annotation_citations(annotation):
                     block_citations.append(
                         DeepResearchCitation(title=b_title or b_url, url=b_url)
                     )
