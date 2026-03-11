@@ -103,9 +103,9 @@ python3 "Deep Research/scripts/proconnect_scenario_runner.py" \
 
 ```bash
 python3 "Deep Research/scripts/proconnect_stakeholder_test.py" \
-  --person "Jenna Jerry" \
+  --person "Jennifer Brady" \
   --from-company "Capital One" \
-  --to-company "American Express" \
+  --to-company "Fannie Mae" \
   --department "C-Suite"
 ```
 
@@ -113,9 +113,9 @@ Compatibility alias:
 
 ```bash
 python3 "Deep Research/scripts/proconnect_stakeholder_test.py" \
-  --person "Jenna Jerry" \
+  --person "Jennifer Brady" \
   --from-company "Capital One" \
-  --company "American Express"
+  --company "Fannie Mae"
 ```
 
 Optional workflow-only fields file:

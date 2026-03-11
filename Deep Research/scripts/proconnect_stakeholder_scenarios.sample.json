@@ -5,9 +5,8 @@
       "payload_type": "stakeholder",
       "from_company": "Capital One",
       "from_account_id": "00130000000BYU2AAO",
-      "to_company": "American Express",
-      "to_account_id": "00130000000BYP1AAO",
-      "person": "Jenna Jerry",
+      "to_company": "Fannie Mae",
+      "person": "Jennifer Brady",
       "department": "C-Suite",
       "expected_status": "WARN"
     },
@@ -15,7 +14,7 @@
       "name": "transition_dynamic_resolution_person_not_found",
       "payload_type": "stakeholder",
       "from_company": "Capital One",
-      "to_company": "American Express",
+      "to_company": "Fannie Mae",
       "person": "Definitely Not A Real Person",
       "department": "C-Suite",
       "expected_status": "WARN"
@@ -24,8 +23,8 @@
       "name": "transition_unauthorized_diagnostic",
       "payload_type": "stakeholder",
       "from_company": "Capital One",
-      "to_company": "American Express",
-      "person": "Jenna Jerry",
+      "to_company": "Fannie Mae",
+      "person": "Jennifer Brady",
       "token": "invalid.token.for.negative.test",
       "expected_status": "FAIL"
     }

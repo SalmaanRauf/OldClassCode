@@ -37,6 +37,18 @@ Compatibility alias (`--company` maps to destination):
 py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capital One" --company "American Express" --token-file ".\token.txt"
 ```
 
+## 3A) Run your demo scenario (recommended)
+
+```powershell
+py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --department "C-Suite" --token-file ".\token.txt"
+```
+
+If destination lookup is ambiguous or misses, rerun with destination account override:
+
+```powershell
+py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --to-account-id "<FANNIE_MAE_ACCOUNT_ID>" --department "C-Suite" --token-file ".\token.txt"
+```
+
 ## 4) Run transition scenario batch
 
 ```powershell
