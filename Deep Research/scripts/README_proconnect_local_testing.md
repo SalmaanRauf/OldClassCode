@@ -13,8 +13,8 @@ This folder provides local-only scripts to validate ProConnect retrieval logic w
 - `proconnect_lookup_logic.py`: company resolution + tiered person resolution helpers.
 - `proconnect_smoke_test.py`: direct account-first smoke test.
 - `proconnect_company_person_test.py`: dynamic company + person workflow test.
-- `proconnect_stakeholder_payload.py`: stakeholder payload assembly logic and probe extraction.
-- `proconnect_stakeholder_test.py`: stakeholder-focused payload runner for `(company, exact person)` input.
+- `proconnect_stakeholder_payload.py`: transition payload assembly logic (`person + from_company + to_company`) and probe extraction.
+- `proconnect_stakeholder_test.py`: transition-focused payload runner for movement scenarios.
 - `proconnect_scenario_runner.py`: run many scenarios and produce one aggregate artifact.
 - `proconnect_scenarios.sample.json`: sample scenario input file.
 - `proconnect_stakeholder_scenarios.sample.json`: sample stakeholder scenarios with `expected_status`.
@@ -99,13 +99,23 @@ python3 "Deep Research/scripts/proconnect_scenario_runner.py" \
   --scenarios-file "Deep Research/scripts/proconnect_scenarios.sample.json"
 ```
 
-### 4) Stakeholder payload test
+### 4) Transition payload test (primary)
 
 ```bash
 python3 "Deep Research/scripts/proconnect_stakeholder_test.py" \
-  --company "Capital One" \
   --person "Jenna Jerry" \
+  --from-company "Capital One" \
+  --to-company "American Express" \
   --department "C-Suite"
+```
+
+Compatibility alias:
+
+```bash
+python3 "Deep Research/scripts/proconnect_stakeholder_test.py" \
+  --person "Jenna Jerry" \
+  --from-company "Capital One" \
+  --company "American Express"
 ```
 
 Optional workflow-only fields file:
@@ -157,22 +167,22 @@ Each run writes a JSON artifact with top-level structure:
 
 Stakeholder runner artifacts (`proconnect_stakeholder_*.json`) include:
 
-- `stakeholder_payload`
+- `transition_payload`
 - `warnings`
 - `errors`
 - `pass_fail`
 
-`stakeholder_payload` sections:
+`transition_payload` sections:
 
-- `account_context`
-- `projects`
-- `opportunities`
-- `key_buyers`
-- `org_chart`
-- `technologies`
+- `movement_event`
 - `person_profile`
+- `from_company_context` (lite)
+- `to_company_context` (full)
+- `movement_evidence`
+- `optional_sections`
 - `research_inputs`
 - `provenance`
+- `confidence`
 
 ## Runtime Behavior
 
@@ -187,10 +197,11 @@ Stakeholder runner artifacts (`proconnect_stakeholder_*.json`) include:
      - department sweep fallback (mapped `sfdcJobFunction` list)
 - `proconnect_scenario_runner.py`: repeats the same logic over many scenarios and writes one aggregate JSON report.
 - `proconnect_stakeholder_test.py`:
-  1. Resolve account by `--account-id` override or company search.
-  2. Pull account + org chart + controlled probe endpoints (`taggedrelationships`, `relationshiplead`, `userHistory`).
-  3. Apply exact-name person match with candidate fallback.
-  4. Build stakeholder payload sections and field provenance.
+  1. Resolve destination account via `--to-company`/`--to-account-id` and source via `--from-company`/`--from-account-id`.
+  2. Pull destination full context: account + org chart + controlled probe endpoints.
+  3. Pull source lite context: account header + historical relationship footprint.
+  4. Run one person search and apply company-anchored exact-match tie-break (`to` first, then `from`).
+  5. Build transition payload with Top-10 ranked destination opportunities and confidence/provenance.
 - `proconnect_scenario_runner.py` now supports:
   - `--payload-type stakeholder`
   - per-scenario `expected_status` to mark intentional diagnostics as expected.

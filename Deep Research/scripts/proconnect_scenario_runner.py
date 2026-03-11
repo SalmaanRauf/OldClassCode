@@ -219,15 +219,16 @@ def execute_stakeholder_scenario(
         extra_headers=extra_headers,
     )
 
-    company = scenario.get("company")
+    from_company = scenario.get("from_company")
+    to_company = scenario.get("to_company") or scenario.get("company")
     person = scenario.get("person")
-    if not company or not person:
+    if not from_company or not to_company or not person:
         checks = [
             {
                 "check": "Scenario input validation",
                 "status": "FAIL",
                 "http": "-",
-                "details": "Stakeholder scenarios require both 'company' and 'person'.",
+                "details": "Stakeholder scenarios require 'from_company', 'to_company|company', and 'person'.",
             }
         ]
         return {
@@ -235,12 +236,16 @@ def execute_stakeholder_scenario(
             "status": "FAIL",
             "checks": checks,
             "warnings": [],
-            "errors": ["Missing required stakeholder scenario fields: company/person."],
+            "errors": ["Missing required stakeholder scenario fields: from_company/to_company/person."],
             "http_calls": client.http_calls,
+            "to_company_resolution": None,
+            "from_company_resolution": None,
             "company_resolution": None,
             "person_resolution": {"status": "not_found"},
+            "to_account_summary": None,
+            "from_account_summary": None,
             "account_summary": None,
-            "stakeholder_payload": None,
+            "transition_payload": None,
         }
 
     research_inputs = scenario.get("research_inputs")
@@ -261,10 +266,18 @@ def execute_stakeholder_scenario(
 
     result = run_stakeholder_case(
         client=client,
-        company=str(company),
         person=str(person),
+        from_company=str(from_company),
+        to_company=str(to_company),
         department_hint=str(scenario.get("department")) if scenario.get("department") else None,
-        account_id_override=str(scenario.get("account_id")) if scenario.get("account_id") else None,
+        from_account_id_override=(
+            str(scenario.get("from_account_id")) if scenario.get("from_account_id") else None
+        ),
+        to_account_id_override=(
+            str(scenario.get("to_account_id") or scenario.get("account_id"))
+            if scenario.get("to_account_id") or scenario.get("account_id")
+            else None
+        ),
         research_inputs=research_inputs,
         enable_probes=True,
     )
@@ -281,10 +294,14 @@ def execute_stakeholder_scenario(
         "warnings": result.get("warnings", []),
         "errors": result.get("errors", []),
         "http_calls": client.http_calls,
-        "company_resolution": result.get("company_resolution"),
+        "to_company_resolution": result.get("to_company_resolution"),
+        "from_company_resolution": result.get("from_company_resolution"),
+        "company_resolution": result.get("to_company_resolution"),
         "person_resolution": result.get("person_resolution"),
-        "account_summary": result.get("account_summary"),
-        "stakeholder_payload": result.get("stakeholder_payload"),
+        "to_account_summary": result.get("to_account_summary"),
+        "from_account_summary": result.get("from_account_summary"),
+        "account_summary": result.get("to_account_summary"),
+        "transition_payload": result.get("transition_payload"),
     }
 
 
@@ -437,8 +454,14 @@ def main() -> int:
         },
         "http_calls": all_http_calls,
         "company_resolution": {
-            "scenarios_with_company": sum(1 for item in scenarios if item.get("company")),
-            "resolved_accounts": sum(1 for result in scenario_results if result.get("account_summary")),
+            "scenarios_with_company": sum(
+                1 for item in scenarios if item.get("company") or item.get("to_company") or item.get("from_company")
+            ),
+            "resolved_accounts": sum(
+                1
+                for result in scenario_results
+                if result.get("account_summary") or result.get("to_account_summary")
+            ),
         },
         "person_resolution": {
             "person_requested": person_requested_count,
@@ -446,7 +469,11 @@ def main() -> int:
             "person_not_found": person_requested_count - matched_count,
         },
         "account_summary": {
-            "accounts_with_summary": sum(1 for result in scenario_results if result.get("account_summary")),
+            "accounts_with_summary": sum(
+                1
+                for result in scenario_results
+                if result.get("account_summary") or result.get("to_account_summary")
+            ),
         },
         "scenario_results": scenario_results,
         "warnings": all_warnings,

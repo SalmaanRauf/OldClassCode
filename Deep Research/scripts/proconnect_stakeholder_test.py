@@ -24,11 +24,14 @@ from proconnect_stakeholder_payload import load_research_inputs, run_stakeholder
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Run ProConnect stakeholder payload extraction.")
-    parser.add_argument("--company", required=True, help="Target company name.")
+    parser = argparse.ArgumentParser(description="Run ProConnect transition payload extraction.")
     parser.add_argument("--person", required=True, help="Exact person name to resolve.")
+    parser.add_argument("--from-company", required=True, help="Source company name.")
+    parser.add_argument("--to-company", default=None, help="Destination company name.")
+    parser.add_argument("--company", default=None, help="Compatibility alias for --to-company.")
     parser.add_argument("--department", default=None, help="Optional department hint.")
-    parser.add_argument("--account-id", default=None, help="Optional direct account-id override.")
+    parser.add_argument("--from-account-id", default=None, help="Optional direct source account-id override.")
+    parser.add_argument("--to-account-id", default=None, help="Optional direct destination account-id override.")
     parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="ProConnect base URL.")
     parser.add_argument("--token", default=None, help="Bearer token (with or without 'Bearer ' prefix).")
     parser.add_argument(
@@ -49,6 +52,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    to_company = args.to_company or args.company
+    if not to_company:
+        print("Missing destination company. Provide --to-company (or --company compatibility alias).")
+        return 1
 
     try:
         token, token_source = resolve_bearer_token(args.token, args.token_file)
@@ -79,10 +86,12 @@ def main() -> int:
 
     result = run_stakeholder_case(
         client=client,
-        company=args.company,
         person=args.person,
+        from_company=args.from_company,
+        to_company=to_company,
         department_hint=args.department,
-        account_id_override=args.account_id,
+        from_account_id_override=args.from_account_id,
+        to_account_id_override=args.to_account_id,
         research_inputs=research_inputs,
         enable_probes=True,
     )
@@ -98,10 +107,12 @@ def main() -> int:
         "timestamp_utc": utc_timestamp(),
         "inputs_redacted": {
             "base_url": args.base_url,
-            "company": args.company,
             "person": args.person,
+            "from_company": args.from_company,
+            "to_company": to_company,
             "department": args.department,
-            "account_id": args.account_id,
+            "from_account_id": args.from_account_id,
+            "to_account_id": args.to_account_id,
             "token_source": token_source,
             "token_preview": redact_token(token),
             "token_file": args.token_file,
@@ -110,7 +121,8 @@ def main() -> int:
             "timeout_seconds": args.timeout,
         },
         "http_calls": client.http_calls,
-        "stakeholder_payload": result.get("stakeholder_payload"),
+        "transition_payload": result.get("transition_payload"),
+        "stakeholder_payload": result.get("transition_payload"),
         "warnings": warnings,
         "errors": errors,
         "pass_fail": {
@@ -118,15 +130,19 @@ def main() -> int:
             "checks": checks,
             "token_health": token_health,
         },
-        "company_resolution": result.get("company_resolution"),
+        "to_company_resolution": result.get("to_company_resolution"),
+        "from_company_resolution": result.get("from_company_resolution"),
+        "company_resolution": result.get("to_company_resolution"),
         "person_resolution": result.get("person_resolution"),
-        "account_summary": result.get("account_summary"),
+        "to_account_summary": result.get("to_account_summary"),
+        "from_account_summary": result.get("from_account_summary"),
+        "account_summary": result.get("to_account_summary"),
     }
 
     artifact_path = write_json_artifact(args.output_dir, "proconnect_stakeholder", payload)
 
-    print("\nProConnect Stakeholder Test")
-    print("===========================")
+    print("\nProConnect Transition Test")
+    print("=========================")
     print_check_table(checks)
     for warning in token_health.get("warnings", []):
         print(f"Token warning: {warning}")

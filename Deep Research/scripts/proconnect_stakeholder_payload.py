@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
-"""Stakeholder-aligned ProConnect payload assembly for local script testing."""
+"""Transition-focused ProConnect payload assembly for local script testing."""
 
 from __future__ import annotations
 
 import json
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from proconnect_client import ProConnectClient
 from proconnect_lookup_logic import (
     DEPARTMENT_TO_SFDC_FUNCTIONS,
     build_account_summary,
-    dedupe_people,
     exact_name_equals,
-    find_exact_person_match,
     full_person_name,
     get_zoom_info_account_id,
     resolve_company_and_account,
@@ -25,6 +24,28 @@ PROBE_ENDPOINT_ALLOWLIST = [
     "/api/relationshiplead",
     "/api/userHistory",
 ]
+
+SOURCE_PRIORITY = {
+    "to_key_buyers": 100,
+    "to_account_roles": 95,
+    "to_org_chart_executive": 90,
+    "to_org_chart_department": 85,
+    "person_search": 80,
+    "to_probe": 75,
+    "from_key_buyers": 70,
+    "from_account_roles": 65,
+    "from_probe": 60,
+}
+
+STAGE_SCORE_MAP = {
+    "closed - won": 1.0,
+    "opportunity qualified": 0.93,
+    "client negotiation / review": 0.9,
+    "proposal": 0.87,
+    "prop appr": 0.85,
+    "potential opportunity identified": 0.74,
+    "closed - lost": 0.2,
+}
 
 
 def load_research_inputs(path: Optional[str]) -> Dict[str, Any]:
@@ -70,184 +91,246 @@ def load_research_inputs(path: Optional[str]) -> Dict[str, Any]:
 
 def run_stakeholder_case(
     client: ProConnectClient,
-    company: str,
     person: str,
+    from_company: str,
+    to_company: str,
     department_hint: Optional[str] = None,
-    account_id_override: Optional[str] = None,
+    from_account_id_override: Optional[str] = None,
+    to_account_id_override: Optional[str] = None,
     research_inputs: Optional[Dict[str, Any]] = None,
     enable_probes: bool = True,
 ) -> Dict[str, Any]:
     checks: List[Dict[str, Any]] = []
     warnings: List[str] = []
     errors: List[str] = []
-    research_inputs = normalize_research_inputs(research_inputs)
 
-    account: Optional[Dict[str, Any]] = None
-    company_resolution: Optional[Dict[str, Any]] = None
-    account_summary: Optional[Dict[str, Any]] = None
+    normalized_research_inputs = normalize_research_inputs(research_inputs)
+    transition_payload = default_transition_payload(
+        person=person,
+        from_company=from_company,
+        to_company=to_company,
+        research_inputs=normalized_research_inputs,
+    )
 
-    if account_id_override:
-        account_response = client.get_account_by_id(account_id_override)
-        company_resolution = {
-            "query": company,
-            "search_status_code": None,
-            "search_success": None,
-            "candidate_count": 0,
-            "candidates": [],
-            "selected_candidate": {"accountId": account_id_override},
-            "selected_score": None,
-            "account_fetch_status_code": account_response.get("status_code"),
-            "resolved_account": bool(account_response.get("success")),
-            "account_id_override": True,
+    to_result = resolve_account_context(
+        client=client,
+        company_name=to_company,
+        key_person_name=person,
+        account_id_override=to_account_id_override,
+        label="To company",
+        required=True,
+    )
+    checks.extend(to_result["checks"])
+    warnings.extend(to_result["warnings"])
+    errors.extend(to_result["errors"])
+
+    from_result = resolve_account_context(
+        client=client,
+        company_name=from_company,
+        key_person_name=person,
+        account_id_override=from_account_id_override,
+        label="From company",
+        required=False,
+    )
+    checks.extend(from_result["checks"])
+    warnings.extend(from_result["warnings"])
+
+    to_account = to_result["account"]
+    from_account = from_result["account"]
+    to_summary = build_account_summary(to_account) if to_account else None
+    from_summary = build_account_summary(from_account) if from_account else None
+
+    transition_payload["movement_event"].update(
+        {
+            "from_account_id": first_non_empty((from_account or {}), ["id"]),
+            "to_account_id": first_non_empty((to_account or {}), ["id"]),
+            "from_account_resolved": bool(from_account),
+            "to_account_resolved": bool(to_account),
         }
-        if account_response.get("success"):
-            account = account_response.get("data") if isinstance(account_response.get("data"), dict) else None
-            checks.append(
-                {
-                    "check": "Account retrieval",
-                    "status": "PASS",
-                    "http": account_response.get("status_code"),
-                    "details": f"Loaded account id {account_id_override}",
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "check": "Account retrieval",
-                    "status": "FAIL",
-                    "http": account_response.get("status_code"),
-                    "details": account_response.get("error") or "Account retrieval failed.",
-                }
-            )
-            errors.append("No account context resolved from account-id override.")
-    else:
-        company_resolution, account, resolution_errors = resolve_company_and_account(
-            client=client,
-            company_name=company,
-            key_person_name=person,
+    )
+
+    if not to_account:
+        errors.append("No destination account context resolved.")
+        status = derive_transition_status(
+            checks=checks,
+            errors=errors,
+            warnings=warnings,
+            auth_failure=to_result["auth_failure"],
+            destination_core_missing=["account_context", "opportunities", "key_buyers", "org_chart", "projects"],
         )
-        errors.extend(resolution_errors)
-
-        if company_resolution.get("search_success"):
-            checks.append(
-                {
-                    "check": "Prospects search",
-                    "status": "PASS",
-                    "http": company_resolution.get("search_status_code"),
-                    "details": f"Candidates: {company_resolution.get('candidate_count', 0)}",
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "check": "Prospects search",
-                    "status": "FAIL",
-                    "http": company_resolution.get("search_status_code"),
-                    "details": "Search failed.",
-                }
-            )
-
-        if account:
-            checks.append(
-                {
-                    "check": "Account retrieval",
-                    "status": "PASS",
-                    "http": company_resolution.get("account_fetch_status_code"),
-                    "details": f"Resolved account: {account.get('name', 'unknown')}",
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "check": "Account retrieval",
-                    "status": "FAIL",
-                    "http": company_resolution.get("account_fetch_status_code"),
-                    "details": "No account resolved from company search.",
-                }
-            )
-            errors.append("No account context resolved from company search.")
-
-    if account:
-        account_summary = build_account_summary(account)
-
-    stakeholder_payload = default_stakeholder_payload(person=person, research_inputs=research_inputs)
-
-    if not account:
-        person_profile = stakeholder_payload.get("person_profile") or {}
-        person_profile["match_status"] = "not_found"
-        person_profile["candidate_suggestions"] = []
-        stakeholder_payload["person_profile"] = person_profile
-        status = "FAIL"
         return {
             "status": status,
             "checks": checks,
             "warnings": warnings,
             "errors": errors,
-            "company_resolution": company_resolution,
+            "to_company_resolution": to_result["resolution"],
+            "from_company_resolution": from_result["resolution"],
             "person_resolution": {
                 "status": "not_found",
                 "match_source": None,
                 "matched_person": None,
                 "candidate_suggestions": [],
             },
-            "account_summary": None,
-            "stakeholder_payload": stakeholder_payload,
+            "to_account_summary": to_summary,
+            "from_account_summary": from_summary,
+            "account_summary": to_summary,
+            "company_resolution": to_result["resolution"],
+            "transition_payload": transition_payload,
+            "stakeholder_payload": transition_payload,
         }
 
-    account_id = str(account.get("id") or "")
-    zoom_info_account_id = get_zoom_info_account_id(account)
+    to_account_id = str(to_account.get("id") or "")
+    from_account_id = str((from_account or {}).get("id") or "")
 
-    org_chart_items, org_chart_people, org_warnings = collect_org_chart_people(
+    to_org_chart_items, to_org_chart_people, to_org_warnings = collect_org_chart_people(
         client=client,
-        zoom_info_account_id=zoom_info_account_id,
+        zoom_info_account_id=get_zoom_info_account_id(to_account),
         department_hint=department_hint,
     )
-    warnings.extend(org_warnings)
+    warnings.extend(to_org_warnings)
     checks.append(
         {
-            "check": "Org chart collection",
-            "status": "PASS" if org_chart_items else "WARN",
+            "check": "To org chart collection",
+            "status": "PASS" if to_org_chart_items else "WARN",
             "http": "-",
-            "details": f"People collected: {len(org_chart_items)}",
+            "details": f"People collected: {len(to_org_chart_items)}",
         }
     )
 
-    probe_payloads: List[Dict[str, Any]] = []
-    probe_warnings: List[str] = []
+    to_probe_payloads: List[Dict[str, Any]] = []
     if enable_probes:
-        probe_payloads, probe_warnings = probe_additional_endpoints(
+        to_probe_payloads, to_probe_warnings = probe_additional_endpoints(
             client=client,
-            account_id=account_id or None,
-            zoom_info_account_id=zoom_info_account_id,
+            account_id=to_account_id or None,
+            zoom_info_account_id=get_zoom_info_account_id(to_account),
         )
-        warnings.extend(probe_warnings)
+        warnings.extend(to_probe_warnings)
 
-    probe_people = extract_probe_people(probe_payloads)
-    key_buyer_people = to_people_from_key_buyers(account.get("keyBuyers"))
-    candidate_people = key_buyer_people + org_chart_people + probe_people
-    candidate_people = dedupe_people(candidate_people)
+    to_account_context = build_account_context(to_account)
+    to_projects = build_projects_section(to_account)
+    to_opportunities = build_opportunities_section(to_account)
+    to_key_buyers = build_key_buyers_section(to_account)
+    to_technologies = extract_technologies(to_account, to_probe_payloads)
 
-    matched = find_exact_person_match(person, key_buyer_people)
-    match_source = "key_buyers" if matched else None
+    if to_technologies:
+        checks.append(
+            {
+                "check": "To technologies",
+                "status": "PASS",
+                "http": "-",
+                "details": f"Technology records: {len(to_technologies)}",
+            }
+        )
+    else:
+        warnings.append("Destination company returned no technologies.")
+        checks.append(
+            {
+                "check": "To technologies",
+                "status": "WARN",
+                "http": "-",
+                "details": "No technologies found; returned empty list.",
+            }
+        )
 
-    if not matched:
-        matched = find_exact_person_match(person, org_chart_people)
-        if matched:
-            match_source = "org_chart"
+    destination_core_missing = missing_destination_core_sections(
+        account_context=to_account_context,
+        projects=to_projects,
+        opportunities=to_opportunities,
+        key_buyers=to_key_buyers,
+        org_chart_items=to_org_chart_items,
+    )
+    checks.append(
+        {
+            "check": "Destination core completeness",
+            "status": "PASS" if not destination_core_missing else "FAIL",
+            "http": "-",
+            "details": "All required sections present"
+            if not destination_core_missing
+            else f"Missing: {', '.join(destination_core_missing)}",
+        }
+    )
+    if destination_core_missing:
+        errors.append(f"Destination core sections missing: {', '.join(destination_core_missing)}")
 
-    if not matched:
-        matched = find_exact_person_match(person, probe_people)
-        if matched:
-            match_source = "probe"
+    from_context = build_from_company_context_lite(from_account)
+    if from_account:
+        checks.append(
+            {
+                "check": "From company lite context",
+                "status": "PASS",
+                "http": "-",
+                "details": f"Resolved account: {from_account.get('name', 'unknown')}",
+            }
+        )
+    else:
+        warnings.append("From company could not be fully resolved; lite context is empty.")
+        checks.append(
+            {
+                "check": "From company lite context",
+                "status": "WARN",
+                "http": "-",
+                "details": "From company unresolved.",
+            }
+        )
 
-    suggestions = top_person_candidates(person, candidate_people, top_n=3) if not matched else []
+    person_search_response = client.search_prospects(person)
+    person_search_candidates = extract_person_search_candidates(person_search_response.get("data"))
+    if person_search_response.get("success"):
+        checks.append(
+            {
+                "check": "Person prospects search",
+                "status": "PASS",
+                "http": person_search_response.get("status_code"),
+                "details": f"Candidates: {len(person_search_candidates)}",
+            }
+        )
+    else:
+        warnings.append(
+            f"Person search failed with status {person_search_response.get('status_code')}; using account-derived pools only."
+        )
+        checks.append(
+            {
+                "check": "Person prospects search",
+                "status": "WARN",
+                "http": person_search_response.get("status_code"),
+                "details": person_search_response.get("error") or "Search failed.",
+            }
+        )
 
-    person_profile = build_person_profile(
+    to_people = build_people_candidates_for_account(
+        account=to_account,
+        company_scope="to",
+        account_id=to_account_id,
+        org_chart_people=to_org_chart_people,
+        probe_payloads=to_probe_payloads,
+    )
+    from_people = build_people_candidates_for_account(
+        account=from_account,
+        company_scope="from",
+        account_id=from_account_id,
+        org_chart_people=[],
+        probe_payloads=[],
+    )
+    search_people = normalize_person_search_candidates(
+        person_search_candidates,
+        to_account_id=to_account_id,
+        from_account_id=from_account_id,
+    )
+
+    candidate_people = dedupe_transition_people(to_people + from_people + search_people)
+    person_resolution = resolve_person_transition(
+        person_name=person,
+        candidates=candidate_people,
+        to_account_id=to_account_id,
+        from_account_id=from_account_id,
+    )
+
+    person_profile = build_person_profile_transition(
         person_requested=person,
-        matched_person=matched,
-        match_source=match_source,
-        candidate_suggestions=suggestions,
-        probe_people=probe_people,
+        person_resolution=person_resolution,
+        candidate_people=candidate_people,
+        to_account=to_account,
+        from_account=from_account,
         warnings=warnings,
     )
 
@@ -257,7 +340,7 @@ def run_stakeholder_case(
                 "check": "Exact person match",
                 "status": "PASS",
                 "http": "-",
-                "details": f"Matched via {match_source}",
+                "details": f"Matched via {person_resolution.get('match_source')}",
             }
         )
     else:
@@ -266,102 +349,279 @@ def run_stakeholder_case(
                 "check": "Exact person match",
                 "status": "WARN",
                 "http": "-",
-                "details": "Exact name not found; candidate suggestions returned.",
+                "details": "Exact company-anchored match not found; candidate suggestions returned.",
             }
         )
 
-    technologies = extract_technologies(account, probe_payloads)
-    if technologies:
-        checks.append(
-            {
-                "check": "Technologies",
-                "status": "PASS",
-                "http": "-",
-                "details": f"Technology records: {len(technologies)}",
-            }
-        )
-    else:
-        warnings.append("No technologies returned from ProConnect sources.")
-        checks.append(
-            {
-                "check": "Technologies",
-                "status": "WARN",
-                "http": "-",
-                "details": "No technologies found; returned empty list.",
-            }
-        )
+    ranked_top_10 = rank_destination_opportunities(
+        opportunities=to_opportunities.get("items", []),
+        person_name=person,
+    )
 
-    stakeholder_payload["account_context"] = build_account_context(account)
-    stakeholder_payload["projects"] = build_projects_section(account)
-    stakeholder_payload["opportunities"] = build_opportunities_section(account)
-    stakeholder_payload["key_buyers"] = build_key_buyers_section(account)
-    stakeholder_payload["org_chart"] = {"items": org_chart_items}
-    stakeholder_payload["technologies"] = {"items": technologies}
-    stakeholder_payload["person_profile"] = person_profile
-    stakeholder_payload["research_inputs"] = research_inputs
-    stakeholder_payload["provenance"] = build_provenance(stakeholder_payload, probe_payloads)
-
-    person_resolution = {
-        "status": person_profile.get("match_status"),
-        "match_source": match_source,
-        "matched_person": person_profile.get("matched_person"),
-        "candidate_suggestions": person_profile.get("candidate_suggestions"),
+    movement_evidence = {
+        "person_search": {
+            "status_code": person_search_response.get("status_code"),
+            "success": person_search_response.get("success"),
+            "candidate_count": len(person_search_candidates),
+            "exact_match_count": person_resolution.get("exact_match_count", 0),
+        },
+        "person_match": {
+            "status": person_profile.get("match_status"),
+            "source": person_resolution.get("match_source"),
+            "matched_name": first_non_empty(person_profile.get("matched_person") or {}, ["name"]),
+            "company_scope": person_resolution.get("match_scope"),
+            "direct_person_evidence": person_profile.get("direct_person_evidence"),
+            "person_claim_allowed": person_profile.get("person_claim_allowed"),
+            "claim_policy_note": person_profile.get("claim_policy_note"),
+        },
+        "ranked_opportunities_top10": ranked_top_10,
+        "transition_summary": {
+            "from_worked_before": from_context.get("worked_before"),
+            "to_worked_before": to_account_context.get("worked_before"),
+            "from_account_resolved": bool(from_account),
+            "to_account_resolved": True,
+        },
     }
 
-    status = derive_status(checks=checks, errors=errors, warnings=warnings)
+    optional_sections = {
+        "to_company": extract_optional_sections(to_account, to_probe_payloads),
+        "from_company": extract_optional_sections(from_account, []),
+    }
+
+    transition_payload.update(
+        {
+            "person_profile": person_profile,
+            "from_company_context": from_context,
+            "to_company_context": {
+                "account_context": to_account_context,
+                "projects": to_projects,
+                "opportunities": to_opportunities,
+                "key_buyers": to_key_buyers,
+                "org_chart": {"items": to_org_chart_items},
+                "technologies": {"items": to_technologies},
+            },
+            "movement_evidence": movement_evidence,
+            "optional_sections": optional_sections,
+        }
+    )
+
+    transition_payload["provenance"] = build_transition_provenance(
+        transition_payload=transition_payload,
+        to_probe_payloads=to_probe_payloads,
+    )
+    transition_payload["confidence"] = build_transition_confidence(
+        transition_payload=transition_payload,
+    )
+
+    status = derive_transition_status(
+        checks=checks,
+        errors=errors,
+        warnings=warnings,
+        auth_failure=to_result["auth_failure"],
+        destination_core_missing=destination_core_missing,
+    )
+
     return {
         "status": status,
         "checks": checks,
         "warnings": warnings,
         "errors": errors,
-        "company_resolution": company_resolution,
-        "person_resolution": person_resolution,
-        "account_summary": account_summary,
-        "stakeholder_payload": stakeholder_payload,
+        "to_company_resolution": to_result["resolution"],
+        "from_company_resolution": from_result["resolution"],
+        "person_resolution": {
+            "status": person_profile.get("match_status"),
+            "match_source": person_resolution.get("match_source"),
+            "match_scope": person_resolution.get("match_scope"),
+            "matched_person": person_profile.get("matched_person"),
+            "candidate_suggestions": person_profile.get("candidate_suggestions"),
+            "direct_person_evidence": person_profile.get("direct_person_evidence"),
+            "person_claim_allowed": person_profile.get("person_claim_allowed"),
+        },
+        "to_account_summary": to_summary,
+        "from_account_summary": from_summary,
+        "account_summary": to_summary,
+        "company_resolution": to_result["resolution"],
+        "transition_payload": transition_payload,
+        "stakeholder_payload": transition_payload,
     }
 
 
-def derive_status(checks: List[Dict[str, Any]], errors: List[str], warnings: List[str]) -> str:
-    if errors or any(item.get("status") == "FAIL" for item in checks):
+def resolve_account_context(
+    client: ProConnectClient,
+    company_name: str,
+    key_person_name: Optional[str],
+    account_id_override: Optional[str],
+    label: str,
+    required: bool,
+) -> Dict[str, Any]:
+    checks: List[Dict[str, Any]] = []
+    warnings: List[str] = []
+    errors: List[str] = []
+    account: Optional[Dict[str, Any]] = None
+    auth_failure = False
+
+    failure_check_status = "FAIL" if required else "WARN"
+
+    if account_id_override:
+        response = client.get_account_by_id(str(account_id_override))
+        status_code = response.get("status_code")
+        auth_failure = status_code in {401, 403}
+        resolution = {
+            "query": company_name,
+            "search_status_code": None,
+            "search_success": None,
+            "candidate_count": 0,
+            "candidates": [],
+            "selected_candidate": {"accountId": account_id_override},
+            "selected_score": None,
+            "account_fetch_status_code": status_code,
+            "resolved_account": bool(response.get("success")),
+            "account_id_override": True,
+        }
+        if response.get("success") and isinstance(response.get("data"), dict):
+            account = response["data"]
+            checks.append(
+                {
+                    "check": f"{label} account retrieval",
+                    "status": "PASS",
+                    "http": status_code,
+                    "details": f"Loaded account id {account_id_override}",
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "check": f"{label} account retrieval",
+                    "status": failure_check_status,
+                    "http": status_code,
+                    "details": response.get("error") or "Account retrieval failed.",
+                }
+            )
+            message = f"{label} account override failed."
+            if required:
+                errors.append(message)
+            else:
+                warnings.append(message)
+        return {
+            "resolution": resolution,
+            "account": account,
+            "checks": checks,
+            "warnings": warnings,
+            "errors": errors,
+            "auth_failure": auth_failure,
+        }
+
+    resolution, account, resolution_errors = resolve_company_and_account(
+        client=client,
+        company_name=company_name,
+        key_person_name=key_person_name,
+    )
+
+    search_status = resolution.get("search_status_code")
+    fetch_status = resolution.get("account_fetch_status_code")
+    if search_status in {401, 403} or fetch_status in {401, 403}:
+        auth_failure = True
+
+    if resolution.get("search_success"):
+        checks.append(
+            {
+                "check": f"{label} prospects search",
+                "status": "PASS",
+                "http": search_status,
+                "details": f"Candidates: {resolution.get('candidate_count', 0)}",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "check": f"{label} prospects search",
+                "status": failure_check_status,
+                "http": search_status,
+                "details": "Search failed.",
+            }
+        )
+
+    if account:
+        checks.append(
+            {
+                "check": f"{label} account retrieval",
+                "status": "PASS",
+                "http": fetch_status,
+                "details": f"Resolved account: {account.get('name', 'unknown')}",
+            }
+        )
+    else:
+        checks.append(
+            {
+                "check": f"{label} account retrieval",
+                "status": failure_check_status,
+                "http": fetch_status,
+                "details": "No account resolved from company search.",
+            }
+        )
+
+    for error in resolution_errors:
+        if required:
+            errors.append(error)
+        else:
+            warnings.append(error)
+
+    if not account:
+        if required:
+            errors.append(f"{label} account resolution returned no account.")
+        else:
+            warnings.append(f"{label} account resolution returned no account.")
+
+    return {
+        "resolution": resolution,
+        "account": account,
+        "checks": checks,
+        "warnings": warnings,
+        "errors": errors,
+        "auth_failure": auth_failure,
+    }
+
+
+def derive_transition_status(
+    checks: List[Dict[str, Any]],
+    errors: List[str],
+    warnings: List[str],
+    auth_failure: bool,
+    destination_core_missing: List[str],
+) -> str:
+    if auth_failure:
         return "FAIL"
-    if warnings or any(item.get("status") == "WARN" for item in checks):
+    if destination_core_missing:
+        return "FAIL"
+    if errors or any(check.get("status") == "FAIL" for check in checks):
+        return "FAIL"
+    if warnings or any(check.get("status") == "WARN" for check in checks):
         return "WARN"
     return "PASS"
 
 
-def default_stakeholder_payload(person: str, research_inputs: Dict[str, Any]) -> Dict[str, Any]:
+def default_transition_payload(
+    person: str,
+    from_company: str,
+    to_company: str,
+    research_inputs: Dict[str, Any],
+) -> Dict[str, Any]:
     return {
-        "account_context": {
-            "account_id": None,
-            "company_name": None,
-            "industry": None,
-            "website": None,
-            "ticker": None,
-            "zoom_info_account_id": None,
-            "worked_before": False,
-            "company_summary_raw": None,
-            "company_summary_concise": None,
-        },
-        "projects": {
-            "items": [],
-            "total_projects": 0,
-            "solutions_list": [],
-        },
-        "opportunities": {
-            "items": [],
-        },
-        "key_buyers": {
-            "items": [],
-        },
-        "org_chart": {
-            "items": [],
-        },
-        "technologies": {
-            "items": [],
+        "movement_event": {
+            "person_full_name": person,
+            "from_company": from_company,
+            "to_company": to_company,
+            "from_account_id": None,
+            "to_account_id": None,
+            "from_account_resolved": False,
+            "to_account_resolved": False,
+            "move_date": None,
+            "trigger_id": None,
         },
         "person_profile": {
             "person_requested": person,
             "match_status": "not_found",
+            "person_unverified": True,
             "matched_person": None,
             "title_salesforce": None,
             "title_external": None,
@@ -369,12 +629,71 @@ def default_stakeholder_payload(person: str, research_inputs: Dict[str, Any]) ->
             "in_salesforce": None,
             "protiviti_alumni": None,
             "contact_at_robert_half": None,
+            "email": None,
+            "phone": None,
+            "linkedin_url": None,
             "past_job_experience": [],
             "education": [],
             "candidate_suggestions": [],
+            "direct_person_evidence": False,
+            "person_claim_allowed": False,
+            "claim_policy_note": "No direct person-level evidence available; account-level claim only.",
+        },
+        "from_company_context": {
+            "account_header": {
+                "account_id": None,
+                "company_name": None,
+                "industry": None,
+                "website": None,
+                "ticker": None,
+                "zoom_info_account_id": None,
+            },
+            "worked_before": False,
+            "historical_solution_footprint": {
+                "total_projects": 0,
+                "total_all_opportunities": 0,
+                "total_open_opportunities": 0,
+                "solutions_list_5y": [],
+            },
+            "top_key_buyers": [],
+            "prior_relationship_indicators": {
+                "key_buyer_count": 0,
+                "has_protiviti_alumni": False,
+                "has_connected_colleague": False,
+                "notes": [],
+            },
+        },
+        "to_company_context": {
+            "account_context": {
+                "account_id": None,
+                "company_name": None,
+                "industry": None,
+                "website": None,
+                "ticker": None,
+                "zoom_info_account_id": None,
+                "worked_before": False,
+                "company_summary_raw": None,
+                "company_summary_concise": None,
+            },
+            "projects": {"items": [], "total_projects": 0, "solutions_list": []},
+            "opportunities": {"items": []},
+            "key_buyers": {"items": []},
+            "org_chart": {"items": []},
+            "technologies": {"items": []},
+        },
+        "movement_evidence": {
+            "person_search": {},
+            "person_match": {},
+            "ranked_opportunities_top10": [],
+            "transition_summary": {},
+        },
+        "optional_sections": {
+            "to_company": {},
+            "from_company": {},
         },
         "research_inputs": research_inputs,
         "provenance": {},
+        "confidence": {},
     }
 
 
@@ -383,7 +702,6 @@ def build_account_context(account: Dict[str, Any]) -> Dict[str, Any]:
     number_of_project = to_int(account.get("numberOfProject"))
     worked_before = bool((number_of_project and number_of_project > 0) or projects)
     raw_summary = first_non_empty(account, ["companyDescription", "description"])
-    concise = concise_summary(raw_summary)
 
     return {
         "account_id": account.get("id"),
@@ -394,7 +712,7 @@ def build_account_context(account: Dict[str, Any]) -> Dict[str, Any]:
         "zoom_info_account_id": account.get("zoomInfoAccountId"),
         "worked_before": worked_before,
         "company_summary_raw": raw_summary,
-        "company_summary_concise": concise,
+        "company_summary_concise": concise_summary(raw_summary),
     }
 
 
@@ -413,11 +731,13 @@ def build_projects_section(account: Dict[str, Any]) -> Dict[str, Any]:
             solutions.add(solution)
         items.append(
             {
+                "project_id": first_non_empty(project, ["projectId", "id", "budgetKey"]),
                 "project_name": first_non_empty(project, ["name", "projectName", "budgetKey"]),
                 "year_ended_or_status": first_non_empty(project, ["endedDate", "projectStatus", "yearEnded"]),
                 "solution": solution,
                 "emd": first_non_empty(project, ["engagementManagingDirector", "emd"]),
                 "em": first_non_empty(project, ["engagementManager", "em"]),
+                "primary_key_buyer": first_non_empty(project, ["primaryKeyBuyer"]),
             }
         )
 
@@ -427,14 +747,10 @@ def build_projects_section(account: Dict[str, Any]) -> Dict[str, Any]:
 
     if not solutions:
         for opp_key in ["allOpportunity", "openOpportunity"]:
-            opps = account.get(opp_key)
-            if not isinstance(opps, list):
-                continue
-            for opp in opps:
-                if isinstance(opp, dict):
-                    solution = first_non_empty(opp, ["solution"])
-                    if solution:
-                        solutions.add(solution)
+            for opp in to_list_dicts(account.get(opp_key)):
+                solution = first_non_empty(opp, ["solution"])
+                if solution:
+                    solutions.add(solution)
 
     return {
         "items": items,
@@ -447,20 +763,22 @@ def build_opportunities_section(account: Dict[str, Any]) -> Dict[str, Any]:
     opportunities = account.get("allOpportunity")
     if not isinstance(opportunities, list):
         opportunities = account.get("openOpportunity")
-    if not isinstance(opportunities, list):
-        opportunities = []
+    opportunities = to_list_dicts(opportunities)
 
     items: List[Dict[str, Any]] = []
     for opp in opportunities:
-        if not isinstance(opp, dict):
-            continue
         items.append(
             {
+                "opportunity_id": first_non_empty(opp, ["opportunityId", "id"]),
+                "opportunity_key": first_non_empty(opp, ["opportunityKey"]),
                 "opportunity": first_non_empty(opp, ["name", "opportunity", "opportunityName"]),
                 "close_date": first_non_empty(opp, ["opportunityCloseDate", "closeDate"]),
+                "created_date": first_non_empty(opp, ["opportunityCreatedDate", "createdDate"]),
                 "md_d": first_non_empty(opp, ["opportunityManagingDirector", "md", "director"]),
                 "primary_key_buyer": first_non_empty(opp, ["primaryKeyBuyer"]),
+                "primary_key_buyer_id": first_non_empty(opp, ["primaryKeyBuyerId"]),
                 "solution": first_non_empty(opp, ["solution"]),
+                "solution_segment": first_non_empty(opp, ["solutionSegment"]),
                 "service_name": first_non_empty(opp, ["serviceOffering", "serviceName"]),
                 "stage": first_non_empty(opp, ["opportunityStage", "stage"]),
                 "em": first_non_empty(opp, ["engagementManager"]),
@@ -471,14 +789,10 @@ def build_opportunities_section(account: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def build_key_buyers_section(account: Dict[str, Any]) -> Dict[str, Any]:
-    key_buyers = account.get("keyBuyers")
-    if not isinstance(key_buyers, list):
-        key_buyers = []
+    key_buyers = to_list_dicts(account.get("keyBuyers"))
 
     items: List[Dict[str, Any]] = []
     for buyer in key_buyers:
-        if not isinstance(buyer, dict):
-            continue
         items.append(
             {
                 "name": full_person_name(buyer),
@@ -490,7 +804,485 @@ def build_key_buyers_section(account: Dict[str, Any]) -> Dict[str, Any]:
                 ),
             }
         )
-    return {"items": items}
+
+    return {
+        "items": items,
+    }
+
+
+def build_from_company_context_lite(account: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not account:
+        return default_transition_payload("", "", "", normalize_research_inputs(None))["from_company_context"]
+
+    account_context = build_account_context(account)
+    projects = build_projects_section(account)
+    opportunities = build_opportunities_section(account)
+    key_buyers = build_key_buyers_section(account)
+
+    ranked_buyers = sorted(
+        key_buyers.get("items", []),
+        key=lambda item: (to_int(item.get("wins_5y")) or 0, str(item.get("name") or "")),
+        reverse=True,
+    )
+
+    return {
+        "account_header": {
+            "account_id": account_context.get("account_id"),
+            "company_name": account_context.get("company_name"),
+            "industry": account_context.get("industry"),
+            "website": account_context.get("website"),
+            "ticker": account_context.get("ticker"),
+            "zoom_info_account_id": account_context.get("zoom_info_account_id"),
+        },
+        "worked_before": bool(account_context.get("worked_before")),
+        "historical_solution_footprint": {
+            "total_projects": projects.get("total_projects") or 0,
+            "total_all_opportunities": to_int(account.get("numberOfAllOpportunity")) or len(opportunities.get("items", [])),
+            "total_open_opportunities": to_int(account.get("numberOfOpenOpportunity")) or len(to_list_dicts(account.get("openOpportunity"))),
+            "solutions_list_5y": projects.get("solutions_list", []),
+        },
+        "top_key_buyers": ranked_buyers[:5],
+        "prior_relationship_indicators": {
+            "key_buyer_count": len(key_buyers.get("items", [])),
+            "has_protiviti_alumni": bool(to_list_dicts(account.get("protivitiAlumni"))),
+            "has_connected_colleague": bool(to_list_dicts(account.get("connectedColleague"))),
+            "notes": [
+                "Source company context is lightweight by design for transition analysis anchor.",
+            ],
+        },
+    }
+
+
+def build_people_candidates_for_account(
+    account: Optional[Dict[str, Any]],
+    company_scope: str,
+    account_id: str,
+    org_chart_people: List[Dict[str, Any]],
+    probe_payloads: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not account:
+        return []
+
+    key_buyer_people = annotate_people_scope(
+        people=to_people_from_key_buyers(account.get("keyBuyers")),
+        company_scope=company_scope,
+        linked_account_id=account_id,
+        linked_company_name=str(account.get("name") or ""),
+        source_prefix=f"{company_scope}_",
+    )
+
+    role_people = annotate_people_scope(
+        people=to_people_from_account_roles(account),
+        company_scope=company_scope,
+        linked_account_id=account_id,
+        linked_company_name=str(account.get("name") or ""),
+        source_prefix=f"{company_scope}_",
+    )
+
+    chart_people = annotate_people_scope(
+        people=org_chart_people,
+        company_scope=company_scope,
+        linked_account_id=account_id,
+        linked_company_name=str(account.get("name") or ""),
+        source_prefix=f"{company_scope}_",
+    )
+
+    probe_people = annotate_people_scope(
+        people=extract_probe_people(probe_payloads),
+        company_scope=company_scope,
+        linked_account_id=account_id,
+        linked_company_name=str(account.get("name") or ""),
+        source_prefix=f"{company_scope}_",
+    )
+
+    return key_buyer_people + role_people + chart_people + probe_people
+
+
+def annotate_people_scope(
+    people: List[Dict[str, Any]],
+    company_scope: str,
+    linked_account_id: str,
+    linked_company_name: str,
+    source_prefix: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    output: List[Dict[str, Any]] = []
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        candidate = dict(person)
+        source_value = str(candidate.get("_source") or "unknown")
+        if source_prefix and not source_value.startswith(source_prefix):
+            source_value = f"{source_prefix}{source_value}"
+        candidate["_source"] = source_value
+        candidate["_company_scope"] = company_scope
+        candidate["linked_account_id"] = linked_account_id
+        candidate["linked_company_name"] = linked_company_name
+        output.append(candidate)
+    return output
+
+
+def normalize_person_search_candidates(
+    candidates: List[Dict[str, Any]],
+    to_account_id: str,
+    from_account_id: str,
+) -> List[Dict[str, Any]]:
+    output: List[Dict[str, Any]] = []
+    for candidate in candidates:
+        account_id = str(candidate.get("accountId") or "")
+        if account_id and to_account_id and account_id == to_account_id:
+            scope = "to"
+        elif account_id and from_account_id and account_id == from_account_id:
+            scope = "from"
+        else:
+            scope = "unknown"
+
+        output.append(
+            {
+                "id": candidate.get("contactId") or candidate.get("id"),
+                "name": candidate.get("name"),
+                "title": candidate.get("title"),
+                "emailAddress": candidate.get("emailAddress"),
+                "linkedinUrl": candidate.get("linkedinUrl"),
+                "_source": "person_search",
+                "_company_scope": scope,
+                "linked_account_id": account_id,
+                "linked_company_name": candidate.get("companyName"),
+            }
+        )
+    return output
+
+
+def resolve_person_transition(
+    person_name: str,
+    candidates: List[Dict[str, Any]],
+    to_account_id: str,
+    from_account_id: str,
+) -> Dict[str, Any]:
+    exact_matches = [candidate for candidate in candidates if exact_name_equals(person_name, full_person_name(candidate))]
+
+    if not exact_matches:
+        return {
+            "status": "not_found",
+            "match_source": None,
+            "match_scope": None,
+            "matched": None,
+            "exact_match_count": 0,
+        }
+
+    to_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == to_account_id]
+    if to_matches:
+        selected = select_best_candidate(to_matches)
+        return {
+            "status": "matched",
+            "match_source": selected.get("_source"),
+            "match_scope": "to",
+            "matched": selected,
+            "exact_match_count": len(exact_matches),
+        }
+
+    from_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == from_account_id]
+    if from_matches:
+        selected = select_best_candidate(from_matches)
+        return {
+            "status": "matched",
+            "match_source": selected.get("_source"),
+            "match_scope": "from",
+            "matched": selected,
+            "exact_match_count": len(exact_matches),
+        }
+
+    if len(exact_matches) == 1:
+        selected = exact_matches[0]
+        return {
+            "status": "matched",
+            "match_source": selected.get("_source"),
+            "match_scope": selected.get("_company_scope") or "unknown",
+            "matched": selected,
+            "exact_match_count": 1,
+        }
+
+    return {
+        "status": "ambiguous",
+        "match_source": None,
+        "match_scope": None,
+        "matched": None,
+        "exact_match_count": len(exact_matches),
+    }
+
+
+def select_best_candidate(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    ranked = sorted(candidates, key=candidate_sort_key, reverse=True)
+    return ranked[0]
+
+
+def candidate_sort_key(candidate: Dict[str, Any]) -> Tuple[int, float, int, str]:
+    source = str(candidate.get("_source") or "")
+    base_source = source
+    for prefix in ["to_", "from_"]:
+        if base_source.startswith(prefix):
+            base_source = base_source[len(prefix) :]
+            break
+    scope_rank = {"to": 3, "from": 2, "unknown": 1}.get(str(candidate.get("_company_scope") or "unknown"), 1)
+    source_rank = SOURCE_PRIORITY.get(source, SOURCE_PRIORITY.get(base_source, 10))
+    has_title = 1 if first_non_empty(candidate, ["title", "titleSalesforce", "titleExternal"]) else 0
+    name = str(full_person_name(candidate) or "")
+    return (scope_rank, float(source_rank), has_title, name)
+
+
+def build_person_profile_transition(
+    person_requested: str,
+    person_resolution: Dict[str, Any],
+    candidate_people: List[Dict[str, Any]],
+    to_account: Dict[str, Any],
+    from_account: Optional[Dict[str, Any]],
+    warnings: List[str],
+) -> Dict[str, Any]:
+    status = person_resolution.get("status") or "not_found"
+    matched = person_resolution.get("matched") if isinstance(person_resolution.get("matched"), dict) else None
+
+    suggestions = [] if status == "matched" else top_person_candidates(person_requested, candidate_people, top_n=3)
+
+    if status == "ambiguous":
+        warnings.append("Exact person match was ambiguous across candidates; person marked unverified.")
+    elif status == "not_found":
+        warnings.append("Exact person match not found; person marked unverified.")
+
+    direct_evidence = False
+    evidence_basis: List[str] = []
+    if matched:
+        direct_evidence, evidence_basis = detect_direct_person_evidence(
+            person_name=full_person_name(matched),
+            to_account=to_account,
+            from_account=from_account,
+        )
+
+    profile = {
+        "person_requested": person_requested,
+        "match_status": status,
+        "person_unverified": status != "matched",
+        "matched_person": None,
+        "title_salesforce": None,
+        "title_external": None,
+        "location": None,
+        "in_salesforce": None,
+        "protiviti_alumni": None,
+        "contact_at_robert_half": None,
+        "email": None,
+        "phone": None,
+        "linkedin_url": None,
+        "past_job_experience": [],
+        "education": [],
+        "candidate_suggestions": suggestions,
+        "direct_person_evidence": direct_evidence,
+        "person_claim_allowed": bool(direct_evidence),
+        "claim_policy_note": (
+            "Direct person-level evidence found in ProConnect; person-level claim allowed."
+            if direct_evidence
+            else "No direct person-level evidence found; use account-level claim with caution."
+        ),
+        "evidence_basis": evidence_basis,
+    }
+
+    if not matched:
+        return profile
+
+    profile["matched_person"] = {
+        "name": full_person_name(matched),
+        "title": first_non_empty(matched, ["title"]),
+        "source": person_resolution.get("match_source"),
+        "company_scope": person_resolution.get("match_scope"),
+        "linked_account_id": matched.get("linked_account_id"),
+        "score": 1.0,
+    }
+
+    profile["title_salesforce"] = first_non_empty(matched, ["titleSalesforce", "title"])
+    profile["title_external"] = first_non_empty(matched, ["titleExternal"])
+    profile["location"] = first_non_empty(matched, ["location"])
+    profile["in_salesforce"] = to_bool(first_non_empty(matched, ["isInSalesforce", "inSalesforce"]))
+    profile["protiviti_alumni"] = to_bool(first_non_empty(matched, ["isProtivitiAlumni", "protivitiAlumni"]))
+    profile["contact_at_robert_half"] = to_bool(
+        first_non_empty(matched, ["hasRoberthalfContact", "contactAtRobertHalf"])
+    )
+    profile["email"] = first_non_empty(matched, ["emailAddress", "email"])
+    profile["phone"] = first_non_empty(matched, ["phone"])
+    profile["linkedin_url"] = first_non_empty(matched, ["linkedinUrl", "linkedInUrl"])
+    profile["past_job_experience"] = to_list(first_non_empty(matched, ["pastJobExperience", "pastJobs"]))
+    profile["education"] = to_list(first_non_empty(matched, ["education", "educationList"]))
+
+    if not any(
+        [
+            profile["title_salesforce"],
+            profile["title_external"],
+            profile["location"],
+            profile["email"],
+            profile["linkedin_url"],
+            profile["past_job_experience"],
+            profile["education"],
+        ]
+    ):
+        warnings.append("Person profile fields were unavailable from ProConnect sources.")
+
+    return profile
+
+
+def detect_direct_person_evidence(
+    person_name: str,
+    to_account: Dict[str, Any],
+    from_account: Optional[Dict[str, Any]],
+) -> Tuple[bool, List[str]]:
+    basis: List[str] = []
+    normalized_person = normalize_text(person_name)
+
+    if not normalized_person:
+        return False, basis
+
+    def _scan_account(account: Optional[Dict[str, Any]], scope: str) -> None:
+        if not account:
+            return
+
+        for buyer in to_list_dicts(account.get("keyBuyers")):
+            if normalize_text(full_person_name(buyer)) == normalized_person:
+                basis.append(f"{scope}:key_buyers")
+                break
+
+        for opp in to_list_dicts(account.get("allOpportunity")) + to_list_dicts(account.get("openOpportunity")):
+            if normalize_text(str(first_non_empty(opp, ["primaryKeyBuyer"]) or "")) == normalized_person:
+                basis.append(f"{scope}:opportunity_primary_key_buyer")
+                break
+
+        for project in to_list_dicts(account.get("project")):
+            if normalize_text(str(first_non_empty(project, ["primaryKeyBuyer"]) or "")) == normalized_person:
+                basis.append(f"{scope}:project_primary_key_buyer")
+                break
+
+    _scan_account(to_account, "to")
+    _scan_account(from_account, "from")
+
+    return (len(basis) > 0), sorted(set(basis))
+
+
+def missing_destination_core_sections(
+    account_context: Dict[str, Any],
+    projects: Dict[str, Any],
+    opportunities: Dict[str, Any],
+    key_buyers: Dict[str, Any],
+    org_chart_items: List[Dict[str, Any]],
+) -> List[str]:
+    missing: List[str] = []
+
+    account_ok = bool(account_context.get("account_id") and account_context.get("company_name"))
+    projects_ok = bool((to_int(projects.get("total_projects")) or 0) > 0 or projects.get("items"))
+    opp_ok = bool(opportunities.get("items"))
+    buyers_ok = bool(key_buyers.get("items"))
+    org_ok = bool(org_chart_items)
+
+    if not account_ok:
+        missing.append("account_context")
+    if not opp_ok:
+        missing.append("opportunities")
+    if not buyers_ok:
+        missing.append("key_buyers")
+    if not org_ok:
+        missing.append("org_chart")
+    if not projects_ok:
+        missing.append("projects")
+
+    return missing
+
+
+def rank_destination_opportunities(opportunities: List[Dict[str, Any]], person_name: str) -> List[Dict[str, Any]]:
+    ranked: List[Dict[str, Any]] = []
+
+    for opp in opportunities:
+        stage_score = stage_signal_score(str(opp.get("stage") or ""))
+        buyer_score = 1.0 if first_non_empty(opp, ["primary_key_buyer"]) else 0.0
+        md_score = 1.0 if first_non_empty(opp, ["md_d"]) else 0.0
+        em_score = 1.0 if first_non_empty(opp, ["em"]) else 0.0
+        recency_score = recency_signal_score(first_non_empty(opp, ["close_date", "created_date"]))
+
+        score = round(
+            (0.45 * stage_score) + (0.2 * buyer_score) + (0.15 * md_score) + (0.1 * em_score) + (0.1 * recency_score),
+            4,
+        )
+
+        evidence_refs = [
+            f"stage:{opp.get('stage') or 'unknown'}",
+            "has_primary_key_buyer" if buyer_score else "no_primary_key_buyer",
+            "has_md" if md_score else "no_md",
+            "has_em" if em_score else "no_em",
+        ]
+
+        if exact_name_equals(person_name, str(opp.get("primary_key_buyer") or "")):
+            score = round(min(score + 0.05, 1.0), 4)
+            evidence_refs.append("person_matches_primary_key_buyer")
+
+        ranked.append(
+            {
+                "rank_score": score,
+                "rank_band": band_for_score(score),
+                "evidence_refs": evidence_refs,
+                **opp,
+            }
+        )
+
+    ranked.sort(key=lambda row: (row.get("rank_score", 0.0), str(row.get("close_date") or "")), reverse=True)
+
+    for idx, row in enumerate(ranked, start=1):
+        row["rank"] = idx
+
+    return ranked[:10]
+
+
+def stage_signal_score(stage: str) -> float:
+    normalized = normalize_text(stage)
+    if not normalized:
+        return 0.35
+    for key, value in STAGE_SCORE_MAP.items():
+        if key in normalized:
+            return value
+    return 0.5
+
+
+def recency_signal_score(date_value: Any) -> float:
+    if not date_value:
+        return 0.5
+    parsed = parse_iso_datetime(str(date_value))
+    if not parsed:
+        return 0.5
+
+    now = datetime.now(timezone.utc)
+    delta_days = abs((now - parsed).days)
+    if delta_days >= 5 * 365:
+        return 0.0
+    return round(max(0.0, 1.0 - (delta_days / float(5 * 365))), 4)
+
+
+def parse_iso_datetime(value: str) -> Optional[datetime]:
+    text = value.strip()
+    if not text:
+        return None
+    candidates = [text]
+    if text.endswith("Z"):
+        candidates.append(text[:-1] + "+00:00")
+    for candidate in candidates:
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=timezone.utc)
+            return parsed.astimezone(timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def band_for_score(score: float) -> str:
+    if score >= 0.75:
+        return "High"
+    if score >= 0.45:
+        return "Medium"
+    if score > 0:
+        return "Low"
+    return "Unknown"
 
 
 def collect_org_chart_people(
@@ -550,7 +1342,7 @@ def collect_org_chart_people(
                     f"Org chart {department}/{job_function} failed with status {response.get('status_code')}."
                 )
 
-    deduped_people = dedupe_people(people)
+    deduped_people = dedupe_transition_people(people)
     for person in deduped_people:
         person.setdefault("_source", "org_chart")
 
@@ -596,6 +1388,7 @@ def probe_additional_endpoints(
         for params in unique_templates:
             if auth_blocked:
                 break
+
             response = client.get_endpoint(
                 endpoint=endpoint,
                 params=params,
@@ -624,6 +1417,35 @@ def probe_additional_endpoints(
     return payloads, warnings
 
 
+def extract_person_search_candidates(payload: Any) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return candidates
+
+    for item in to_list_dicts(payload.get("value")):
+        document = item.get("document") if isinstance(item.get("document"), dict) else item
+        if not isinstance(document, dict):
+            continue
+
+        name = first_non_empty(document, ["name", "contactName", "fullName"])
+        if not name:
+            continue
+
+        candidates.append(
+            {
+                "contactId": first_non_empty(document, ["contactId", "id"]),
+                "name": name,
+                "title": first_non_empty(document, ["title"]),
+                "emailAddress": first_non_empty(document, ["emailAddress"]),
+                "linkedinUrl": first_non_empty(document, ["linkedinUrl", "linkedInUrl"]),
+                "accountId": first_non_empty(document, ["accountId", "sfdcAccountId"]),
+                "companyName": first_non_empty(document, ["companyName", "name"]),
+            }
+        )
+
+    return candidates
+
+
 def extract_probe_people(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     people: List[Dict[str, Any]] = []
     for payload in probe_payloads:
@@ -635,158 +1457,235 @@ def extract_probe_people(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str,
             record["_source"] = f"probe:{endpoint}"
             people.append(record)
 
-    deduped = dedupe_people(people)
-    for person in deduped:
-        person.setdefault("_source", "probe")
-    return deduped
+    return dedupe_transition_people(people)
 
 
-def build_person_profile(
-    person_requested: str,
-    matched_person: Optional[Dict[str, Any]],
-    match_source: Optional[str],
-    candidate_suggestions: List[Dict[str, Any]],
-    probe_people: List[Dict[str, Any]],
-    warnings: List[str],
+def build_transition_provenance(
+    transition_payload: Dict[str, Any],
+    to_probe_payloads: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    profile = {
-        "person_requested": person_requested,
-        "match_status": "matched" if matched_person else "not_found",
-        "matched_person": matched_person,
-        "title_salesforce": None,
-        "title_external": None,
-        "location": None,
-        "in_salesforce": None,
-        "protiviti_alumni": None,
-        "contact_at_robert_half": None,
-        "past_job_experience": [],
-        "education": [],
-        "candidate_suggestions": candidate_suggestions,
-    }
+    to_context = transition_payload.get("to_company_context") or {}
+    from_context = transition_payload.get("from_company_context") or {}
+    person_profile = transition_payload.get("person_profile") or {}
 
-    if not matched_person:
-        return profile
-
-    merged = dict(matched_person)
-    probe_overlay = find_probe_overlay(matched_person.get("name"), probe_people)
-    if probe_overlay:
-        for key, value in probe_overlay.items():
-            if key not in merged or merged.get(key) in (None, "", []):
-                merged[key] = value
-
-    profile["matched_person"] = {
-        "name": merged.get("name"),
-        "title": merged.get("title"),
-        "source": match_source,
-        "score": merged.get("score", 1.0),
-    }
-
-    profile["title_salesforce"] = first_non_empty(merged, ["titleSalesforce", "salesforceTitle", "title"])
-    profile["title_external"] = first_non_empty(merged, ["titleExternal", "externalTitle"])
-    profile["location"] = first_non_empty(merged, ["location"])
-    profile["in_salesforce"] = to_bool(first_non_empty(merged, ["isInSalesforce", "inSalesforce"]))
-    profile["protiviti_alumni"] = to_bool(first_non_empty(merged, ["isProtivitiAlumni", "protivitiAlumni"]))
-    profile["contact_at_robert_half"] = to_bool(
-        first_non_empty(merged, ["hasRoberthalfContact", "contactAtRobertHalf"])
-    )
-    profile["past_job_experience"] = to_list(first_non_empty(merged, ["pastJobExperience", "pastJobs"]))
-    profile["education"] = to_list(first_non_empty(merged, ["education", "educationList"]))
-
-    profile_fields = [
-        profile["title_salesforce"],
-        profile["title_external"],
-        profile["location"],
-        profile["in_salesforce"],
-        profile["protiviti_alumni"],
-        profile["contact_at_robert_half"],
-    ]
-    if not any(value not in (None, "", []) for value in profile_fields) and not profile["past_job_experience"] and not profile["education"]:
-        warnings.append("Person profile fields were unavailable from ProConnect sources.")
-
-    return profile
-
-
-def extract_technologies(account: Dict[str, Any], probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    records: List[Dict[str, Any]] = []
-    account_tech = extract_technologies_from_node(account)
-    records.extend(account_tech)
-
-    for payload in probe_payloads:
-        endpoint = payload.get("endpoint") or "probe"
-        for item in extract_technologies_from_node(payload.get("data")):
-            if item.get("source") is None:
-                item["source"] = f"probe:{endpoint}"
-            records.append(item)
-
-    return dedupe_simple_records(records, keys=["technology", "website"])
-
-
-def build_provenance(payload: Dict[str, Any], probe_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
-    account_context = payload.get("account_context", {})
-    projects = payload.get("projects", {})
-    opportunities = payload.get("opportunities", {})
-    key_buyers = payload.get("key_buyers", {})
-    org_chart = payload.get("org_chart", {})
-    technologies = payload.get("technologies", {})
-    person_profile = payload.get("person_profile", {})
-    research_inputs = payload.get("research_inputs", {})
-
-    tech_source = "proconnect_account_or_probe" if probe_payloads else "proconnect_account"
     return {
-        "account_context": {
-            "account_id": prov("proconnect_account", present(account_context.get("account_id"))),
-            "company_name": prov("proconnect_account", present(account_context.get("company_name"))),
-            "industry": prov("proconnect_account", present(account_context.get("industry"))),
-            "website": prov("proconnect_account", present(account_context.get("website"))),
-            "ticker": prov("proconnect_account", present(account_context.get("ticker"))),
-            "zoom_info_account_id": prov("proconnect_account", present(account_context.get("zoom_info_account_id"))),
-            "worked_before": prov("derived", present(account_context.get("worked_before"))),
-            "company_summary_raw": prov("proconnect_account", present(account_context.get("company_summary_raw"))),
-            "company_summary_concise": prov("derived", present(account_context.get("company_summary_concise"))),
-        },
-        "projects": {
-            "items": prov("proconnect_account", present(projects.get("items"))),
-            "total_projects": prov("proconnect_account", present(projects.get("total_projects"))),
-            "solutions_list": prov("derived", present(projects.get("solutions_list"))),
-        },
-        "opportunities": {
-            "items": prov("proconnect_account", present(opportunities.get("items"))),
-        },
-        "key_buyers": {
-            "items": prov("proconnect_account", present(key_buyers.get("items"))),
-        },
-        "org_chart": {
-            "items": prov("proconnect_orgchart", present(org_chart.get("items"))),
-        },
-        "technologies": {
-            "items": prov(tech_source, present(technologies.get("items"))),
-        },
+        "precedence_rule": "Matrix > Per-source dictionary > Consolidated dictionary",
+        "movement_event": prov("runtime_input", "present"),
         "person_profile": {
-            "match_status": prov("derived", present(person_profile.get("match_status"))),
-            "matched_person": prov("derived", present(person_profile.get("matched_person"))),
-            "title_salesforce": prov("proconnect_or_probe", present(person_profile.get("title_salesforce"))),
-            "title_external": prov("proconnect_or_probe", present(person_profile.get("title_external"))),
-            "location": prov("proconnect_or_probe", present(person_profile.get("location"))),
-            "in_salesforce": prov("proconnect_or_probe", present(person_profile.get("in_salesforce"))),
-            "protiviti_alumni": prov("proconnect_or_probe", present(person_profile.get("protiviti_alumni"))),
-            "contact_at_robert_half": prov(
-                "proconnect_or_probe",
-                present(person_profile.get("contact_at_robert_half")),
-            ),
-            "past_job_experience": prov("proconnect_or_probe", present(person_profile.get("past_job_experience"))),
-            "education": prov("proconnect_or_probe", present(person_profile.get("education"))),
-            "candidate_suggestions": prov("derived", present(person_profile.get("candidate_suggestions"))),
+            "source": "proconnect_person_search_and_company_context",
+            "status": present(person_profile.get("match_status")),
+            "confidence": 1.0,
         },
-        "research_inputs": {
-            "provided_name": prov("research_input", present(research_inputs.get("provided_name"))),
-            "provided_role": prov("research_input", present(research_inputs.get("provided_role"))),
-            "potential_service_needs": prov("research_input", present(research_inputs.get("potential_service_needs"))),
-            "simulated_research_datapoint": prov(
-                "research_input",
-                present(research_inputs.get("simulated_research_datapoint")),
-            ),
+        "from_company_context": {
+            "source": "proconnect_account_lite",
+            "status": present(from_context.get("account_header", {}).get("account_id")),
+            "confidence": 1.0,
+        },
+        "to_company_context": {
+            "source": "proconnect_account_full",
+            "status": present(to_context.get("account_context", {}).get("account_id")),
+            "confidence": 1.0,
+        },
+        "movement_evidence": {
+            "source": "derived_from_proconnect",
+            "status": present(transition_payload.get("movement_evidence", {}).get("ranked_opportunities_top10")),
+            "confidence": 1.0,
+        },
+        "optional_sections": {
+            "source": "proconnect_optional",
+            "status": present(transition_payload.get("optional_sections")),
+            "confidence": 1.0,
+        },
+        "probe_summary": {
+            "source": "proconnect_probes",
+            "status": "present" if to_probe_payloads else "missing",
+            "confidence": 1.0,
         },
     }
+
+
+def build_transition_confidence(transition_payload: Dict[str, Any]) -> Dict[str, Any]:
+    person_profile = transition_payload.get("person_profile") or {}
+    from_context = transition_payload.get("from_company_context") or {}
+    to_context = transition_payload.get("to_company_context") or {}
+    movement_evidence = transition_payload.get("movement_evidence") or {}
+
+    person_score = person_confidence_score(person_profile)
+    from_score = section_completeness_score(from_context.get("account_header") or {})
+
+    to_scores = [
+        section_completeness_score(to_context.get("account_context") or {}),
+        section_item_score(to_context.get("projects", {}).get("items")),
+        section_item_score(to_context.get("opportunities", {}).get("items")),
+        section_item_score(to_context.get("key_buyers", {}).get("items")),
+        section_item_score(to_context.get("org_chart", {}).get("items")),
+    ]
+    to_score = round(sum(to_scores) / float(len(to_scores)), 4) if to_scores else 0.0
+
+    ranked = to_list_dicts(movement_evidence.get("ranked_opportunities_top10"))
+    if ranked:
+        movement_score = round(sum(float(item.get("rank_score") or 0.0) for item in ranked) / len(ranked), 4)
+    else:
+        movement_score = 0.0
+
+    return {
+        "person_profile": confidence_obj(person_score),
+        "from_company_context": confidence_obj(from_score),
+        "to_company_context": confidence_obj(to_score),
+        "movement_evidence": confidence_obj(movement_score),
+        "ranked_opportunities_top10": [
+            {
+                "opportunity": item.get("opportunity"),
+                "score": item.get("rank_score"),
+                "band": item.get("rank_band"),
+            }
+            for item in ranked
+        ],
+    }
+
+
+def person_confidence_score(person_profile: Dict[str, Any]) -> float:
+    status = str(person_profile.get("match_status") or "not_found").lower()
+    if status == "matched":
+        scope = str((person_profile.get("matched_person") or {}).get("company_scope") or "unknown")
+        if scope == "to":
+            return 0.95
+        if scope == "from":
+            return 0.85
+        return 0.75
+    if status == "ambiguous":
+        return 0.4
+    return 0.2
+
+
+def confidence_obj(score: float) -> Dict[str, Any]:
+    value = round(max(0.0, min(float(score), 1.0)), 4)
+    return {
+        "score": value,
+        "band": band_for_score(value),
+    }
+
+
+def section_completeness_score(section: Dict[str, Any]) -> float:
+    if not section:
+        return 0.0
+    values = list(section.values())
+    if not values:
+        return 0.0
+    present_count = sum(1 for value in values if present(value) == "present")
+    return round(present_count / float(len(values)), 4)
+
+
+def section_item_score(items: Any) -> float:
+    if isinstance(items, list) and items:
+        return 1.0
+    return 0.0
+
+
+def extract_optional_sections(account: Optional[Dict[str, Any]], probe_payloads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not account:
+        return {
+            "competitors": [],
+            "partners": [],
+            "social_urls": [],
+            "marketing_signals": [],
+            "probe_endpoint_statuses": [
+                {
+                    "endpoint": payload.get("endpoint"),
+                    "status_code": payload.get("status_code"),
+                    "success": payload.get("success"),
+                }
+                for payload in probe_payloads
+            ],
+        }
+
+    competitors = extract_company_nodes(account, include_terms=["competitor"], site_key="website")
+    partners = extract_company_nodes(account, include_terms=["partner"], site_key="website")
+    social_urls = extract_social_urls(account)
+    marketing_signals = extract_marketing_signals(account)
+
+    return {
+        "competitors": competitors,
+        "partners": partners,
+        "social_urls": social_urls,
+        "marketing_signals": marketing_signals,
+        "probe_endpoint_statuses": [
+            {
+                "endpoint": payload.get("endpoint"),
+                "status_code": payload.get("status_code"),
+                "success": payload.get("success"),
+            }
+            for payload in probe_payloads
+        ],
+    }
+
+
+def extract_company_nodes(account: Dict[str, Any], include_terms: List[str], site_key: str) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for node in iter_dict_nodes(account):
+        if not isinstance(node, dict):
+            continue
+        keys_lower = [str(key).lower() for key in node.keys()]
+        if not any(any(term in key for term in include_terms) for key in keys_lower):
+            continue
+
+        name = first_non_empty(node, ["name", "companyName", "competitor", "partner"])
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "website": first_non_empty(node, [site_key, "websiteUrl", "url"]),
+                "employee_count": to_int(first_non_empty(node, ["employeeCount", "numberOfEmployees"])),
+            }
+        )
+
+    return dedupe_simple_records(rows, keys=["name", "website"])
+
+
+def extract_social_urls(account: Dict[str, Any]) -> List[str]:
+    urls: List[str] = []
+    for node in iter_dict_nodes(account):
+        if isinstance(node, str):
+            if node.startswith("http") and any(site in node.lower() for site in ["linkedin", "twitter", "facebook", "instagram"]):
+                urls.append(node)
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                if "social" not in str(key).lower():
+                    continue
+                if isinstance(value, str) and value.startswith("http"):
+                    urls.append(value)
+                elif isinstance(value, list):
+                    for item in value:
+                        if isinstance(item, str) and item.startswith("http"):
+                            urls.append(item)
+                        elif isinstance(item, dict):
+                            url = first_non_empty(item, ["url", "socialUrl", "website"])
+                            if isinstance(url, str) and url.startswith("http"):
+                                urls.append(url)
+    return dedupe_list(urls)
+
+
+def extract_marketing_signals(account: Dict[str, Any]) -> List[Dict[str, Any]]:
+    signals: List[Dict[str, Any]] = []
+
+    marketing_a = account.get("marketingSolutionA")
+    if isinstance(marketing_a, list):
+        signals.append({"signal": "marketingSolutionA", "count": len(marketing_a)})
+
+    marketing_1y = account.get("marketingSolution1Year")
+    if isinstance(marketing_1y, list):
+        signals.append({"signal": "marketingSolution1Year", "count": len(marketing_1y)})
+
+    campaign_actions = account.get("campaignsActionsA")
+    if isinstance(campaign_actions, list):
+        signals.append({"signal": "campaignsActionsA", "count": len(campaign_actions)})
+
+    campaigns = account.get("campaigns")
+    if isinstance(campaigns, list):
+        signals.append({"signal": "campaigns", "count": len(campaigns)})
+
+    return signals
 
 
 def normalize_research_inputs(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -813,7 +1712,7 @@ def to_people_from_key_buyers(key_buyers: Any) -> List[Dict[str, Any]]:
             continue
         people.append(
             {
-                "id": buyer.get("id"),
+                "id": buyer.get("id") or buyer.get("buyerId"),
                 "name": full_person_name(buyer),
                 "title": buyer.get("title"),
                 "linkedinUrl": buyer.get("linkedinUrl"),
@@ -821,6 +1720,30 @@ def to_people_from_key_buyers(key_buyers: Any) -> List[Dict[str, Any]]:
                 "_source": "key_buyers",
             }
         )
+    return people
+
+
+def to_people_from_account_roles(account: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(account, dict):
+        return []
+
+    people: List[Dict[str, Any]] = []
+    for role_key in ["accountPMO", "accountMDD", "accountExecutive"]:
+        role_value = account.get(role_key)
+        if not isinstance(role_value, dict):
+            continue
+        name = full_person_name(role_value)
+        if not name:
+            continue
+        person = {
+            "id": first_non_empty(role_value, ["id", "employeeId"]),
+            "name": name,
+            "title": first_non_empty(role_value, ["title"]),
+            "emailAddress": first_non_empty(role_value, ["emailAddress", "principalName"]),
+            "linkedinUrl": first_non_empty(role_value, ["linkedinUrl"]),
+            "_source": "account_roles",
+        }
+        people.append(person)
     return people
 
 
@@ -888,34 +1811,35 @@ def parse_person_like_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "education": first_non_empty(node, ["education", "educationList"]),
         "linkedinUrl": first_non_empty(node, ["linkedinUrl", "linkedInUrl"]),
         "emailAddress": first_non_empty(node, ["emailAddress", "email"]),
+        "phone": first_non_empty(node, ["phone"]),
     }
 
 
-def find_probe_overlay(name: Optional[str], probe_people: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if not name:
-        return None
-    for record in probe_people:
-        candidate = full_person_name(record)
-        if candidate and exact_name_equals(name, candidate):
-            return record
-    return None
+def extract_technologies(account: Dict[str, Any], probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    records: List[Dict[str, Any]] = []
+    records.extend(extract_technologies_from_node(account))
+
+    for payload in probe_payloads:
+        endpoint = payload.get("endpoint") or "probe"
+        for item in extract_technologies_from_node(payload.get("data")):
+            if item.get("source") is None:
+                item["source"] = f"probe:{endpoint}"
+            records.append(item)
+
+    return dedupe_simple_records(records, keys=["technology", "website"])
 
 
 def extract_technologies_from_node(node: Any) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
 
-    direct_candidates = []
     if isinstance(node, dict):
-        for key in ["technologies", "technology", "companyTechnologies", "technologiesUsed"]:
+        for key in ["technologies", "technology", "companyTechnologies", "technologiesUsed", "externalPartner"]:
             if key in node:
-                direct_candidates.append(node.get(key))
-
-    for candidate in direct_candidates:
-        results.extend(parse_technology_container(candidate, source="proconnect_account"))
+                results.extend(parse_technology_container(node.get(key), source="proconnect_account"))
 
     for obj in iter_dict_nodes(node):
         for key, value in obj.items():
-            if "technolog" not in str(key).lower():
+            if "technolog" not in str(key).lower() and "partner" not in str(key).lower():
                 continue
             results.extend(parse_technology_container(value, source=None))
 
@@ -955,10 +1879,29 @@ def concise_summary(raw_summary: Optional[str], max_sentences: int = 3) -> Optio
     trimmed = [part.strip() for part in parts if part.strip()]
     if not trimmed:
         return None
-    concise = " ".join(trimmed[:max(max_sentences, 1)])
+    concise = " ".join(trimmed[: max(max_sentences, 1)])
     if len(concise) > 600:
         concise = concise[:597].rstrip() + "..."
     return concise
+
+
+def dedupe_transition_people(people: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    output: List[Dict[str, Any]] = []
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        key = (
+            normalize_text(full_person_name(person)),
+            normalize_text(str(person.get("title") or "")),
+            str(person.get("linked_account_id") or ""),
+            str(person.get("_source") or ""),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(person)
+    return output
 
 
 def first_non_empty(payload: Dict[str, Any], keys: List[str]) -> Any:
@@ -1008,7 +1951,14 @@ def to_list(value: Any) -> List[str]:
     if isinstance(value, str):
         parts = [part.strip() for part in re.split(r"[;\n|]", value) if part.strip()]
         return dedupe_list(parts)
-    return [str(value).strip()] if str(value).strip() else []
+    text = str(value).strip()
+    return [text] if text else []
+
+
+def to_list_dicts(value: Any) -> List[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
 
 
 def dedupe_list(items: List[str]) -> List[str]:
@@ -1035,12 +1985,21 @@ def dedupe_simple_records(records: List[Dict[str, Any]], keys: List[str]) -> Lis
     return deduped
 
 
+def normalize_text(value: str) -> str:
+    text = (value or "").strip().lower()
+    text = re.sub(r"[^a-z0-9\s]", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
 def present(value: Any) -> str:
     if value is None:
         return "missing"
     if isinstance(value, str) and not value.strip():
         return "missing"
     if isinstance(value, list) and len(value) == 0:
+        return "missing"
+    if isinstance(value, dict) and len(value) == 0:
         return "missing"
     return "present"
 
