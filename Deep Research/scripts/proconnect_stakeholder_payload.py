@@ -30,11 +30,11 @@ SOURCE_PRIORITY = {
     "to_account_roles": 95,
     "to_org_chart_executive": 90,
     "to_org_chart_department": 85,
+    "from_key_buyers": 88,
+    "from_account_roles": 84,
     "person_search": 80,
     "to_probe": 75,
-    "from_key_buyers": 70,
-    "from_account_roles": 65,
-    "from_probe": 60,
+    "from_probe": 70,
 }
 
 STAGE_SCORE_MAP = {
@@ -318,11 +318,15 @@ def run_stakeholder_case(
     )
 
     candidate_people = dedupe_transition_people(to_people + from_people + search_people)
+    to_title_hints = collect_person_title_hints(to_account, person)
+    from_title_hints = collect_person_title_hints(from_account, person)
     person_resolution = resolve_person_transition(
         person_name=person,
         candidates=candidate_people,
         to_account_id=to_account_id,
         from_account_id=from_account_id,
+        to_title_hints=to_title_hints,
+        from_title_hints=from_title_hints,
     )
 
     person_profile = build_person_profile_transition(
@@ -461,6 +465,12 @@ def resolve_account_context(
     auth_failure = False
 
     failure_check_status = "FAIL" if required else "WARN"
+
+    if account_id_override and is_placeholder_account_id(str(account_id_override)):
+        warnings.append(
+            f"{label} account-id override '{account_id_override}' looks like a placeholder; falling back to company search."
+        )
+        account_id_override = None
 
     if account_id_override:
         response = client.get_account_by_id(str(account_id_override))
@@ -957,6 +967,8 @@ def resolve_person_transition(
     candidates: List[Dict[str, Any]],
     to_account_id: str,
     from_account_id: str,
+    to_title_hints: Optional[List[str]] = None,
+    from_title_hints: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     exact_matches = [candidate for candidate in candidates if exact_name_equals(person_name, full_person_name(candidate))]
 
@@ -971,7 +983,7 @@ def resolve_person_transition(
 
     to_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == to_account_id]
     if to_matches:
-        selected = select_best_candidate(to_matches)
+        selected = select_best_candidate(to_matches, title_hints=to_title_hints or [])
         return {
             "status": "matched",
             "match_source": selected.get("_source"),
@@ -982,7 +994,7 @@ def resolve_person_transition(
 
     from_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == from_account_id]
     if from_matches:
-        selected = select_best_candidate(from_matches)
+        selected = select_best_candidate(from_matches, title_hints=from_title_hints or [])
         return {
             "status": "matched",
             "match_source": selected.get("_source"),
@@ -1010,12 +1022,12 @@ def resolve_person_transition(
     }
 
 
-def select_best_candidate(candidates: List[Dict[str, Any]]) -> Dict[str, Any]:
-    ranked = sorted(candidates, key=candidate_sort_key, reverse=True)
+def select_best_candidate(candidates: List[Dict[str, Any]], title_hints: List[str]) -> Dict[str, Any]:
+    ranked = sorted(candidates, key=lambda row: candidate_sort_key(row, title_hints=title_hints), reverse=True)
     return ranked[0]
 
 
-def candidate_sort_key(candidate: Dict[str, Any]) -> Tuple[int, float, int, str]:
+def candidate_sort_key(candidate: Dict[str, Any], title_hints: List[str]) -> Tuple[int, int, float, int, int, int, str]:
     source = str(candidate.get("_source") or "")
     base_source = source
     for prefix in ["to_", "from_"]:
@@ -1024,9 +1036,54 @@ def candidate_sort_key(candidate: Dict[str, Any]) -> Tuple[int, float, int, str]
             break
     scope_rank = {"to": 3, "from": 2, "unknown": 1}.get(str(candidate.get("_company_scope") or "unknown"), 1)
     source_rank = SOURCE_PRIORITY.get(source, SOURCE_PRIORITY.get(base_source, 10))
+    hint_match = 1 if title_matches_hints(first_non_empty(candidate, ["title"]), title_hints) else 0
     has_title = 1 if first_non_empty(candidate, ["title", "titleSalesforce", "titleExternal"]) else 0
+    has_email = 1 if first_non_empty(candidate, ["emailAddress", "email"]) else 0
+    has_linkedin = 1 if first_non_empty(candidate, ["linkedinUrl", "linkedInUrl"]) else 0
     name = str(full_person_name(candidate) or "")
-    return (scope_rank, float(source_rank), has_title, name)
+    return (scope_rank, hint_match, float(source_rank), has_title, has_email, has_linkedin, name)
+
+
+def collect_person_title_hints(account: Optional[Dict[str, Any]], person_name: str) -> List[str]:
+    if not isinstance(account, dict):
+        return []
+
+    hints: List[str] = []
+
+    for buyer in to_list_dicts(account.get("keyBuyers")):
+        if exact_name_equals(person_name, full_person_name(buyer)):
+            title = first_non_empty(buyer, ["title"])
+            if isinstance(title, str) and title.strip():
+                hints.append(title.strip())
+
+    for role_key in ["accountPMO", "accountMDD", "accountExecutive"]:
+        role = account.get(role_key)
+        if not isinstance(role, dict):
+            continue
+        if exact_name_equals(person_name, full_person_name(role)):
+            title = first_non_empty(role, ["title"])
+            if isinstance(title, str) and title.strip():
+                hints.append(title.strip())
+
+    return dedupe_list(hints)
+
+
+def title_matches_hints(candidate_title: Any, title_hints: List[str]) -> bool:
+    if not isinstance(candidate_title, str) or not candidate_title.strip():
+        return False
+    if not title_hints:
+        return False
+
+    candidate_norm = normalize_text(candidate_title)
+    for hint in title_hints:
+        hint_norm = normalize_text(hint)
+        if not hint_norm:
+            continue
+        if candidate_norm == hint_norm:
+            return True
+        if candidate_norm in hint_norm or hint_norm in candidate_norm:
+            return True
+    return False
 
 
 def build_person_profile_transition(
@@ -1990,6 +2047,16 @@ def normalize_text(value: str) -> str:
     text = re.sub(r"[^a-z0-9\s]", " ", text)
     text = re.sub(r"\s+", " ", text)
     return text.strip()
+
+
+def is_placeholder_account_id(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    upper = text.upper()
+    if (text.startswith("<") and text.endswith(">")) or "ACCOUNT_ID" in upper:
+        return True
+    return False
 
 
 def present(value: Any) -> str:

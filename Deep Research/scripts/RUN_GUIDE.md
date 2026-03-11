@@ -49,6 +49,8 @@ If destination lookup is ambiguous or misses, rerun with destination account ove
 py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --to-account-id "<FANNIE_MAE_ACCOUNT_ID>" --department "C-Suite" --token-file ".\token.txt"
 ```
 
+Important: replace `<FANNIE_MAE_ACCOUNT_ID>` with a real account id value. Do not include angle brackets.
+
 ## 4) Run transition scenario batch
 
 ```powershell
