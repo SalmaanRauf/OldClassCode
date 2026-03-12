@@ -178,14 +178,30 @@ Browser steps:
 4. Turn on `Preserve log`.
 5. Turn on `Disable cache`.
 6. Load the Capital One Jennifer Brady profile page and the Fannie Mae company page that show the missing sections.
-7. In the network grid, right-click and choose `Save all as HAR with content`.
-8. Save the file as `C:\Users\salrau01\prcttry\output\proconnect_jennifer_brady.har`.
+7. In the network grid, left-click any actual request row first.
+8. Right-click that request row, not the `Name`/`Status`/`Type` header bar.
+9. Choose one of:
+   - `Save all as HAR with content`
+   - `Copy` -> `Copy all listed as HAR`
+   - `Copy` -> `Copy all listed as HAR (sanitized)`
+10. If there is no right-click save option, use the Network toolbar `Export HAR` button instead.
+11. If you used copy instead of save, paste into Notepad and save the file manually.
+12. Save the file as `C:\Users\salrau01\prcttry\output\proconnect_jennifer_brady.har`.
 
 Then run:
 
 ```powershell
 py .\proconnect_har_inspector.py --har ".\output\proconnect_jennifer_brady.har"
 ```
+
+If that still says file not found, run this exact block:
+
+```powershell
+Get-Location
+Get-ChildItem .\output -Recurse | Where-Object { $_.Name -like '*jennifer*' -or $_.Name -like '*.har*' } | Select-Object FullName,Name,Length,LastWriteTime
+```
+
+The inspector now also accepts common Windows mistakes like `.har.txt`, so if the saved file is really `proconnect_jennifer_brady.har.txt`, the same command should still work.
 
 Send back the full output. The important sections are `INTERESTING ROUTES` and `HTML SHELL ROUTES`.
 
@@ -204,3 +220,4 @@ py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capit
 - `CommandNotFoundException` with `py.\script.py`: missing space. Use `py .\script.py`.
 - Repeated org chart `500` warnings are currently non-blocking and can still result in an expected overall `WARN`.
 - `returned ProConnect app HTML instead of JSON`: the route is not a usable JSON API in this environment; run the HAR capture step above so we can discover the actual backend route.
+- `FileNotFoundError` from `proconnect_har_inspector.py`: check the exact saved filename with the `Get-ChildItem` block above. Common cause is Notepad saving `*.har.txt`.
