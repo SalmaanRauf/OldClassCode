@@ -35,9 +35,9 @@ py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Ca
 Expected result for this patch:
 
 - `Exact person match` stays `PASS`
-- `PERSON PROFILE` should now keep the correct match and also backfill richer fields from the real `/api/prospects/{id}` detail route
-- `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, `photo_url`, `phone`, `past_job_experience`, and `education` should populate if they are present in ProConnect
-- `optional_sections.from_company` and `optional_sections.to_company` should now surface `intent_signals` from `/api/Intent`
+- `PERSON PROFILE` should now keep the correct match and also backfill richer fields from the real `/api/prospects/{id}` detail route, including `externalProspectView` when ProConnect uses that nested shape
+- `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, `photo_url`, `phone`, `past_job_experience`, and `education` should populate if they are present anywhere in the ProConnect prospect detail payload
+- `optional_sections.from_company` and `optional_sections.to_company` should now surface `intent_signals` from `/api/Intent` when that endpoint actually returns rows; an empty `value` array with `Count = 0` is a legitimate no-signal case
 - `optional_sections.from_company` and `optional_sections.to_company` should now surface `recent_activity` from `/api/Scoop`
 - the `HTTP (last 10)` block should now include `/api/Intent`, `/api/Scoop`, and `/api/prospects/{id}`
 - warnings about `/api/taggedrelationships`, `/api/relationshiplead`, or `/api/userHistory` returning ProConnect HTML should be gone on the latest files
