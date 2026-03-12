@@ -19,6 +19,7 @@ from proconnect_stakeholder_payload import (  # noqa: E402
     build_projects_section,
     resolve_person_transition,
     run_stakeholder_case,
+    summarize_probe_payloads,
 )
 
 
@@ -430,5 +431,46 @@ def test_run_stakeholder_case_uses_from_probe_data_for_person_and_relationships(
             "date": "2026-03-01",
             "description": "Viewed Jennifer Brady profile",
             "source": "probe:/api/userHistory",
+        }
+    ]
+
+
+def test_summarize_probe_payloads_surfaces_top_level_keys_and_node_paths() -> None:
+    summaries = summarize_probe_payloads(
+        [
+            {
+                "endpoint": "/api/userHistory",
+                "params": {"accountId": "001-from"},
+                "status_code": 200,
+                "success": True,
+                "data": {
+                    "PersonProfile": {
+                        "Name": "Jennifer Brady",
+                        "PhotoUrl": "https://img.example.com/jennifer-brady.png",
+                    },
+                    "IntentSignals": [
+                        {
+                            "Topic": "Technology Risk",
+                            "AudienceStrength": "High",
+                        }
+                    ],
+                },
+            }
+        ]
+    )
+
+    assert summaries == [
+        {
+            "endpoint": "/api/userHistory",
+            "status_code": 200,
+            "success": True,
+            "params": {"accountId": "001-from"},
+            "data_type": "dict",
+            "top_level_keys": ["IntentSignals", "PersonProfile"],
+            "dict_node_samples": [
+                {"path": "$", "keys": ["IntentSignals", "PersonProfile"]},
+                {"path": "$.PersonProfile", "keys": ["Name", "PhotoUrl"]},
+                {"path": "$.IntentSignals[0]", "keys": ["AudienceStrength", "Topic"]},
+            ],
         }
     ]

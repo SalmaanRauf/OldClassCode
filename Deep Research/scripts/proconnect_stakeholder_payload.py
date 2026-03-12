@@ -2046,6 +2046,7 @@ def extract_optional_sections(account: Optional[Dict[str, Any]], probe_payloads:
             "internal_connections": [],
             "intent_signals": [],
             "recent_activity": [],
+            "probe_payload_shapes": summarize_probe_payloads(probe_payloads),
             "probe_endpoint_statuses": [
                 {
                     "endpoint": payload.get("endpoint"),
@@ -2072,6 +2073,7 @@ def extract_optional_sections(account: Optional[Dict[str, Any]], probe_payloads:
         "internal_connections": internal_connections,
         "intent_signals": intent_signals,
         "recent_activity": recent_activity,
+        "probe_payload_shapes": summarize_probe_payloads(probe_payloads),
         "probe_endpoint_statuses": [
             {
                 "endpoint": payload.get("endpoint"),
@@ -2149,6 +2151,60 @@ def extract_marketing_signals(account: Dict[str, Any]) -> List[Dict[str, Any]]:
         signals.append({"signal": "campaigns", "count": len(campaigns)})
 
     return signals
+
+
+def summarize_probe_payloads(probe_payloads: List[Dict[str, Any]], max_node_samples: int = 6) -> List[Dict[str, Any]]:
+    summaries: List[Dict[str, Any]] = []
+    for payload in probe_payloads:
+        data = payload.get("data")
+        top_level_keys = sorted(list(data.keys()))[:20] if isinstance(data, dict) else []
+        summaries.append(
+            {
+                "endpoint": payload.get("endpoint"),
+                "status_code": payload.get("status_code"),
+                "success": payload.get("success"),
+                "params": payload.get("params"),
+                "data_type": type(data).__name__,
+                "top_level_keys": top_level_keys,
+                "dict_node_samples": collect_dict_node_samples(data, max_samples=max_node_samples),
+            }
+        )
+    return summaries
+
+
+def collect_dict_node_samples(value: Any, max_samples: int = 6) -> List[Dict[str, Any]]:
+    samples: List[Dict[str, Any]] = []
+
+    def _walk(current: Any, path: str) -> None:
+        if len(samples) >= max_samples:
+            return
+        if isinstance(current, dict):
+            samples.append(
+                {
+                    "path": path,
+                    "keys": sorted(str(key) for key in current.keys())[:20],
+                }
+            )
+            for key, child in current.items():
+                if len(samples) >= max_samples:
+                    break
+                if isinstance(child, dict):
+                    _walk(child, f"{path}.{key}")
+                elif isinstance(child, list):
+                    for idx, item in enumerate(child):
+                        if len(samples) >= max_samples:
+                            break
+                        if isinstance(item, dict):
+                            _walk(item, f"{path}.{key}[{idx}]")
+        elif isinstance(current, list):
+            for idx, item in enumerate(current):
+                if len(samples) >= max_samples:
+                    break
+                if isinstance(item, dict):
+                    _walk(item, f"{path}[{idx}]")
+
+    _walk(value, "$")
+    return samples
 
 
 def extract_probe_internal_connection_items(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
