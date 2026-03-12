@@ -398,11 +398,14 @@ def run_stakeholder_case(
             "from_company_context": from_context,
             "to_company_context": {
                 "account_context": to_account_context,
+                "account_team": build_account_team_section(to_account),
+                "work_by_solution": build_work_by_solution_section(to_account),
                 "projects": to_projects,
                 "opportunities": to_opportunities,
                 "key_buyers": to_key_buyers,
                 "org_chart": {"items": to_org_chart_items},
                 "technologies": {"items": to_technologies},
+                "relationship_network": build_relationship_network_section(to_account),
             },
             "movement_evidence": movement_evidence,
             "optional_sections": optional_sections,
@@ -633,15 +636,19 @@ def default_transition_payload(
             "match_status": "not_found",
             "person_unverified": True,
             "matched_person": None,
+            "last_updated": None,
             "title_salesforce": None,
             "title_external": None,
             "location": None,
             "in_salesforce": None,
             "protiviti_alumni": None,
             "contact_at_robert_half": None,
+            "function": None,
+            "level": None,
             "email": None,
             "phone": None,
             "linkedin_url": None,
+            "photo_url": None,
             "past_job_experience": [],
             "education": [],
             "candidate_suggestions": [],
@@ -658,19 +665,31 @@ def default_transition_payload(
                 "ticker": None,
                 "zoom_info_account_id": None,
             },
+            "account_team": {
+                "account_pmo": None,
+                "account_mdd": None,
+                "account_executive": None,
+            },
             "worked_before": False,
             "historical_solution_footprint": {
                 "total_projects": 0,
                 "total_all_opportunities": 0,
                 "total_open_opportunities": 0,
                 "solutions_list_5y": [],
+                "most_recent_engagement_date": None,
             },
             "top_key_buyers": [],
             "prior_relationship_indicators": {
                 "key_buyer_count": 0,
                 "has_protiviti_alumni": False,
                 "has_connected_colleague": False,
+                "warm_intro_path_available": False,
+                "relationship_routes": [],
                 "notes": [],
+            },
+            "relationship_network": {
+                "protiviti_alumni": {"items": []},
+                "connected_colleagues": {"items": []},
             },
         },
         "to_company_context": {
@@ -682,14 +701,50 @@ def default_transition_payload(
                 "ticker": None,
                 "zoom_info_account_id": None,
                 "worked_before": False,
+                "last_updated": None,
+                "headquarters": None,
+                "sub_industry": None,
+                "annual_revenue": None,
+                "number_of_employees": None,
+                "ipo_date": None,
+                "account_type": None,
+                "short_name": None,
+                "hub_id": None,
+                "ownership": None,
+                "ranking": None,
+                "company_photo_url": None,
+                "sfdc_account_ids": [],
+                "is_client": None,
+                "is_msa": None,
+                "is_sanction": None,
+                "is_external_only": None,
+                "parent_company": None,
+                "child_companies": [],
+                "account_activity_status": None,
                 "company_summary_raw": None,
                 "company_summary_concise": None,
+            },
+            "account_team": {
+                "account_pmo": None,
+                "account_mdd": None,
+                "account_executive": None,
+            },
+            "work_by_solution": {
+                "total_projects": 0,
+                "solutions_list": [],
+                "time_period_label": None,
             },
             "projects": {"items": [], "total_projects": 0, "solutions_list": []},
             "opportunities": {"items": []},
             "key_buyers": {"items": []},
             "org_chart": {"items": []},
             "technologies": {"items": []},
+            "relationship_network": {
+                "protiviti_alumni": {"items": []},
+                "connected_colleagues": {"items": []},
+                "warm_intro_path_available": False,
+                "relationship_routes": [],
+            },
         },
         "movement_evidence": {
             "person_search": {},
@@ -707,6 +762,201 @@ def default_transition_payload(
     }
 
 
+def build_child_company_rows(account: Dict[str, Any]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for key in ["childCompanies", "childCompany", "children", "parentChildAccounts"]:
+        value = account.get(key)
+        if isinstance(value, dict):
+            value = [value]
+        for item in to_list_dicts(value):
+            company_name = first_non_empty(item, ["name", "companyName"])
+            if not company_name:
+                continue
+            rows.append(
+                {
+                    "account_id": first_non_empty(item, ["id", "accountId"]),
+                    "company_name": company_name,
+                }
+            )
+    return dedupe_simple_records(rows, keys=["account_id", "company_name"])
+
+
+def derive_account_activity_status(account: Dict[str, Any]) -> str:
+    open_opportunities = to_int(account.get("numberOfOpenOpportunity"))
+    if open_opportunities is None:
+        open_opportunities = len(to_list_dicts(account.get("openOpportunity")))
+
+    active_project_statuses = {
+        "active",
+        "open",
+        "ongoing",
+        "in progress",
+        "pipeline",
+        "proposal",
+    }
+    has_active_projects = False
+    for project in to_list_dicts(account.get("project")):
+        status = normalize_text(str(first_non_empty(project, ["projectStatus"]) or ""))
+        if status in active_project_statuses:
+            has_active_projects = True
+            break
+
+    if (open_opportunities or 0) > 0 or has_active_projects:
+        return "active"
+
+    historical_projects = to_int(account.get("numberOfProject"))
+    if historical_projects is None:
+        historical_projects = len(to_list_dicts(account.get("project")))
+    if (historical_projects or 0) > 0 or (to_int(account.get("numberOfAllOpportunity")) or 0) > 0:
+        return "dormant"
+
+    return "unknown"
+
+
+def build_account_team_section(account: Optional[Dict[str, Any]]) -> Dict[str, Optional[Dict[str, Any]]]:
+    defaults = {
+        "account_pmo": None,
+        "account_mdd": None,
+        "account_executive": None,
+    }
+    if not isinstance(account, dict):
+        return defaults
+
+    output = dict(defaults)
+    role_map = {
+        "accountPMO": "account_pmo",
+        "accountMDD": "account_mdd",
+        "accountExecutive": "account_executive",
+    }
+    for role_key, output_key in role_map.items():
+        role_value = account.get(role_key)
+        if not isinstance(role_value, dict):
+            continue
+        role_name = full_person_name(role_value)
+        if not role_name:
+            continue
+        output[output_key] = {
+            "name": role_name,
+            "title": first_non_empty(role_value, ["title"]),
+            "email": first_non_empty(role_value, ["emailAddress", "principalName", "email"]),
+            "linkedin_url": first_non_empty(role_value, ["linkedinUrl", "linkedInUrl"]),
+        }
+    return output
+
+
+def build_protiviti_alumni_items(account: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(account, dict):
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for item in to_list_dicts(account.get("protivitiAlumni")):
+        name = full_person_name(item)
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "title": first_non_empty(item, ["title"]),
+            }
+        )
+    return dedupe_simple_records(rows, keys=["name", "title"])
+
+
+def build_connected_colleague_items(account: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    if not isinstance(account, dict):
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for item in to_list_dicts(account.get("connectedColleague")):
+        name = full_person_name(item)
+        if not name:
+            continue
+        rows.append(
+            {
+                "name": name,
+                "employer": first_non_empty(item, ["companyName", "employer", "company"]),
+                "title": first_non_empty(item, ["title"]),
+                "last_connected_method": first_non_empty(
+                    item,
+                    ["lastConnectedMethod", "lastInteractionMethod", "lastConnectionMethod"],
+                ),
+                "last_connected_date": first_non_empty(
+                    item,
+                    ["lastConnectedDate", "lastInteractionDate", "lastConnectionDate"],
+                ),
+                "number_of_interactions": to_int(
+                    first_non_empty(item, ["numberOfInteractions", "interactionsCount", "interactionCount"])
+                ),
+            }
+        )
+    return dedupe_simple_records(rows, keys=["name", "employer", "title", "last_connected_date"])
+
+
+def build_relationship_network_section(account: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    protiviti_alumni = build_protiviti_alumni_items(account)
+    connected_colleagues = build_connected_colleague_items(account)
+    relationship_routes: List[str] = []
+    if protiviti_alumni:
+        relationship_routes.append("protiviti_alumni")
+    if connected_colleagues:
+        relationship_routes.append("connected_colleagues")
+
+    return {
+        "protiviti_alumni": {"items": protiviti_alumni},
+        "connected_colleagues": {"items": connected_colleagues},
+        "warm_intro_path_available": bool(relationship_routes),
+        "relationship_routes": relationship_routes,
+    }
+
+
+def latest_engagement_date(account: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(account, dict):
+        return None
+
+    candidates: List[Tuple[datetime, str]] = []
+    sources = [
+        ("project", ["endedDate", "openDate"]),
+        ("allOpportunity", ["opportunityCloseDate", "closeDate", "opportunityCreatedDate", "createdDate"]),
+        ("openOpportunity", ["opportunityCloseDate", "closeDate", "opportunityCreatedDate", "createdDate"]),
+        ("keyBuyers", ["lastOpportunityWonDate", "lastWinDate"]),
+    ]
+
+    for container_key, date_keys in sources:
+        for item in to_list_dicts(account.get(container_key)):
+            for date_key in date_keys:
+                raw_value = first_non_empty(item, [date_key])
+                if not raw_value:
+                    continue
+                parsed = parse_iso_datetime(str(raw_value))
+                if parsed:
+                    candidates.append((parsed, str(raw_value)))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def build_work_by_solution_section(account: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(account, dict):
+        return {
+            "total_projects": 0,
+            "solutions_list": [],
+            "time_period_label": None,
+        }
+
+    projects = build_projects_section(account)
+    return {
+        "total_projects": projects.get("total_projects") or 0,
+        "solutions_list": projects.get("solutions_list", []),
+        "time_period_label": first_non_empty(
+            account,
+            ["workBySolutionTimePeriod", "timePeriodLabel", "projectTimePeriodLabel"],
+        ),
+    }
+
+
 def build_account_context(account: Dict[str, Any]) -> Dict[str, Any]:
     projects = account.get("project") if isinstance(account.get("project"), list) else []
     number_of_project = to_int(account.get("numberOfProject"))
@@ -721,6 +971,26 @@ def build_account_context(account: Dict[str, Any]) -> Dict[str, Any]:
         "ticker": account.get("tickerSymbol"),
         "zoom_info_account_id": account.get("zoomInfoAccountId"),
         "worked_before": worked_before,
+        "last_updated": first_non_empty(account, ["modifiedDate", "lastUpdated"]),
+        "headquarters": account.get("headQuarters"),
+        "sub_industry": account.get("subIndustry"),
+        "annual_revenue": first_non_empty(account, ["annualRevenue"]),
+        "number_of_employees": first_non_empty(account, ["numberOfEmployees", "employeeCount"]),
+        "ipo_date": account.get("ipoDate"),
+        "account_type": account.get("accountType"),
+        "short_name": account.get("shortName"),
+        "hub_id": account.get("hubId"),
+        "ownership": account.get("ownership"),
+        "ranking": account.get("ranking"),
+        "company_photo_url": account.get("companyPhotoUrl"),
+        "sfdc_account_ids": to_list(account.get("sfdcAccountIds")),
+        "is_client": to_bool(account.get("isClient")),
+        "is_msa": to_bool(account.get("isMSA")),
+        "is_sanction": to_bool(account.get("isSanction")),
+        "is_external_only": to_bool(account.get("isExternalOnly")),
+        "parent_company": first_non_empty(account, ["parentCompany", "parentAccountName"]),
+        "child_companies": build_child_company_rows(account),
+        "account_activity_status": derive_account_activity_status(account),
         "company_summary_raw": raw_summary,
         "company_summary_concise": concise_summary(raw_summary),
     }
@@ -744,10 +1014,15 @@ def build_projects_section(account: Dict[str, Any]) -> Dict[str, Any]:
                 "project_id": first_non_empty(project, ["projectId", "id", "budgetKey"]),
                 "project_name": first_non_empty(project, ["name", "projectName", "budgetKey"]),
                 "year_ended_or_status": first_non_empty(project, ["endedDate", "projectStatus", "yearEnded"]),
+                "open_date": first_non_empty(project, ["openDate"]),
+                "ended_date": first_non_empty(project, ["endedDate"]),
+                "project_status": first_non_empty(project, ["projectStatus"]),
                 "solution": solution,
                 "emd": first_non_empty(project, ["engagementManagingDirector", "emd"]),
                 "em": first_non_empty(project, ["engagementManager", "em"]),
                 "primary_key_buyer": first_non_empty(project, ["primaryKeyBuyer"]),
+                "primary_key_buyer_id": first_non_empty(project, ["primaryKeyBuyerId"]),
+                "is_confidential": to_bool(first_non_empty(project, ["isConfidential"])),
             }
         )
 
@@ -792,6 +1067,9 @@ def build_opportunities_section(account: Dict[str, Any]) -> Dict[str, Any]:
                 "service_name": first_non_empty(opp, ["serviceOffering", "serviceName"]),
                 "stage": first_non_empty(opp, ["opportunityStage", "stage"]),
                 "em": first_non_empty(opp, ["engagementManager"]),
+                "is_confidential": to_bool(first_non_empty(opp, ["isConfidential"])),
+                "win_loss_explanation": first_non_empty(opp, ["winLossExplanation"]),
+                "reason_for_loss": first_non_empty(opp, ["reasonForLoss"]),
             }
         )
 
@@ -807,10 +1085,17 @@ def build_key_buyers_section(account: Dict[str, Any]) -> Dict[str, Any]:
             {
                 "name": full_person_name(buyer),
                 "title": first_non_empty(buyer, ["title"]),
+                "email_address": first_non_empty(buyer, ["emailAddress", "email"]),
+                "linkedin_url": first_non_empty(buyer, ["linkedinUrl", "linkedInUrl"]),
                 "wins_5y": to_int(first_non_empty(buyer, ["numberOfWins", "wins", "winCount"])),
                 "last_opportunity_won_date": first_non_empty(
                     buyer,
                     ["lastOpportunityWonDate", "lastWinDate"],
+                ),
+                "last_opportunity_stage": first_non_empty(buyer, ["lastOpportunityStage"]),
+                "function": first_non_empty(buyer, ["function"]),
+                "close_won_opportunities": to_list_dicts(
+                    first_non_empty(buyer, ["closeWonOpps", "closeWonOpportunities"])
                 ),
             }
         )
@@ -834,6 +1119,7 @@ def build_from_company_context_lite(account: Optional[Dict[str, Any]]) -> Dict[s
         key=lambda item: (to_int(item.get("wins_5y")) or 0, str(item.get("name") or "")),
         reverse=True,
     )
+    relationship_network = build_relationship_network_section(account)
 
     return {
         "account_header": {
@@ -844,21 +1130,29 @@ def build_from_company_context_lite(account: Optional[Dict[str, Any]]) -> Dict[s
             "ticker": account_context.get("ticker"),
             "zoom_info_account_id": account_context.get("zoom_info_account_id"),
         },
+        "account_team": build_account_team_section(account),
         "worked_before": bool(account_context.get("worked_before")),
         "historical_solution_footprint": {
             "total_projects": projects.get("total_projects") or 0,
             "total_all_opportunities": to_int(account.get("numberOfAllOpportunity")) or len(opportunities.get("items", [])),
             "total_open_opportunities": to_int(account.get("numberOfOpenOpportunity")) or len(to_list_dicts(account.get("openOpportunity"))),
             "solutions_list_5y": projects.get("solutions_list", []),
+            "most_recent_engagement_date": latest_engagement_date(account),
         },
         "top_key_buyers": ranked_buyers[:5],
         "prior_relationship_indicators": {
             "key_buyer_count": len(key_buyers.get("items", [])),
             "has_protiviti_alumni": bool(to_list_dicts(account.get("protivitiAlumni"))),
             "has_connected_colleague": bool(to_list_dicts(account.get("connectedColleague"))),
+            "warm_intro_path_available": relationship_network.get("warm_intro_path_available", False),
+            "relationship_routes": relationship_network.get("relationship_routes", []),
             "notes": [
                 "Source company context is lightweight by design for transition analysis anchor.",
             ],
+        },
+        "relationship_network": {
+            "protiviti_alumni": relationship_network.get("protiviti_alumni"),
+            "connected_colleagues": relationship_network.get("connected_colleagues"),
         },
     }
 
@@ -953,6 +1247,17 @@ def normalize_person_search_candidates(
                 "title": candidate.get("title"),
                 "emailAddress": candidate.get("emailAddress"),
                 "linkedinUrl": candidate.get("linkedinUrl"),
+                "location": candidate.get("location"),
+                "isInSalesforce": candidate.get("isInSalesforce"),
+                "isProtivitiAlumni": candidate.get("isProtivitiAlumni"),
+                "hasRoberthalfContact": candidate.get("hasRoberthalfContact"),
+                "phone": candidate.get("phone"),
+                "pastJobExperience": candidate.get("pastJobExperience"),
+                "education": candidate.get("education"),
+                "function": candidate.get("function"),
+                "level": candidate.get("level"),
+                "photoUrl": candidate.get("photoUrl"),
+                "lastUpdated": candidate.get("lastUpdated"),
                 "_source": "person_search",
                 "_company_scope": scope,
                 "linked_account_id": account_id,
@@ -1118,15 +1423,19 @@ def build_person_profile_transition(
         "match_status": status,
         "person_unverified": status != "matched",
         "matched_person": None,
+        "last_updated": None,
         "title_salesforce": None,
         "title_external": None,
         "location": None,
         "in_salesforce": None,
         "protiviti_alumni": None,
         "contact_at_robert_half": None,
+        "function": None,
+        "level": None,
         "email": None,
         "phone": None,
         "linkedin_url": None,
+        "photo_url": None,
         "past_job_experience": [],
         "education": [],
         "candidate_suggestions": suggestions,
@@ -1160,9 +1469,13 @@ def build_person_profile_transition(
     profile["contact_at_robert_half"] = to_bool(
         first_non_empty(matched, ["hasRoberthalfContact", "contactAtRobertHalf"])
     )
+    profile["function"] = first_non_empty(matched, ["function"])
+    profile["level"] = first_non_empty(matched, ["level"])
     profile["email"] = first_non_empty(matched, ["emailAddress", "email"])
     profile["phone"] = first_non_empty(matched, ["phone"])
     profile["linkedin_url"] = first_non_empty(matched, ["linkedinUrl", "linkedInUrl"])
+    profile["photo_url"] = first_non_empty(matched, ["photoUrl"])
+    profile["last_updated"] = first_non_empty(matched, ["lastUpdated", "modifiedDate"])
     profile["past_job_experience"] = to_list(first_non_empty(matched, ["pastJobExperience", "pastJobs"]))
     profile["education"] = to_list(first_non_empty(matched, ["education", "educationList"]))
 
@@ -1495,6 +1808,17 @@ def extract_person_search_candidates(payload: Any) -> List[Dict[str, Any]]:
                 "title": first_non_empty(document, ["title"]),
                 "emailAddress": first_non_empty(document, ["emailAddress"]),
                 "linkedinUrl": first_non_empty(document, ["linkedinUrl", "linkedInUrl"]),
+                "location": first_non_empty(document, ["location"]),
+                "isInSalesforce": first_non_empty(document, ["isInSalesforce", "inSalesforce"]),
+                "isProtivitiAlumni": first_non_empty(document, ["isProtivitiAlumni", "protivitiAlumni"]),
+                "hasRoberthalfContact": first_non_empty(document, ["hasRoberthalfContact", "contactAtRobertHalf"]),
+                "phone": first_non_empty(document, ["phone"]),
+                "pastJobExperience": first_non_empty(document, ["pastJobExperience", "pastJobs"]),
+                "education": first_non_empty(document, ["education", "educationList"]),
+                "function": first_non_empty(document, ["function"]),
+                "level": first_non_empty(document, ["level"]),
+                "photoUrl": first_non_empty(document, ["photoUrl"]),
+                "lastUpdated": first_non_empty(document, ["lastUpdated", "modifiedDate"]),
                 "accountId": first_non_empty(document, ["accountId", "sfdcAccountId"]),
                 "companyName": first_non_empty(document, ["companyName", "name"]),
             }
@@ -1774,6 +2098,10 @@ def to_people_from_key_buyers(key_buyers: Any) -> List[Dict[str, Any]]:
                 "title": buyer.get("title"),
                 "linkedinUrl": buyer.get("linkedinUrl"),
                 "emailAddress": buyer.get("emailAddress"),
+                "function": buyer.get("function"),
+                "lastOpportunityWonDate": buyer.get("lastOpportunityWonDate"),
+                "lastOpportunityStage": buyer.get("lastOpportunityStage"),
+                "closeWonOpps": buyer.get("closeWonOpps"),
                 "_source": "key_buyers",
             }
         )
@@ -1869,6 +2197,10 @@ def parse_person_like_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "linkedinUrl": first_non_empty(node, ["linkedinUrl", "linkedInUrl"]),
         "emailAddress": first_non_empty(node, ["emailAddress", "email"]),
         "phone": first_non_empty(node, ["phone"]),
+        "function": first_non_empty(node, ["function"]),
+        "level": first_non_empty(node, ["level"]),
+        "photoUrl": first_non_empty(node, ["photoUrl"]),
+        "lastUpdated": first_non_empty(node, ["lastUpdated", "modifiedDate"]),
     }
 
 
