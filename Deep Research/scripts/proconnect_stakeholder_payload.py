@@ -2158,6 +2158,7 @@ def summarize_probe_payloads(probe_payloads: List[Dict[str, Any]], max_node_samp
     for payload in probe_payloads:
         data = payload.get("data")
         top_level_keys = sorted(list(data.keys()))[:20] if isinstance(data, dict) else []
+        raw_text = data.get("raw_text") if isinstance(data, dict) else None
         summaries.append(
             {
                 "endpoint": payload.get("endpoint"),
@@ -2166,6 +2167,8 @@ def summarize_probe_payloads(probe_payloads: List[Dict[str, Any]], max_node_samp
                 "params": payload.get("params"),
                 "data_type": type(data).__name__,
                 "top_level_keys": top_level_keys,
+                "raw_text_length": len(raw_text) if isinstance(raw_text, str) else None,
+                "raw_text_preview": summarize_raw_text(raw_text),
                 "dict_node_samples": collect_dict_node_samples(data, max_samples=max_node_samples),
             }
         )
@@ -2205,6 +2208,17 @@ def collect_dict_node_samples(value: Any, max_samples: int = 6) -> List[Dict[str
 
     _walk(value, "$")
     return samples
+
+
+def summarize_raw_text(value: Any, max_chars: int = 240) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 3].rstrip() + "..."
 
 
 def extract_probe_internal_connection_items(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

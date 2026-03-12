@@ -467,10 +467,40 @@ def test_summarize_probe_payloads_surfaces_top_level_keys_and_node_paths() -> No
             "params": {"accountId": "001-from"},
             "data_type": "dict",
             "top_level_keys": ["IntentSignals", "PersonProfile"],
+            "raw_text_length": None,
+            "raw_text_preview": None,
             "dict_node_samples": [
                 {"path": "$", "keys": ["IntentSignals", "PersonProfile"]},
                 {"path": "$.PersonProfile", "keys": ["Name", "PhotoUrl"]},
                 {"path": "$.IntentSignals[0]", "keys": ["AudienceStrength", "Topic"]},
             ],
+        }
+    ]
+
+
+def test_summarize_probe_payloads_includes_raw_text_preview_when_response_is_plain_text() -> None:
+    summaries = summarize_probe_payloads(
+        [
+            {
+                "endpoint": "/api/userHistory",
+                "params": {"accountId": "001-from"},
+                "status_code": 200,
+                "success": True,
+                "data": {"raw_text": "<html><body>not json</body></html>"},
+            }
+        ]
+    )
+
+    assert summaries == [
+        {
+            "endpoint": "/api/userHistory",
+            "status_code": 200,
+            "success": True,
+            "params": {"accountId": "001-from"},
+            "data_type": "dict",
+            "top_level_keys": ["raw_text"],
+            "raw_text_length": 34,
+            "raw_text_preview": "<html><body>not json</body></html>",
+            "dict_node_samples": [{"path": "$", "keys": ["raw_text"]}],
         }
     ]
