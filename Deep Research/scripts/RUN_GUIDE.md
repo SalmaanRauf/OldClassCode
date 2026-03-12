@@ -34,8 +34,10 @@ py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Ca
 Expected result for this patch:
 
 - `Exact person match` stays `PASS`
-- `PERSON PROFILE` should now keep the correct match and also backfill richer fields when ProConnect search returns them
-- `last_updated`, `location`, `in_salesforce`, `function`, `level`, and other person fields should no longer stay blank if they exist on the matched search record
+- `PERSON PROFILE` should now keep the correct match and also backfill richer fields from source-side probe data when ProConnect exposes them there
+- `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, and `photo_url` should populate if they are present in ProConnect
+- `FROM COMPANY RELATIONSHIP NETWORK` can now include probe-discovered internal connections
+- `optional_sections.from_company` and `optional_sections.to_company` can now surface `intent_signals` and `recent_activity`
 
 ## 4) Only if needed: rerun with a real destination account override
 
@@ -83,6 +85,8 @@ $j.transition_payload.from_company_context | Format-List
 $j.transition_payload.from_company_context.account_team | Format-List
 "\nFROM COMPANY RELATIONSHIP NETWORK:"
 $j.transition_payload.from_company_context.relationship_network | Format-List
+"\nFROM COMPANY OPTIONAL SECTIONS:"
+$j.transition_payload.optional_sections.from_company | Format-List
 "\nTO COMPANY ACCOUNT CONTEXT:"
 $j.transition_payload.to_company_context.account_context | Format-List
 "\nTO COMPANY ACCOUNT TEAM:"
@@ -91,6 +95,8 @@ $j.transition_payload.to_company_context.account_team | Format-List
 $j.transition_payload.to_company_context.work_by_solution | Format-List
 "\nTO COMPANY RELATIONSHIP NETWORK:"
 $j.transition_payload.to_company_context.relationship_network | Format-List
+"\nTO COMPANY OPTIONAL SECTIONS:"
+$j.transition_payload.optional_sections.to_company | Format-List
 "\nTO COMPANY COUNTS:"
 [PSCustomObject]@{
   projects = ($j.transition_payload.to_company_context.projects.items | Measure-Object).Count
@@ -101,6 +107,22 @@ $j.transition_payload.to_company_context.relationship_network | Format-List
   alumni = ($j.transition_payload.to_company_context.relationship_network.protiviti_alumni.items | Measure-Object).Count
   connected_colleagues = ($j.transition_payload.to_company_context.relationship_network.connected_colleagues.items | Measure-Object).Count
 } | Format-List
+"\nTOP 5 PROJECTS:"
+$j.transition_payload.to_company_context.projects.items | Select-Object -First 5 project_name,solution,emd,em,primary_key_buyer,project_status,ended_date | Format-Table -Wrap -AutoSize
+"\nTOP 5 KEY BUYERS:"
+$j.transition_payload.to_company_context.key_buyers.items | Select-Object -First 5 name,title,wins_5y,last_opportunity_won_date,last_opportunity_stage,function,email_address | Format-Table -Wrap -AutoSize
+"\nFROM INTERNAL CONNECTIONS:"
+$j.transition_payload.from_company_context.relationship_network.connected_colleagues.items | Select-Object -First 10 name,title,last_connected_method,last_connected_date,number_of_interactions | Format-Table -Wrap -AutoSize
+"\nTO INTERNAL CONNECTIONS:"
+$j.transition_payload.to_company_context.relationship_network.connected_colleagues.items | Select-Object -First 10 name,title,last_connected_method,last_connected_date,number_of_interactions | Format-Table -Wrap -AutoSize
+"\nFROM INTENT SIGNALS:"
+$j.transition_payload.optional_sections.from_company.intent_signals | Select-Object -First 10 topic,strength,date,source | Format-Table -Wrap -AutoSize
+"\nTO INTENT SIGNALS:"
+$j.transition_payload.optional_sections.to_company.intent_signals | Select-Object -First 10 topic,strength,date,source | Format-Table -Wrap -AutoSize
+"\nFROM RECENT ACTIVITY:"
+$j.transition_payload.optional_sections.from_company.recent_activity | Select-Object -First 10 type,date,description,source | Format-Table -Wrap -AutoSize
+"\nTO RECENT ACTIVITY:"
+$j.transition_payload.optional_sections.to_company.recent_activity | Select-Object -First 10 type,date,description,source | Format-Table -Wrap -AutoSize
 "\nTOP 10 RANKED OPPORTUNITIES:"
 $j.transition_payload.movement_evidence.ranked_opportunities_top10 | Select-Object -First 10 rank,rank_score,rank_band,opportunity,stage,primary_key_buyer | Format-Table -Wrap -AutoSize
 "\nHTTP (first 10):"
