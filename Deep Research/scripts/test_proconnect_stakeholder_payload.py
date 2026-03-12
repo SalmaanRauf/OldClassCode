@@ -17,6 +17,7 @@ from proconnect_stakeholder_payload import (  # noqa: E402
     build_opportunities_section,
     build_person_profile_transition,
     build_projects_section,
+    probe_additional_endpoints,
     resolve_person_transition,
     run_stakeholder_case,
     summarize_probe_payloads,
@@ -467,6 +468,8 @@ def test_summarize_probe_payloads_surfaces_top_level_keys_and_node_paths() -> No
             "params": {"accountId": "001-from"},
             "data_type": "dict",
             "top_level_keys": ["IntentSignals", "PersonProfile"],
+            "response_kind": "json",
+            "data_usable": True,
             "raw_text_length": None,
             "raw_text_preview": None,
             "dict_node_samples": [
@@ -499,8 +502,34 @@ def test_summarize_probe_payloads_includes_raw_text_preview_when_response_is_pla
             "params": {"accountId": "001-from"},
             "data_type": "dict",
             "top_level_keys": ["raw_text"],
+            "response_kind": "html",
+            "data_usable": False,
             "raw_text_length": 34,
             "raw_text_preview": "<html><body>not json</body></html>",
             "dict_node_samples": [{"path": "$", "keys": ["raw_text"]}],
         }
     ]
+
+
+def test_probe_additional_endpoints_warns_when_probe_returns_proconnect_html_shell() -> None:
+    class FakeClient:
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "raw_text": (
+                        '<!doctype html><html lang="en"><head><meta charset="utf-8"/>'
+                        '<link rel="icon" href="/proconnect-logo.png"/></head><body></body></html>'
+                    )
+                },
+            }
+
+    payloads, warnings = probe_additional_endpoints(
+        client=FakeClient(),
+        account_id="001-from",
+        zoom_info_account_id="9012358",
+    )
+
+    assert len(payloads) == 9
+    assert any("returned ProConnect app HTML instead of JSON" in warning for warning in warnings)

@@ -1839,6 +1839,7 @@ def probe_additional_endpoints(
                 retry_delay_seconds=0.25,
                 stop_on_auth=True,
             )
+            response_kind, data_usable = classify_probe_response_data(response.get("data"))
 
             payloads.append(
                 {
@@ -1846,6 +1847,8 @@ def probe_additional_endpoints(
                     "params": params,
                     "status_code": response.get("status_code"),
                     "success": response.get("success"),
+                    "response_kind": response_kind,
+                    "data_usable": data_usable,
                     "data": response.get("data"),
                 }
             )
@@ -1854,6 +1857,14 @@ def probe_additional_endpoints(
             if response.get("auth_blocked") or status_code in {401, 403}:
                 auth_blocked = True
                 warnings.append(f"Probe endpoint {endpoint} blocked by authorization ({status_code}).")
+            elif response.get("success") and response_kind == "html_shell":
+                warnings.append(
+                    f"Probe endpoint {endpoint} returned ProConnect app HTML instead of JSON; path is likely not a live API route."
+                )
+            elif response.get("success") and response_kind == "html":
+                warnings.append(
+                    f"Probe endpoint {endpoint} returned HTML instead of JSON; payload was not usable for extraction."
+                )
             elif not response.get("success"):
                 warnings.append(f"Probe endpoint {endpoint} failed with status {status_code}.")
 
@@ -2159,6 +2170,7 @@ def summarize_probe_payloads(probe_payloads: List[Dict[str, Any]], max_node_samp
         data = payload.get("data")
         top_level_keys = sorted(list(data.keys()))[:20] if isinstance(data, dict) else []
         raw_text = data.get("raw_text") if isinstance(data, dict) else None
+        response_kind, data_usable = classify_probe_response_data(data)
         summaries.append(
             {
                 "endpoint": payload.get("endpoint"),
@@ -2167,6 +2179,8 @@ def summarize_probe_payloads(probe_payloads: List[Dict[str, Any]], max_node_samp
                 "params": payload.get("params"),
                 "data_type": type(data).__name__,
                 "top_level_keys": top_level_keys,
+                "response_kind": payload.get("response_kind") or response_kind,
+                "data_usable": payload.get("data_usable") if payload.get("data_usable") is not None else data_usable,
                 "raw_text_length": len(raw_text) if isinstance(raw_text, str) else None,
                 "raw_text_preview": summarize_raw_text(raw_text),
                 "dict_node_samples": collect_dict_node_samples(data, max_samples=max_node_samples),
@@ -2219,6 +2233,35 @@ def summarize_raw_text(value: Any, max_chars: int = 240) -> Optional[str]:
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 3].rstrip() + "..."
+
+
+def classify_probe_response_data(data: Any) -> Tuple[str, bool]:
+    if isinstance(data, dict):
+        raw_text = data.get("raw_text")
+        if isinstance(raw_text, str):
+            stripped = raw_text.strip()
+            if not stripped:
+                return "empty", False
+            if is_proconnect_html_shell_text(stripped):
+                return "html_shell", False
+            if stripped.lower().startswith("<!doctype html") or stripped.lower().startswith("<html"):
+                return "html", False
+            return "plain_text", False
+        return "json", True
+    if isinstance(data, list):
+        return "json", True
+    if data is None:
+        return "empty", False
+    return type(data).__name__, True
+
+
+def is_proconnect_html_shell_text(value: str) -> bool:
+    text = value.strip().lower()
+    if not text:
+        return False
+    if not ("<!doctype html" in text or text.startswith("<html")):
+        return False
+    return "proconnect-logo.png" in text or "name=\"theme-color\"" in text or "id=\"root\"" in text
 
 
 def extract_probe_internal_connection_items(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
