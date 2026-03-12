@@ -34,7 +34,7 @@ py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Ca
 Expected result for this patch:
 
 - `Exact person match` stays `PASS`
-- `PERSON PROFILE` should now keep the correct match and also backfill richer fields from source-side probe data when ProConnect exposes them there
+- `PERSON PROFILE` should now keep the correct match and also backfill richer fields from source-side probe data even when ProConnect returns PascalCase field names
 - `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, and `photo_url` should populate if they are present in ProConnect
 - `FROM COMPANY RELATIONSHIP NETWORK` can now include probe-discovered internal connections
 - `optional_sections.from_company` and `optional_sections.to_company` can now surface `intent_signals` and `recent_activity`
@@ -169,6 +169,7 @@ py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capit
 
 - `401`: token invalid, expired, or malformed.
 - `403`: token valid but not authorized for one or more endpoints/accounts.
+- `Token is near expiry (<= 10 minutes)`: refresh `token.txt` before rerunning so long org-chart/probe passes do not get cut off mid-run.
 - `HTTP 400` on `/api/accounts/...`: bad account id override.
 - `CommandNotFoundException` with `py.\script.py`: missing space. Use `py .\script.py`.
 - Repeated org chart `500` warnings are currently non-blocking and can still result in an expected overall `WARN`.
