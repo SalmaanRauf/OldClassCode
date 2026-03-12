@@ -178,6 +178,36 @@ def test_build_from_company_context_lite_exposes_relationship_network_and_recent
     ]
 
 
+def test_build_from_company_context_lite_handles_plural_connected_colleagues_shape() -> None:
+    account = sample_account()
+    account["connectedColleagues"] = [
+        {
+            "employee": {
+                "name": "Bernadette Norrington",
+                "title": "Managing Director",
+                "company": "Protiviti Inc.",
+            },
+            "lastContactType": "Email",
+            "lastContactTime": "2025-05-02T00:00:00Z",
+            "numberOfInteractions": 6,
+        }
+    ]
+    account.pop("connectedColleague", None)
+
+    context = build_from_company_context_lite(account)
+
+    assert context["relationship_network"]["connected_colleagues"]["items"] == [
+        {
+            "name": "Bernadette Norrington",
+            "employer": "Protiviti Inc.",
+            "title": "Managing Director",
+            "last_connected_method": "Email",
+            "last_connected_date": "2025-05-02T00:00:00Z",
+            "number_of_interactions": 6,
+        }
+    ]
+
+
 def test_sections_preserve_richer_proconnect_metadata() -> None:
     account = sample_account()
     project = build_projects_section(account)["items"][0]
@@ -417,15 +447,18 @@ def test_run_stakeholder_case_uses_har_backed_probe_data_and_person_detail(monke
                         "FirstName": "Jennifer",
                         "LastName": "Brady",
                         "Title": "Senior Director of Technology Risk",
-                        "TitleExternal": "Senior Director, Technology Risk",
                         "IsInSalesforce": True,
                         "IsProtivitiAlumni": False,
                         "HasRoberthalfContact": False,
                         "PhotoUrl": "https://img.example.com/jennifer-brady.png",
-                        "Phone": "555-0100",
                         "LastUpdated": "2024-09-17",
                         "PastJobExperience": ["Bank A"],
                         "Education": ["University X"],
+                        "ExternalProspectView": {
+                            "Title": "Director, Technology Governance",
+                            "Phone": "(703) 420-3804",
+                            "Education": [],
+                        },
                     },
                 }
 
@@ -451,12 +484,12 @@ def test_run_stakeholder_case_uses_har_backed_probe_data_and_person_detail(monke
     profile = result["transition_payload"]["person_profile"]
     assert profile["match_status"] == "matched"
     assert profile["last_updated"] == "2024-09-17"
-    assert profile["title_external"] == "Senior Director, Technology Risk"
+    assert profile["title_external"] == "Director, Technology Governance"
     assert profile["in_salesforce"] is True
     assert profile["protiviti_alumni"] is False
     assert profile["contact_at_robert_half"] is False
     assert profile["photo_url"] == "https://img.example.com/jennifer-brady.png"
-    assert profile["phone"] == "555-0100"
+    assert profile["phone"] == "(703) 420-3804"
     assert profile["past_job_experience"] == ["Bank A"]
     assert profile["education"] == ["University X"]
 

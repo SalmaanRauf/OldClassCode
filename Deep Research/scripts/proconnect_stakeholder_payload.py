@@ -903,22 +903,29 @@ def build_connected_colleague_items(account: Optional[Dict[str, Any]]) -> List[D
         return []
 
     rows: List[Dict[str, Any]] = []
-    for item in to_list_dicts(account.get("connectedColleague")):
-        name = full_person_name(item)
+    connected_items: List[Dict[str, Any]] = []
+    connected_items.extend(to_list_dicts(account.get("connectedColleague")))
+    connected_items.extend(to_list_dicts(account.get("connectedColleagues")))
+    connected_items.extend(to_list_dicts(account.get("connections")))
+
+    for item in connected_items:
+        employee = item.get("employee") if isinstance(item.get("employee"), dict) else {}
+        name = full_person_name(item) or full_person_name(employee) or first_non_empty(employee, ["name"])
         if not name:
             continue
         rows.append(
             {
                 "name": name,
-                "employer": first_non_empty(item, ["companyName", "employer", "company"]),
-                "title": first_non_empty(item, ["title"]),
+                "employer": first_non_empty(item, ["companyName", "employer", "company"])
+                or first_non_empty(employee, ["companyName", "employer", "company"]),
+                "title": first_non_empty(item, ["title"]) or first_non_empty(employee, ["title"]),
                 "last_connected_method": first_non_empty(
                     item,
-                    ["lastConnectedMethod", "lastInteractionMethod", "lastConnectionMethod"],
+                    ["lastConnectedMethod", "lastInteractionMethod", "lastConnectionMethod", "lastContactType"],
                 ),
                 "last_connected_date": first_non_empty(
                     item,
-                    ["lastConnectedDate", "lastInteractionDate", "lastConnectionDate"],
+                    ["lastConnectedDate", "lastInteractionDate", "lastConnectionDate", "lastContactTime"],
                 ),
                 "number_of_interactions": to_int(
                     first_non_empty(item, ["numberOfInteractions", "interactionsCount", "interactionCount"])
@@ -1982,6 +1989,24 @@ def extract_person_detail_candidate(payload: Any) -> Optional[Dict[str, Any]]:
         record = parse_person_like_record(node)
         if not record:
             continue
+        external_view_raw = node.get("externalProspectView")
+        if not isinstance(external_view_raw, dict):
+            external_view_raw = node.get("ExternalProspectView")
+        external_view = external_view_raw if isinstance(external_view_raw, dict) else {}
+        supplemental = {
+            "titleExternal": first_non_empty(external_view, ["title"]),
+            "phone": first_non_empty(external_view, ["phone"]),
+            "education": first_non_empty(external_view, ["education"]),
+            "linkedinUrl": first_non_empty(external_view, ["linkedinUrl", "linkedInUrl"]),
+            "emailAddress": first_non_empty(external_view, ["emailAddress", "email"]),
+            "location": first_non_empty(external_view, ["location"]),
+            "photoUrl": first_non_empty(external_view, ["photoUrl"]),
+        }
+        record = merge_person_candidates(
+            candidates=[record, supplemental],
+            selected=record,
+            title_hints=[],
+        )
         record["id"] = first_non_empty(node, ["contactId", "id", "prospectId", "personId"]) or record.get("id")
         record["accountId"] = first_non_empty(node, ["accountId", "sfdcAccountId"])
         record["_source"] = "person_detail"
