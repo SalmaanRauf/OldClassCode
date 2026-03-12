@@ -38,7 +38,7 @@ Expected result for this patch:
 - `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, and `photo_url` should populate if they are present in ProConnect
 - `FROM COMPANY RELATIONSHIP NETWORK` can now include probe-discovered internal connections
 - `optional_sections.from_company` and `optional_sections.to_company` can now surface `intent_signals` and `recent_activity`
-- `probe_payload_shapes` now captures a lightweight summary of raw probe response structure so we can inspect live endpoint shapes without dumping the full artifact
+- `probe_payload_shapes` now captures a lightweight summary of raw probe response structure, including `raw_text_preview` when the endpoint returns plain text instead of JSON
 
 ## 4) Only if needed: rerun with a real destination account override
 
