@@ -8,6 +8,7 @@ Make sure these files are the latest versions before you run anything:
 
 - `proconnect_client.py`
 - `proconnect_lookup_logic.py`
+- `proconnect_har_inspector.py`
 - `proconnect_stakeholder_payload.py`
 - `proconnect_stakeholder_test.py`
 - `proconnect_scenario_runner.py`
@@ -39,6 +40,7 @@ Expected result for this patch:
 - `FROM COMPANY RELATIONSHIP NETWORK` can now include probe-discovered internal connections
 - `optional_sections.from_company` and `optional_sections.to_company` can now surface `intent_signals` and `recent_activity`
 - `probe_payload_shapes` now captures a lightweight summary of raw probe response structure, including `raw_text_preview` when the endpoint returns plain text instead of JSON
+- If warnings say `returned ProConnect app HTML instead of JSON`, that means the current probe route guess hit the ProConnect web shell and not a real backend data route
 
 ## 4) Only if needed: rerun with a real destination account override
 
@@ -164,7 +166,30 @@ $j.scenario_results | ForEach-Object {
 } | Format-Table -Wrap -AutoSize
 ```
 
-## 9) Optional sanity run for a known non-match
+## 9) If HTML-shell probe warnings appear, capture one HAR and inspect the real routes
+
+Only do this if the run prints warnings like `returned ProConnect app HTML instead of JSON`.
+
+Browser steps:
+
+1. Open the real ProConnect UI in Edge or Chrome.
+2. Open DevTools with `F12`.
+3. Go to `Network`.
+4. Turn on `Preserve log`.
+5. Turn on `Disable cache`.
+6. Load the Capital One Jennifer Brady profile page and the Fannie Mae company page that show the missing sections.
+7. In the network grid, right-click and choose `Save all as HAR with content`.
+8. Save the file as `C:\Users\salrau01\prcttry\output\proconnect_jennifer_brady.har`.
+
+Then run:
+
+```powershell
+py .\proconnect_har_inspector.py --har ".\output\proconnect_jennifer_brady.har"
+```
+
+Send back the full output. The important sections are `INTERESTING ROUTES` and `HTML SHELL ROUTES`.
+
+## 10) Optional sanity run for a known non-match
 
 ```powershell
 py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capital One" --to-company "American Express" --department "C-Suite" --token-file ".\token.txt"
@@ -178,3 +203,4 @@ py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capit
 - `HTTP 400` on `/api/accounts/...`: bad account id override.
 - `CommandNotFoundException` with `py.\script.py`: missing space. Use `py .\script.py`.
 - Repeated org chart `500` warnings are currently non-blocking and can still result in an expected overall `WARN`.
+- `returned ProConnect app HTML instead of JSON`: the route is not a usable JSON API in this environment; run the HAR capture step above so we can discover the actual backend route.
