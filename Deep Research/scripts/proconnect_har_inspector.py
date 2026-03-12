@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import parse_qsl, urlparse
 
 
@@ -23,8 +23,88 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def resolve_har_path(path: str, cwd: Optional[Path] = None) -> Path:
+    base_dir = (cwd or Path.cwd()).resolve()
+    raw_path = Path(path).expanduser()
+
+    candidates: List[Path] = []
+    candidates.extend(build_direct_candidates(raw_path, base_dir))
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+
+    matching_files = search_for_matching_files(raw_path, base_dir)
+    if len(matching_files) == 1:
+        return matching_files[0].resolve()
+    if len(matching_files) > 1:
+        options = "\n".join(f"- {match}" for match in matching_files[:10])
+        raise FileNotFoundError(
+            "Multiple HAR-like files matched the provided name. "
+            "Use an exact path.\n"
+            f"Requested: {path}\n"
+            f"Matches:\n{options}"
+        )
+
+    looked_for = "\n".join(f"- {candidate}" for candidate in unique_paths(candidates))
+    raise FileNotFoundError(
+        "Could not find HAR file.\n"
+        f"Requested: {path}\n"
+        f"Working directory: {base_dir}\n"
+        f"Looked for:\n{looked_for}\n"
+        "If the file was saved from Notepad, check whether it became `.har.txt`."
+    )
+
+
+def build_direct_candidates(raw_path: Path, base_dir: Path) -> List[Path]:
+    candidates: List[Path] = []
+    base_candidate = raw_path if raw_path.is_absolute() else base_dir / raw_path
+    candidates.append(base_candidate)
+    candidates.append(with_txt_suffix(base_candidate))
+
+    if not raw_path.is_absolute():
+        candidates.append(raw_path)
+        candidates.append(with_txt_suffix(raw_path))
+
+    return unique_paths(candidates)
+
+
+def with_txt_suffix(path: Path) -> Path:
+    suffix = "".join(path.suffixes)
+    if suffix:
+        return path.with_name(path.name + ".txt")
+    return path.with_suffix(".txt")
+
+
+def unique_paths(paths: Iterable[Path]) -> List[Path]:
+    seen = set()
+    ordered: List[Path] = []
+    for path in paths:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(path)
+    return ordered
+
+
+def search_for_matching_files(raw_path: Path, base_dir: Path) -> List[Path]:
+    names = [raw_path.name]
+    if raw_path.suffixes:
+        names.append(raw_path.name + ".txt")
+
+    matches: List[Path] = []
+    for name in names:
+        if not name:
+            continue
+        matches.extend(base_dir.rglob(name))
+
+    return unique_paths(path for path in matches if path.is_file())
+
+
 def load_har_payload(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as handle:
+    resolved_path = resolve_har_path(path)
+    with open(resolved_path, "r", encoding="utf-8") as handle:
         payload = json.load(handle)
     if not isinstance(payload, dict):
         raise ValueError("HAR root must be a JSON object.")
@@ -217,12 +297,14 @@ def format_rows(rows: List[Dict[str, Any]]) -> List[str]:
 
 def main() -> int:
     args = parse_args()
-    payload = load_har_payload(args.har)
+    resolved_path = resolve_har_path(args.har)
+    payload = load_har_payload(str(resolved_path))
     summary = summarize_har_payload(payload)
 
     print("ProConnect HAR Inspector")
     print("========================")
-    print(f"FILE: {Path(args.har).name}")
+    print(f"FILE: {resolved_path.name}")
+    print(f"PATH: {resolved_path}")
     print(f"ENTRIES: {summary['entry_count']}")
     print(f"UNIQUE_API_ROUTES: {summary['route_count']}")
     print("\nKNOWN ROUTES:")
