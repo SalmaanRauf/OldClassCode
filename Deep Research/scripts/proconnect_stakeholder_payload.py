@@ -2228,11 +2228,17 @@ def extract_probe_intent_signals(probe_payloads: List[Dict[str, Any]]) -> List[D
 
 def parse_intent_signal_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     topic = first_non_empty(node, ["topic", "intentTopic", "signalTopic", "name"])
-    strength = first_non_empty(node, ["intentStrength", "strength", "intentScore", "score"])
-    signal_date = first_non_empty(node, ["intentDate", "signalDate", "date", "createdDate"])
+    strength = first_non_empty(
+        node,
+        ["intentStrength", "strength", "audienceStrength", "intentScore", "signalScore", "score"],
+    )
+    signal_date = first_non_empty(node, ["intentDate", "signalDate", "importedDate", "date", "createdDate"])
 
     key_text = " ".join(str(key).lower() for key in node.keys())
-    if "intent" not in key_text and not first_non_empty(node, ["intentStrength", "intentScore", "intentDate"]):
+    if "intent" not in key_text and not first_non_empty(
+        node,
+        ["intentStrength", "audienceStrength", "intentScore", "signalScore", "intentDate", "signalDate"],
+    ):
         return None
     if not topic:
         return None
@@ -2500,13 +2506,26 @@ def dedupe_transition_people(people: List[Dict[str, Any]]) -> List[Dict[str, Any
 
 def first_non_empty(payload: Dict[str, Any], keys: List[str]) -> Any:
     for key in keys:
-        value = payload.get(key)
-        if value is None:
-            continue
-        if isinstance(value, str) and not value.strip():
-            continue
-        return value
+        for candidate_key in key_variants(key):
+            value = payload.get(candidate_key)
+            if value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            return value
     return None
+
+
+def key_variants(key: str) -> List[str]:
+    text = str(key or "")
+    if not text:
+        return []
+
+    variants: List[str] = []
+    for candidate in [text, text[:1].lower() + text[1:], text[:1].upper() + text[1:]]:
+        if candidate not in variants:
+            variants.append(candidate)
+    return variants
 
 
 def to_int(value: Any) -> Optional[int]:

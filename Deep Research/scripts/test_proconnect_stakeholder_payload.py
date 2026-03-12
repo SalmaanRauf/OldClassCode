@@ -334,44 +334,44 @@ def test_run_stakeholder_case_uses_from_probe_data_for_person_and_relationships(
         return (
             [
                 {
-                    "endpoint": "/api/userHistory",
-                    "params": {"accountId": account_id},
-                    "status_code": 200,
-                    "success": True,
-                    "data": {
-                        "personProfile": {
-                            "name": "Jennifer Brady",
-                            "titleExternal": "Senior Director, Technology Risk",
-                            "isInSalesforce": True,
-                            "isProtivitiAlumni": False,
-                            "hasRoberthalfContact": False,
-                            "photoUrl": "https://img.example.com/jennifer-brady.png",
-                            "lastUpdated": "2024-09-17",
+                        "endpoint": "/api/userHistory",
+                        "params": {"accountId": account_id},
+                        "status_code": 200,
+                        "success": True,
+                        "data": {
+                            "PersonProfile": {
+                                "Name": "Jennifer Brady",
+                                "TitleExternal": "Senior Director, Technology Risk",
+                                "IsInSalesforce": True,
+                                "IsProtivitiAlumni": False,
+                                "HasRoberthalfContact": False,
+                                "PhotoUrl": "https://img.example.com/jennifer-brady.png",
+                                "LastUpdated": "2024-09-17",
+                            },
+                            "RecentActivities": [
+                                {
+                                    "ActivityType": "Profile View",
+                                    "ActivityDate": "2026-03-01",
+                                    "Description": "Viewed Jennifer Brady profile",
+                                }
+                            ],
+                            "IntentSignals": [
+                                {
+                                    "Topic": "Technology Risk",
+                                    "AudienceStrength": "High",
+                                    "SignalDate": "2026-03-01",
+                                }
+                            ],
+                            "InternalConnections": [
+                                {
+                                    "Name": "Taylor Smith",
+                                    "Title": "Managing Director, R&C-Risk, New York Office",
+                                    "LastConnected": "Other, Oct 2023",
+                                    "NumberOfInteractions": 1,
+                                }
+                            ],
                         },
-                        "recentActivities": [
-                            {
-                                "activityType": "Profile View",
-                                "activityDate": "2026-03-01",
-                                "description": "Viewed Jennifer Brady profile",
-                            }
-                        ],
-                        "intentSignals": [
-                            {
-                                "topic": "Technology Risk",
-                                "intentStrength": "High",
-                                "intentDate": "2026-03-01",
-                            }
-                        ],
-                        "internalConnections": [
-                            {
-                                "name": "Taylor Smith",
-                                "title": "Managing Director, R&C-Risk, New York Office",
-                                "lastConnected": "Other, Oct 2023",
-                                "numberOfInteractions": 1,
-                            }
-                        ],
-                    },
-                }
+                    }
             ],
             [],
         )
