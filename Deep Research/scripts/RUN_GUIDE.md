@@ -38,6 +38,7 @@ Expected result for this patch:
 - `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, and `photo_url` should populate if they are present in ProConnect
 - `FROM COMPANY RELATIONSHIP NETWORK` can now include probe-discovered internal connections
 - `optional_sections.from_company` and `optional_sections.to_company` can now surface `intent_signals` and `recent_activity`
+- `probe_payload_shapes` now captures a lightweight summary of raw probe response structure so we can inspect live endpoint shapes without dumping the full artifact
 
 ## 4) Only if needed: rerun with a real destination account override
 
@@ -87,6 +88,8 @@ $j.transition_payload.from_company_context.account_team | Format-List
 $j.transition_payload.from_company_context.relationship_network | Format-List
 "\nFROM COMPANY OPTIONAL SECTIONS:"
 $j.transition_payload.optional_sections.from_company | Format-List
+"\nFROM COMPANY PROBE SHAPES:"
+$j.transition_payload.optional_sections.from_company.probe_payload_shapes | Format-Table -Wrap -AutoSize
 "\nTO COMPANY ACCOUNT CONTEXT:"
 $j.transition_payload.to_company_context.account_context | Format-List
 "\nTO COMPANY ACCOUNT TEAM:"
@@ -97,6 +100,8 @@ $j.transition_payload.to_company_context.work_by_solution | Format-List
 $j.transition_payload.to_company_context.relationship_network | Format-List
 "\nTO COMPANY OPTIONAL SECTIONS:"
 $j.transition_payload.optional_sections.to_company | Format-List
+"\nTO COMPANY PROBE SHAPES:"
+$j.transition_payload.optional_sections.to_company.probe_payload_shapes | Format-Table -Wrap -AutoSize
 "\nTO COMPANY COUNTS:"
 [PSCustomObject]@{
   projects = ($j.transition_payload.to_company_context.projects.items | Measure-Object).Count
