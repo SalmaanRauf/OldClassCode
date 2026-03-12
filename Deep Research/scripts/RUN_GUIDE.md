@@ -1,8 +1,10 @@
-# ProConnect Transition Harness Run Guide (Current)
+# ProConnect Transition Harness Run Guide
 
-This guide is only for the current **ProConnect transition flow**.
+Use this file as the exact runbook for the separate device.
 
-## Required files in your test folder
+## Files that must be current
+
+Make sure these files are the latest versions before you run anything:
 
 - `proconnect_client.py`
 - `proconnect_lookup_logic.py`
@@ -11,61 +13,48 @@ This guide is only for the current **ProConnect transition flow**.
 - `proconnect_scenario_runner.py`
 - `proconnect_stakeholder_scenarios.sample.json`
 
-## 1) Go to folder
+## 1) Go to the test folder
 
 ```powershell
 cd C:\Users\salrau01\prcttry
 ```
 
-## 2) Put token in `token.txt`
-
-`token.txt` must contain only the raw JWT token text.
+## 2) Put the raw JWT into `token.txt`
 
 ```powershell
 Set-Content -Path .\token.txt -Value 'PASTE_RAW_JWT_HERE' -NoNewline
 ```
 
-## 3) Run primary transition test
-
-```powershell
-py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capital One" --to-company "American Express" --department "C-Suite" --token-file ".\token.txt"
-```
-
-Compatibility alias (`--company` maps to destination):
-
-```powershell
-py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capital One" --company "American Express" --token-file ".\token.txt"
-```
-
-## 3A) Run your demo scenario (recommended)
+## 3) Run the primary demo scenario
 
 ```powershell
 py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --department "C-Suite" --token-file ".\token.txt"
 ```
 
-If destination lookup is ambiguous or misses, rerun with destination account override:
+## 4) Only if needed: rerun with a real destination account override
+
+Use this only if you know the real Fannie Mae account id value.
+Do not paste placeholder text like `<FANNIE_MAE_ACCOUNT_ID>`.
 
 ```powershell
-py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --to-account-id "<FANNIE_MAE_ACCOUNT_ID>" --department "C-Suite" --token-file ".\token.txt"
+py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --to-account-id "REAL_FANNIE_MAE_ACCOUNT_ID" --department "C-Suite" --token-file ".\token.txt"
 ```
 
-Important: replace `<FANNIE_MAE_ACCOUNT_ID>` with a real account id value. Do not include angle brackets.
-
-## 4) Run transition scenario batch
+## 5) Run the scenario batch
 
 ```powershell
 py .\proconnect_scenario_runner.py --payload-type stakeholder --scenarios-file ".\proconnect_stakeholder_scenarios.sample.json" --token-file ".\token.txt"
 ```
 
-## 5) List latest artifacts
+## 6) List the newest artifacts
 
 ```powershell
 Get-ChildItem .\output\proconnect_runs | Sort-Object LastWriteTime -Descending | Select-Object -First 10 Name,LastWriteTime
 ```
 
-## 6) Compact summary commands (paste output back)
+## 7) Print the latest transition artifact summary
 
-### Transition artifact summary
+Paste this whole block as-is:
 
 ```powershell
 $latest = Get-ChildItem .\output\proconnect_runs\proconnect_stakeholder_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -80,8 +69,20 @@ $j.pass_fail.checks | Select-Object check,status,http,details | Format-Table -Wr
 $j.transition_payload.movement_event | Format-List
 "\nPERSON PROFILE:"
 $j.transition_payload.person_profile | Format-List
-"\nFROM COMPANY LITE:"
+"\nFROM COMPANY CONTEXT:"
 $j.transition_payload.from_company_context | Format-List
+"\nFROM COMPANY ACCOUNT TEAM:"
+$j.transition_payload.from_company_context.account_team | Format-List
+"\nFROM COMPANY RELATIONSHIP NETWORK:"
+$j.transition_payload.from_company_context.relationship_network | Format-List
+"\nTO COMPANY ACCOUNT CONTEXT:"
+$j.transition_payload.to_company_context.account_context | Format-List
+"\nTO COMPANY ACCOUNT TEAM:"
+$j.transition_payload.to_company_context.account_team | Format-List
+"\nTO COMPANY WORK BY SOLUTION:"
+$j.transition_payload.to_company_context.work_by_solution | Format-List
+"\nTO COMPANY RELATIONSHIP NETWORK:"
+$j.transition_payload.to_company_context.relationship_network | Format-List
 "\nTO COMPANY COUNTS:"
 [PSCustomObject]@{
   projects = ($j.transition_payload.to_company_context.projects.items | Measure-Object).Count
@@ -89,6 +90,8 @@ $j.transition_payload.from_company_context | Format-List
   key_buyers = ($j.transition_payload.to_company_context.key_buyers.items | Measure-Object).Count
   org_chart = ($j.transition_payload.to_company_context.org_chart.items | Measure-Object).Count
   technologies = ($j.transition_payload.to_company_context.technologies.items | Measure-Object).Count
+  alumni = ($j.transition_payload.to_company_context.relationship_network.protiviti_alumni.items | Measure-Object).Count
+  connected_colleagues = ($j.transition_payload.to_company_context.relationship_network.connected_colleagues.items | Measure-Object).Count
 } | Format-List
 "\nTOP 10 RANKED OPPORTUNITIES:"
 $j.transition_payload.movement_evidence.ranked_opportunities_top10 | Select-Object -First 10 rank,rank_score,rank_band,opportunity,stage,primary_key_buyer | Format-Table -Wrap -AutoSize
@@ -98,7 +101,9 @@ $j.http_calls | Select-Object -First 10 endpoint,status_code,error,elapsed_ms | 
 $j.http_calls | Select-Object -Last 10 endpoint,status_code,error,elapsed_ms | Format-Table -AutoSize
 ```
 
-### Scenario artifact summary
+## 8) Print the latest scenario artifact summary
+
+Paste this whole block as-is:
 
 ```powershell
 $latest = Get-ChildItem .\output\proconnect_runs\proconnect_scenarios_*.json | Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -124,9 +129,16 @@ $j.scenario_results | ForEach-Object {
 } | Format-Table -Wrap -AutoSize
 ```
 
+## 9) Optional sanity run for a known non-match
+
+```powershell
+py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capital One" --to-company "American Express" --department "C-Suite" --token-file ".\token.txt"
+```
+
 ## Troubleshooting
 
-- `401`: token invalid/expired/malformed.
-- `403`: token valid but unauthorized for one or more endpoints/accounts.
+- `401`: token invalid, expired, or malformed.
+- `403`: token valid but not authorized for one or more endpoints/accounts.
+- `HTTP 400` on `/api/accounts/...`: bad account id override.
 - `CommandNotFoundException` with `py.\script.py`: missing space. Use `py .\script.py`.
-- Overall `WARN` is expected when person match is unresolved or optional sections are missing.
+- Repeated org chart `500` warnings are currently non-blocking and can still result in an expected overall `WARN`.
