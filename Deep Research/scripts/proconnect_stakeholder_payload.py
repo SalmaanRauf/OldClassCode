@@ -1288,7 +1288,11 @@ def resolve_person_transition(
 
     to_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == to_account_id]
     if to_matches:
-        selected = select_best_candidate(to_matches, title_hints=to_title_hints or [])
+        selected = merge_person_candidates(
+            candidates=to_matches,
+            selected=select_best_candidate(to_matches, title_hints=to_title_hints or []),
+            title_hints=to_title_hints or [],
+        )
         return {
             "status": "matched",
             "match_source": selected.get("_source"),
@@ -1299,7 +1303,11 @@ def resolve_person_transition(
 
     from_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == from_account_id]
     if from_matches:
-        selected = select_best_candidate(from_matches, title_hints=from_title_hints or [])
+        selected = merge_person_candidates(
+            candidates=from_matches,
+            selected=select_best_candidate(from_matches, title_hints=from_title_hints or []),
+            title_hints=from_title_hints or [],
+        )
         return {
             "status": "matched",
             "match_source": selected.get("_source"),
@@ -1309,7 +1317,11 @@ def resolve_person_transition(
         }
 
     if len(exact_matches) == 1:
-        selected = exact_matches[0]
+        selected = merge_person_candidates(
+            candidates=exact_matches,
+            selected=exact_matches[0],
+            title_hints=[],
+        )
         return {
             "status": "matched",
             "match_source": selected.get("_source"),
@@ -1330,6 +1342,28 @@ def resolve_person_transition(
 def select_best_candidate(candidates: List[Dict[str, Any]], title_hints: List[str]) -> Dict[str, Any]:
     ranked = sorted(candidates, key=lambda row: candidate_sort_key(row, title_hints=title_hints), reverse=True)
     return ranked[0]
+
+
+def merge_person_candidates(
+    candidates: List[Dict[str, Any]],
+    selected: Dict[str, Any],
+    title_hints: List[str],
+) -> Dict[str, Any]:
+    ranked = sorted(candidates, key=lambda row: candidate_sort_key(row, title_hints=title_hints), reverse=True)
+    merged = dict(selected)
+    selected_source = selected.get("_source")
+
+    for candidate in ranked:
+        for key, value in candidate.items():
+            if key == "_source":
+                continue
+            if present(merged.get(key)) == "present":
+                continue
+            if present(value) == "present":
+                merged[key] = value
+
+    merged["_source"] = selected_source
+    return merged
 
 
 def candidate_sort_key(candidate: Dict[str, Any], title_hints: List[str]) -> Tuple[int, int, float, int, int, int, str]:

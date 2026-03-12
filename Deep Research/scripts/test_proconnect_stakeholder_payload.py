@@ -15,6 +15,7 @@ from proconnect_stakeholder_payload import (  # noqa: E402
     build_opportunities_section,
     build_person_profile_transition,
     build_projects_section,
+    resolve_person_transition,
 )
 
 
@@ -226,3 +227,52 @@ def test_build_person_profile_transition_includes_last_updated_metadata() -> Non
     )
 
     assert profile["last_updated"] == "2024-09-17"
+
+
+def test_resolve_person_transition_merges_sparse_key_buyer_with_richer_person_search() -> None:
+    candidates = [
+        {
+            "name": "Jennifer Brady",
+            "title": "Senior Director of Technology Risk",
+            "emailAddress": "jennifer.brady@capitalone.com",
+            "_source": "from_key_buyers",
+            "_company_scope": "from",
+            "linked_account_id": "00130000000BYU2AAO",
+            "linked_company_name": "Capital One Financial Corporation",
+        },
+        {
+            "name": "Jennifer Brady",
+            "title": "Senior Director of Technology Risk",
+            "titleExternal": "Senior Director, Technology Risk",
+            "location": "McLean, VA",
+            "isInSalesforce": True,
+            "linkedinUrl": "https://www.linkedin.com/in/jennifer-brady-crisc-3719303",
+            "pastJobExperience": ["Bank A"],
+            "education": ["University X"],
+            "lastUpdated": "2024-09-17",
+            "_source": "person_search",
+            "_company_scope": "from",
+            "linked_account_id": "00130000000BYU2AAO",
+            "linked_company_name": "Capital One Financial Corporation",
+        },
+    ]
+
+    resolution = resolve_person_transition(
+        person_name="Jennifer Brady",
+        candidates=candidates,
+        to_account_id="00130000000BYUIAA4",
+        from_account_id="00130000000BYU2AAO",
+        to_title_hints=[],
+        from_title_hints=["Senior Director of Technology Risk"],
+    )
+
+    matched = resolution["matched"]
+    assert resolution["match_source"] == "from_key_buyers"
+    assert matched["emailAddress"] == "jennifer.brady@capitalone.com"
+    assert matched["location"] == "McLean, VA"
+    assert matched["isInSalesforce"] is True
+    assert matched["titleExternal"] == "Senior Director, Technology Risk"
+    assert matched["linkedinUrl"] == "https://www.linkedin.com/in/jennifer-brady-crisc-3719303"
+    assert matched["pastJobExperience"] == ["Bank A"]
+    assert matched["education"] == ["University X"]
+    assert matched["lastUpdated"] == "2024-09-17"
