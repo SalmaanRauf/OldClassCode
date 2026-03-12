@@ -19,10 +19,9 @@ from proconnect_lookup_logic import (
     top_person_candidates,
 )
 
-PROBE_ENDPOINT_ALLOWLIST = [
-    "/api/taggedrelationships",
-    "/api/relationshiplead",
-    "/api/userHistory",
+ACCOUNT_PROBE_ENDPOINTS = [
+    "/api/Intent",
+    "/api/Scoop",
 ]
 
 SOURCE_PRIORITY = {
@@ -335,6 +334,14 @@ def run_stakeholder_case(
         from_account_id=from_account_id,
         to_title_hints=to_title_hints,
         from_title_hints=from_title_hints,
+    )
+
+    person_resolution = enrich_person_resolution_from_prospect_detail(
+        client=client,
+        person_name=person,
+        person_resolution=person_resolution,
+        candidate_people=candidate_people,
+        warnings=warnings,
     )
 
     person_profile = build_person_profile_transition(
@@ -1814,61 +1821,182 @@ def probe_additional_endpoints(
     warnings: List[str] = []
     payloads: List[Dict[str, Any]] = []
 
-    param_templates: List[Dict[str, Any]] = []
-    if account_id:
-        param_templates.append({"accountId": account_id})
-    if zoom_info_account_id:
-        param_templates.append({"zoomInfoAccountId": zoom_info_account_id})
-    if account_id and zoom_info_account_id:
-        param_templates.append({"accountId": account_id, "zoomInfoAccountId": zoom_info_account_id})
-
-    unique_templates = dedupe_param_templates(param_templates)
-    if not unique_templates:
+    del account_id
+    if not zoom_info_account_id:
         return payloads, warnings
 
-    for endpoint in PROBE_ENDPOINT_ALLOWLIST:
-        auth_blocked = False
-        for params in unique_templates:
-            if auth_blocked:
-                break
+    params = {"zoomInfoAccountId": zoom_info_account_id}
+    for endpoint in ACCOUNT_PROBE_ENDPOINTS:
+        response = client.get_endpoint(
+            endpoint=endpoint,
+            params=params,
+            retry_on_5xx=1,
+            retry_delay_seconds=0.25,
+            stop_on_auth=True,
+        )
+        response_kind, data_usable = classify_probe_response_data(response.get("data"))
 
-            response = client.get_endpoint(
-                endpoint=endpoint,
-                params=params,
-                retry_on_5xx=1,
-                retry_delay_seconds=0.25,
-                stop_on_auth=True,
+        payloads.append(
+            {
+                "endpoint": endpoint,
+                "params": dict(params),
+                "status_code": response.get("status_code"),
+                "success": response.get("success"),
+                "response_kind": response_kind,
+                "data_usable": data_usable,
+                "data": response.get("data"),
+            }
+        )
+
+        status_code = response.get("status_code")
+        if response.get("auth_blocked") or status_code in {401, 403}:
+            warnings.append(f"Probe endpoint {endpoint} blocked by authorization ({status_code}).")
+        elif response.get("success") and response_kind == "html_shell":
+            warnings.append(
+                f"Probe endpoint {endpoint} returned ProConnect app HTML instead of JSON; path is likely not a live API route."
             )
-            response_kind, data_usable = classify_probe_response_data(response.get("data"))
-
-            payloads.append(
-                {
-                    "endpoint": endpoint,
-                    "params": params,
-                    "status_code": response.get("status_code"),
-                    "success": response.get("success"),
-                    "response_kind": response_kind,
-                    "data_usable": data_usable,
-                    "data": response.get("data"),
-                }
+        elif response.get("success") and response_kind == "html":
+            warnings.append(
+                f"Probe endpoint {endpoint} returned HTML instead of JSON; payload was not usable for extraction."
             )
-
-            status_code = response.get("status_code")
-            if response.get("auth_blocked") or status_code in {401, 403}:
-                auth_blocked = True
-                warnings.append(f"Probe endpoint {endpoint} blocked by authorization ({status_code}).")
-            elif response.get("success") and response_kind == "html_shell":
-                warnings.append(
-                    f"Probe endpoint {endpoint} returned ProConnect app HTML instead of JSON; path is likely not a live API route."
-                )
-            elif response.get("success") and response_kind == "html":
-                warnings.append(
-                    f"Probe endpoint {endpoint} returned HTML instead of JSON; payload was not usable for extraction."
-                )
-            elif not response.get("success"):
-                warnings.append(f"Probe endpoint {endpoint} failed with status {status_code}.")
+        elif not response.get("success"):
+            warnings.append(f"Probe endpoint {endpoint} failed with status {status_code}.")
 
     return payloads, warnings
+
+
+def enrich_person_resolution_from_prospect_detail(
+    client: ProConnectClient,
+    person_name: str,
+    person_resolution: Dict[str, Any],
+    candidate_people: List[Dict[str, Any]],
+    warnings: List[str],
+) -> Dict[str, Any]:
+    if str(person_resolution.get("status") or "") != "matched":
+        return person_resolution
+
+    matched = person_resolution.get("matched")
+    if not isinstance(matched, dict):
+        return person_resolution
+
+    prospect_id = select_person_detail_prospect_id(
+        person_name=person_name,
+        matched_person=matched,
+        candidate_people=candidate_people,
+    )
+    if not prospect_id:
+        return person_resolution
+
+    response = client.get_endpoint(
+        endpoint=f"/api/prospects/{prospect_id}",
+        params=None,
+        retry_on_5xx=1,
+        retry_delay_seconds=0.25,
+        stop_on_auth=True,
+    )
+    status_code = response.get("status_code")
+    if response.get("auth_blocked") or status_code in {401, 403}:
+        warnings.append(f"Person detail lookup blocked by authorization ({status_code}).")
+        return person_resolution
+    if not response.get("success"):
+        warnings.append(f"Person detail lookup failed with status {status_code}.")
+        return person_resolution
+
+    response_kind, _ = classify_probe_response_data(response.get("data"))
+    if response_kind == "html_shell":
+        warnings.append("Person detail lookup returned ProConnect app HTML instead of JSON.")
+        return person_resolution
+    if response_kind == "html":
+        warnings.append("Person detail lookup returned HTML instead of JSON.")
+        return person_resolution
+
+    detail_candidate = extract_person_detail_candidate(response.get("data"))
+    if not detail_candidate:
+        return person_resolution
+
+    enriched = merge_person_candidates(
+        candidates=[matched, detail_candidate],
+        selected=matched,
+        title_hints=[],
+    )
+    enriched["_source"] = matched.get("_source")
+    enriched["_company_scope"] = matched.get("_company_scope")
+    enriched["linked_account_id"] = matched.get("linked_account_id")
+    enriched["linked_company_name"] = matched.get("linked_company_name")
+
+    result = dict(person_resolution)
+    result["matched"] = enriched
+    return result
+
+
+def select_person_detail_prospect_id(
+    person_name: str,
+    matched_person: Dict[str, Any],
+    candidate_people: List[Dict[str, Any]],
+) -> Optional[str]:
+    target_account_id = str(matched_person.get("linked_account_id") or "")
+    target_scope = str(matched_person.get("_company_scope") or "")
+
+    eligible: List[Dict[str, Any]] = []
+    for candidate in candidate_people:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_id = first_non_empty(candidate, ["contactId", "id"])
+        if not candidate_id:
+            continue
+        if not exact_name_equals(person_name, full_person_name(candidate)):
+            continue
+        candidate_account_id = str(candidate.get("linked_account_id") or "")
+        candidate_scope = str(candidate.get("_company_scope") or "")
+        if target_account_id and candidate_account_id and candidate_account_id != target_account_id:
+            continue
+        if target_scope and candidate_scope and candidate_scope != target_scope:
+            continue
+        eligible.append(candidate)
+
+    if not eligible:
+        return first_non_empty(matched_person, ["contactId", "id"])
+
+    def _sort_key(candidate: Dict[str, Any]) -> Tuple[int, int, int]:
+        source = str(candidate.get("_source") or "")
+        person_search_rank = 1 if source == "person_search" else 0
+        same_account_rank = 1 if str(candidate.get("linked_account_id") or "") == target_account_id else 0
+        source_rank = SOURCE_PRIORITY.get(source, 0)
+        return (person_search_rank, same_account_rank, source_rank)
+
+    selected = sorted(eligible, key=_sort_key, reverse=True)[0]
+    return str(first_non_empty(selected, ["contactId", "id"]) or "")
+
+
+def extract_person_detail_candidate(payload: Any) -> Optional[Dict[str, Any]]:
+    candidate_nodes: List[Dict[str, Any]] = []
+    if isinstance(payload, dict):
+        candidate_nodes.append(payload)
+        document = payload.get("document")
+        if isinstance(document, dict):
+            candidate_nodes.append(document)
+    elif isinstance(payload, list):
+        candidate_nodes.extend(to_list_dicts(payload))
+
+    for node in candidate_nodes:
+        record = parse_person_like_record(node)
+        if not record:
+            continue
+        record["id"] = first_non_empty(node, ["contactId", "id", "prospectId", "personId"]) or record.get("id")
+        record["accountId"] = first_non_empty(node, ["accountId", "sfdcAccountId"])
+        record["_source"] = "person_detail"
+        return record
+
+    for node in iter_dict_nodes(payload):
+        record = parse_person_like_record(node)
+        if not record:
+            continue
+        record["id"] = first_non_empty(node, ["contactId", "id", "prospectId", "personId"]) or record.get("id")
+        record["accountId"] = first_non_empty(node, ["accountId", "sfdcAccountId"])
+        record["_source"] = "person_detail"
+        return record
+
+    return None
 
 
 def extract_person_search_candidates(payload: Any) -> List[Dict[str, Any]]:
@@ -2368,20 +2496,39 @@ def extract_probe_recent_activity(probe_payloads: List[Dict[str, Any]]) -> List[
     for payload in probe_payloads:
         endpoint = str(payload.get("endpoint") or "probe")
         for node in iter_dict_nodes(payload.get("data")):
-            record = parse_recent_activity_record(node)
+            record = parse_recent_activity_record(node, endpoint=endpoint)
             if record:
                 record["source"] = f"probe:{endpoint}"
                 rows.append(record)
     return dedupe_simple_records(rows, keys=["type", "date", "description", "source"])
 
 
-def parse_recent_activity_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    activity_type = first_non_empty(node, ["activityType", "type", "eventType"])
-    activity_date = first_non_empty(node, ["activityDate", "date", "eventDate", "createdDate"])
-    description = first_non_empty(node, ["description", "activityDescription", "details", "summary"])
+def parse_recent_activity_record(node: Dict[str, Any], endpoint: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    endpoint_text = str(endpoint or "").lower()
+    is_scoop_endpoint = endpoint_text.endswith("/scoop")
+
+    activity_type = first_non_empty(
+        node,
+        ["activityType", "type", "eventType", "category", "scoopType", "headlineType"],
+    )
+    activity_date = first_non_empty(
+        node,
+        ["activityDate", "date", "eventDate", "createdDate", "publishedDate", "importedDate"],
+    )
+    description = first_non_empty(
+        node,
+        ["description", "activityDescription", "details", "summary", "headline", "title"],
+    )
 
     key_text = " ".join(str(key).lower() for key in node.keys())
-    if "activity" not in key_text and not first_non_empty(node, ["activityType", "activityDate"]):
+    has_recent_activity_signal = bool(
+        first_non_empty(node, ["activityType", "activityDate", "eventType", "eventDate"])
+    )
+    has_scoop_signal = bool(
+        is_scoop_endpoint
+        and first_non_empty(node, ["category", "publishedDate", "headline", "title", "description"])
+    )
+    if "activity" not in key_text and "scoop" not in key_text and not has_recent_activity_signal and not has_scoop_signal:
         return None
     if not any([activity_type, activity_date, description]):
         return None

@@ -283,7 +283,33 @@ def test_resolve_person_transition_merges_sparse_key_buyer_with_richer_person_se
     assert matched["lastUpdated"] == "2024-09-17"
 
 
-def test_run_stakeholder_case_uses_from_probe_data_for_person_and_relationships(monkeypatch) -> None:
+def test_probe_additional_endpoints_uses_har_backed_account_routes() -> None:
+    calls: list[tuple[str, dict | None]] = []
+
+    class FakeClient:
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            calls.append((endpoint, params))
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": [{"topic": "Technology Risk"}],
+            }
+
+    payloads, warnings = probe_additional_endpoints(
+        client=FakeClient(),
+        account_id="001-from",
+        zoom_info_account_id="9012358",
+    )
+
+    assert warnings == []
+    assert calls == [
+        ("/api/Intent", {"zoomInfoAccountId": "9012358"}),
+        ("/api/Scoop", {"zoomInfoAccountId": "9012358"}),
+    ]
+    assert [payload["endpoint"] for payload in payloads] == ["/api/Intent", "/api/Scoop"]
+
+
+def test_run_stakeholder_case_uses_har_backed_probe_data_and_person_detail(monkeypatch) -> None:
     to_account = sample_account()
     to_account.update(
         {
@@ -329,65 +355,89 @@ def test_run_stakeholder_case_uses_from_probe_data_for_person_and_relationships(
     def fake_collect_org_chart_people(client, zoom_info_account_id, department_hint):
         return [], [], []
 
-    def fake_probe_additional_endpoints(client, account_id, zoom_info_account_id):
-        if account_id != "001-from":
-            return [], []
-
-        return (
-            [
-                {
-                        "endpoint": "/api/userHistory",
-                        "params": {"accountId": account_id},
-                        "status_code": 200,
-                        "success": True,
-                        "data": {
-                            "PersonProfile": {
-                                "Name": "Jennifer Brady",
-                                "TitleExternal": "Senior Director, Technology Risk",
-                                "IsInSalesforce": True,
-                                "IsProtivitiAlumni": False,
-                                "HasRoberthalfContact": False,
-                                "PhotoUrl": "https://img.example.com/jennifer-brady.png",
-                                "LastUpdated": "2024-09-17",
-                            },
-                            "RecentActivities": [
-                                {
-                                    "ActivityType": "Profile View",
-                                    "ActivityDate": "2026-03-01",
-                                    "Description": "Viewed Jennifer Brady profile",
-                                }
-                            ],
-                            "IntentSignals": [
-                                {
-                                    "Topic": "Technology Risk",
-                                    "AudienceStrength": "High",
-                                    "SignalDate": "2026-03-01",
-                                }
-                            ],
-                            "InternalConnections": [
-                                {
-                                    "Name": "Taylor Smith",
-                                    "Title": "Managing Director, R&C-Risk, New York Office",
-                                    "LastConnected": "Other, Oct 2023",
-                                    "NumberOfInteractions": 1,
-                                }
-                            ],
-                        },
-                    }
-            ],
-            [],
-        )
-
     class FakeClient:
+        def __init__(self) -> None:
+            self.endpoint_calls: list[tuple[str, dict | None]] = []
+
         def search_prospects(self, search_text):
-            return {"success": True, "status_code": 200, "data": {"value": []}}
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "value": [
+                        {
+                            "document": {
+                                "contactId": "contact-123",
+                                "accountId": "001-from",
+                                "companyName": "Capital One Financial Corporation",
+                                "name": "Jennifer Brady",
+                                "title": "Senior Director of Technology Risk",
+                                "location": "Mclean, VA, United States",
+                            }
+                        }
+                    ]
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            self.endpoint_calls.append((endpoint, params))
+
+            if endpoint == "/api/Intent":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": [
+                        {
+                            "Topic": "Technology Risk",
+                            "AudienceStrength": "High",
+                            "SignalDate": "2026-03-01",
+                        }
+                    ],
+                }
+
+            if endpoint == "/api/Scoop":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": [
+                        {
+                            "Category": "Profile Update",
+                            "Description": "Viewed Jennifer Brady profile",
+                            "PublishedDate": "2026-03-01",
+                        }
+                    ],
+                }
+
+            if endpoint == "/api/prospects/contact-123":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "ContactId": "contact-123",
+                        "FirstName": "Jennifer",
+                        "LastName": "Brady",
+                        "Title": "Senior Director of Technology Risk",
+                        "TitleExternal": "Senior Director, Technology Risk",
+                        "IsInSalesforce": True,
+                        "IsProtivitiAlumni": False,
+                        "HasRoberthalfContact": False,
+                        "PhotoUrl": "https://img.example.com/jennifer-brady.png",
+                        "Phone": "555-0100",
+                        "LastUpdated": "2024-09-17",
+                        "PastJobExperience": ["Bank A"],
+                        "Education": ["University X"],
+                    },
+                }
+
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    client = FakeClient()
 
     monkeypatch.setattr(stakeholder_payload, "resolve_account_context", fake_resolve_account_context)
     monkeypatch.setattr(stakeholder_payload, "collect_org_chart_people", fake_collect_org_chart_people)
-    monkeypatch.setattr(stakeholder_payload, "probe_additional_endpoints", fake_probe_additional_endpoints)
 
     result = run_stakeholder_case(
-        client=FakeClient(),
+        client=client,
         person="Jennifer Brady",
         from_company="Capital One",
         to_company="Fannie Mae",
@@ -406,16 +456,9 @@ def test_run_stakeholder_case_uses_from_probe_data_for_person_and_relationships(
     assert profile["protiviti_alumni"] is False
     assert profile["contact_at_robert_half"] is False
     assert profile["photo_url"] == "https://img.example.com/jennifer-brady.png"
-
-    from_relationships = result["transition_payload"]["from_company_context"]["relationship_network"]
-    assert {
-        "name": "Taylor Smith",
-        "employer": None,
-        "title": "Managing Director, R&C-Risk, New York Office",
-        "last_connected_method": "Other",
-        "last_connected_date": "Oct 2023",
-        "number_of_interactions": 1,
-    } in from_relationships["connected_colleagues"]["items"]
+    assert profile["phone"] == "555-0100"
+    assert profile["past_job_experience"] == ["Bank A"]
+    assert profile["education"] == ["University X"]
 
     from_optional = result["transition_payload"]["optional_sections"]["from_company"]
     assert from_optional["intent_signals"] == [
@@ -423,17 +466,18 @@ def test_run_stakeholder_case_uses_from_probe_data_for_person_and_relationships(
             "topic": "Technology Risk",
             "strength": "High",
             "date": "2026-03-01",
-            "source": "probe:/api/userHistory",
+            "source": "probe:/api/Intent",
         }
     ]
     assert from_optional["recent_activity"] == [
         {
-            "type": "Profile View",
+            "type": "Profile Update",
             "date": "2026-03-01",
             "description": "Viewed Jennifer Brady profile",
-            "source": "probe:/api/userHistory",
+            "source": "probe:/api/Scoop",
         }
     ]
+    assert ("/api/prospects/contact-123", None) in client.endpoint_calls
 
 
 def test_summarize_probe_payloads_surfaces_top_level_keys_and_node_paths() -> None:
@@ -531,5 +575,5 @@ def test_probe_additional_endpoints_warns_when_probe_returns_proconnect_html_she
         zoom_info_account_id="9012358",
     )
 
-    assert len(payloads) == 9
+    assert len(payloads) == 2
     assert any("returned ProConnect app HTML instead of JSON" in warning for warning in warnings)
