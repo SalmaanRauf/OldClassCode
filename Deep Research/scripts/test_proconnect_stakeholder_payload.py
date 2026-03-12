@@ -8,6 +8,8 @@ THIS_DIR = Path(__file__).resolve().parent
 if str(THIS_DIR) not in sys.path:
     sys.path.insert(0, str(THIS_DIR))
 
+import proconnect_stakeholder_payload as stakeholder_payload  # noqa: E402
+
 from proconnect_stakeholder_payload import (  # noqa: E402
     build_account_context,
     build_from_company_context_lite,
@@ -16,6 +18,7 @@ from proconnect_stakeholder_payload import (  # noqa: E402
     build_person_profile_transition,
     build_projects_section,
     resolve_person_transition,
+    run_stakeholder_case,
 )
 
 
@@ -276,3 +279,156 @@ def test_resolve_person_transition_merges_sparse_key_buyer_with_richer_person_se
     assert matched["pastJobExperience"] == ["Bank A"]
     assert matched["education"] == ["University X"]
     assert matched["lastUpdated"] == "2024-09-17"
+
+
+def test_run_stakeholder_case_uses_from_probe_data_for_person_and_relationships(monkeypatch) -> None:
+    to_account = sample_account()
+    to_account.update(
+        {
+            "id": "001-to",
+            "name": "Federal National Mortgage Association (Fannie Mae)",
+            "zoomInfoAccountId": "72074644",
+            "websiteUrl": "www.fanniemae.com",
+            "tickerSymbol": "FNMA",
+            "shortName": "Fannie Mae",
+            "hubId": "hub-to",
+            "project": [],
+            "allOpportunity": [],
+            "keyBuyers": [],
+            "protivitiAlumni": [],
+            "connectedColleague": [],
+        }
+    )
+    from_account = sample_account()
+    from_account.update({"id": "001-from", "zoomInfoAccountId": "9012358"})
+
+    def fake_resolve_account_context(client, company_name, key_person_name, account_id_override, label, required):
+        account = to_account if label == "To company" else from_account
+        return {
+            "resolution": {
+                "query": company_name,
+                "search_status_code": 200,
+                "search_success": True,
+                "candidate_count": 1,
+                "candidates": [{"accountId": account["id"], "name": account["name"]}],
+                "selected_candidate": {"accountId": account["id"], "name": account["name"]},
+                "selected_score": 1.0,
+                "account_fetch_status_code": 200,
+                "resolved_account": True,
+                "account_id_override": False,
+            },
+            "account": account,
+            "checks": [],
+            "warnings": [],
+            "errors": [],
+            "auth_failure": False,
+        }
+
+    def fake_collect_org_chart_people(client, zoom_info_account_id, department_hint):
+        return [], [], []
+
+    def fake_probe_additional_endpoints(client, account_id, zoom_info_account_id):
+        if account_id != "001-from":
+            return [], []
+
+        return (
+            [
+                {
+                    "endpoint": "/api/userHistory",
+                    "params": {"accountId": account_id},
+                    "status_code": 200,
+                    "success": True,
+                    "data": {
+                        "personProfile": {
+                            "name": "Jennifer Brady",
+                            "titleExternal": "Senior Director, Technology Risk",
+                            "isInSalesforce": True,
+                            "isProtivitiAlumni": False,
+                            "hasRoberthalfContact": False,
+                            "photoUrl": "https://img.example.com/jennifer-brady.png",
+                            "lastUpdated": "2024-09-17",
+                        },
+                        "recentActivities": [
+                            {
+                                "activityType": "Profile View",
+                                "activityDate": "2026-03-01",
+                                "description": "Viewed Jennifer Brady profile",
+                            }
+                        ],
+                        "intentSignals": [
+                            {
+                                "topic": "Technology Risk",
+                                "intentStrength": "High",
+                                "intentDate": "2026-03-01",
+                            }
+                        ],
+                        "internalConnections": [
+                            {
+                                "name": "Taylor Smith",
+                                "title": "Managing Director, R&C-Risk, New York Office",
+                                "lastConnected": "Other, Oct 2023",
+                                "numberOfInteractions": 1,
+                            }
+                        ],
+                    },
+                }
+            ],
+            [],
+        )
+
+    class FakeClient:
+        def search_prospects(self, search_text):
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+    monkeypatch.setattr(stakeholder_payload, "resolve_account_context", fake_resolve_account_context)
+    monkeypatch.setattr(stakeholder_payload, "collect_org_chart_people", fake_collect_org_chart_people)
+    monkeypatch.setattr(stakeholder_payload, "probe_additional_endpoints", fake_probe_additional_endpoints)
+
+    result = run_stakeholder_case(
+        client=FakeClient(),
+        person="Jennifer Brady",
+        from_company="Capital One",
+        to_company="Fannie Mae",
+        department_hint="C-Suite",
+        from_account_id_override=None,
+        to_account_id_override=None,
+        research_inputs=None,
+        enable_probes=True,
+    )
+
+    profile = result["transition_payload"]["person_profile"]
+    assert profile["match_status"] == "matched"
+    assert profile["last_updated"] == "2024-09-17"
+    assert profile["title_external"] == "Senior Director, Technology Risk"
+    assert profile["in_salesforce"] is True
+    assert profile["protiviti_alumni"] is False
+    assert profile["contact_at_robert_half"] is False
+    assert profile["photo_url"] == "https://img.example.com/jennifer-brady.png"
+
+    from_relationships = result["transition_payload"]["from_company_context"]["relationship_network"]
+    assert {
+        "name": "Taylor Smith",
+        "employer": None,
+        "title": "Managing Director, R&C-Risk, New York Office",
+        "last_connected_method": "Other",
+        "last_connected_date": "Oct 2023",
+        "number_of_interactions": 1,
+    } in from_relationships["connected_colleagues"]["items"]
+
+    from_optional = result["transition_payload"]["optional_sections"]["from_company"]
+    assert from_optional["intent_signals"] == [
+        {
+            "topic": "Technology Risk",
+            "strength": "High",
+            "date": "2026-03-01",
+            "source": "probe:/api/userHistory",
+        }
+    ]
+    assert from_optional["recent_activity"] == [
+        {
+            "type": "Profile View",
+            "date": "2026-03-01",
+            "description": "Viewed Jennifer Brady profile",
+            "source": "probe:/api/userHistory",
+        }
+    ]

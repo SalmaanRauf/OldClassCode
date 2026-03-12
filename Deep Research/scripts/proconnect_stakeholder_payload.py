@@ -198,6 +198,7 @@ def run_stakeholder_case(
     )
 
     to_probe_payloads: List[Dict[str, Any]] = []
+    from_probe_payloads: List[Dict[str, Any]] = []
     if enable_probes:
         to_probe_payloads, to_probe_warnings = probe_additional_endpoints(
             client=client,
@@ -205,6 +206,13 @@ def run_stakeholder_case(
             zoom_info_account_id=get_zoom_info_account_id(to_account),
         )
         warnings.extend(to_probe_warnings)
+        if from_account:
+            from_probe_payloads, from_probe_warnings = probe_additional_endpoints(
+                client=client,
+                account_id=from_account_id or None,
+                zoom_info_account_id=get_zoom_info_account_id(from_account),
+            )
+            warnings.extend(from_probe_warnings)
 
     to_account_context = build_account_context(to_account)
     to_projects = build_projects_section(to_account)
@@ -252,7 +260,7 @@ def run_stakeholder_case(
     if destination_core_missing:
         errors.append(f"Destination core sections missing: {', '.join(destination_core_missing)}")
 
-    from_context = build_from_company_context_lite(from_account)
+    from_context = build_from_company_context_lite(from_account, probe_payloads=from_probe_payloads)
     if from_account:
         checks.append(
             {
@@ -309,7 +317,7 @@ def run_stakeholder_case(
         company_scope="from",
         account_id=from_account_id,
         org_chart_people=[],
-        probe_payloads=[],
+        probe_payloads=from_probe_payloads,
     )
     search_people = normalize_person_search_candidates(
         person_search_candidates,
@@ -389,7 +397,7 @@ def run_stakeholder_case(
 
     optional_sections = {
         "to_company": extract_optional_sections(to_account, to_probe_payloads),
-        "from_company": extract_optional_sections(from_account, []),
+        "from_company": extract_optional_sections(from_account, from_probe_payloads),
     }
 
     transition_payload.update(
@@ -405,7 +413,10 @@ def run_stakeholder_case(
                 "key_buyers": to_key_buyers,
                 "org_chart": {"items": to_org_chart_items},
                 "technologies": {"items": to_technologies},
-                "relationship_network": build_relationship_network_section(to_account),
+                "relationship_network": build_relationship_network_section(
+                    to_account,
+                    probe_payloads=to_probe_payloads,
+                ),
             },
             "movement_evidence": movement_evidence,
             "optional_sections": optional_sections,
@@ -414,7 +425,7 @@ def run_stakeholder_case(
 
     transition_payload["provenance"] = build_transition_provenance(
         transition_payload=transition_payload,
-        to_probe_payloads=to_probe_payloads,
+        probe_payloads=to_probe_payloads + from_probe_payloads,
     )
     transition_payload["confidence"] = build_transition_confidence(
         transition_payload=transition_payload,
@@ -753,8 +764,26 @@ def default_transition_payload(
             "transition_summary": {},
         },
         "optional_sections": {
-            "to_company": {},
-            "from_company": {},
+            "to_company": {
+                "competitors": [],
+                "partners": [],
+                "social_urls": [],
+                "marketing_signals": [],
+                "internal_connections": [],
+                "intent_signals": [],
+                "recent_activity": [],
+                "probe_endpoint_statuses": [],
+            },
+            "from_company": {
+                "competitors": [],
+                "partners": [],
+                "social_urls": [],
+                "marketing_signals": [],
+                "internal_connections": [],
+                "intent_signals": [],
+                "recent_activity": [],
+                "probe_endpoint_statuses": [],
+            },
         },
         "research_inputs": research_inputs,
         "provenance": {},
@@ -892,9 +921,15 @@ def build_connected_colleague_items(account: Optional[Dict[str, Any]]) -> List[D
     return dedupe_simple_records(rows, keys=["name", "employer", "title", "last_connected_date"])
 
 
-def build_relationship_network_section(account: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build_relationship_network_section(
+    account: Optional[Dict[str, Any]],
+    probe_payloads: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     protiviti_alumni = build_protiviti_alumni_items(account)
-    connected_colleagues = build_connected_colleague_items(account)
+    connected_colleagues = dedupe_simple_records(
+        build_connected_colleague_items(account) + extract_probe_internal_connection_items(probe_payloads or []),
+        keys=["name", "employer", "title", "last_connected_date"],
+    )
     relationship_routes: List[str] = []
     if protiviti_alumni:
         relationship_routes.append("protiviti_alumni")
@@ -1105,7 +1140,10 @@ def build_key_buyers_section(account: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build_from_company_context_lite(account: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def build_from_company_context_lite(
+    account: Optional[Dict[str, Any]],
+    probe_payloads: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     if not account:
         return default_transition_payload("", "", "", normalize_research_inputs(None))["from_company_context"]
 
@@ -1119,7 +1157,7 @@ def build_from_company_context_lite(account: Optional[Dict[str, Any]]) -> Dict[s
         key=lambda item: (to_int(item.get("wins_5y")) or 0, str(item.get("name") or "")),
         reverse=True,
     )
-    relationship_network = build_relationship_network_section(account)
+    relationship_network = build_relationship_network_section(account, probe_payloads=probe_payloads or [])
 
     return {
         "account_header": {
@@ -1135,15 +1173,16 @@ def build_from_company_context_lite(account: Optional[Dict[str, Any]]) -> Dict[s
         "historical_solution_footprint": {
             "total_projects": projects.get("total_projects") or 0,
             "total_all_opportunities": to_int(account.get("numberOfAllOpportunity")) or len(opportunities.get("items", [])),
-            "total_open_opportunities": to_int(account.get("numberOfOpenOpportunity")) or len(to_list_dicts(account.get("openOpportunity"))),
+            "total_open_opportunities": to_int(account.get("numberOfOpenOpportunity"))
+            or len(to_list_dicts(account.get("openOpportunity"))),
             "solutions_list_5y": projects.get("solutions_list", []),
             "most_recent_engagement_date": latest_engagement_date(account),
         },
         "top_key_buyers": ranked_buyers[:5],
         "prior_relationship_indicators": {
             "key_buyer_count": len(key_buyers.get("items", [])),
-            "has_protiviti_alumni": bool(to_list_dicts(account.get("protivitiAlumni"))),
-            "has_connected_colleague": bool(to_list_dicts(account.get("connectedColleague"))),
+            "has_protiviti_alumni": bool((relationship_network.get("protiviti_alumni") or {}).get("items")),
+            "has_connected_colleague": bool((relationship_network.get("connected_colleagues") or {}).get("items")),
             "warm_intro_path_available": relationship_network.get("warm_intro_path_available", False),
             "relationship_routes": relationship_network.get("relationship_routes", []),
             "notes": [
@@ -1877,7 +1916,7 @@ def extract_probe_people(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str,
 
 def build_transition_provenance(
     transition_payload: Dict[str, Any],
-    to_probe_payloads: List[Dict[str, Any]],
+    probe_payloads: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     to_context = transition_payload.get("to_company_context") or {}
     from_context = transition_payload.get("from_company_context") or {}
@@ -1913,7 +1952,7 @@ def build_transition_provenance(
         },
         "probe_summary": {
             "source": "proconnect_probes",
-            "status": "present" if to_probe_payloads else "missing",
+            "status": "present" if probe_payloads else "missing",
             "confidence": 1.0,
         },
     }
@@ -2004,6 +2043,9 @@ def extract_optional_sections(account: Optional[Dict[str, Any]], probe_payloads:
             "partners": [],
             "social_urls": [],
             "marketing_signals": [],
+            "internal_connections": [],
+            "intent_signals": [],
+            "recent_activity": [],
             "probe_endpoint_statuses": [
                 {
                     "endpoint": payload.get("endpoint"),
@@ -2018,12 +2060,18 @@ def extract_optional_sections(account: Optional[Dict[str, Any]], probe_payloads:
     partners = extract_company_nodes(account, include_terms=["partner"], site_key="website")
     social_urls = extract_social_urls(account)
     marketing_signals = extract_marketing_signals(account)
+    internal_connections = extract_probe_internal_connection_items(probe_payloads)
+    intent_signals = extract_probe_intent_signals(probe_payloads)
+    recent_activity = extract_probe_recent_activity(probe_payloads)
 
     return {
         "competitors": competitors,
         "partners": partners,
         "social_urls": social_urls,
         "marketing_signals": marketing_signals,
+        "internal_connections": internal_connections,
+        "intent_signals": intent_signals,
+        "recent_activity": recent_activity,
         "probe_endpoint_statuses": [
             {
                 "endpoint": payload.get("endpoint"),
@@ -2101,6 +2149,129 @@ def extract_marketing_signals(account: Dict[str, Any]) -> List[Dict[str, Any]]:
         signals.append({"signal": "campaigns", "count": len(campaigns)})
 
     return signals
+
+
+def extract_probe_internal_connection_items(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for payload in probe_payloads:
+        for node in iter_dict_nodes(payload.get("data")):
+            record = parse_internal_connection_record(node)
+            if record:
+                rows.append(record)
+    return dedupe_simple_records(rows, keys=["name", "employer", "title", "last_connected_date"])
+
+
+def parse_internal_connection_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    name = first_non_empty(node, ["name", "person", "employeeName", "internalEmployeeName", "fullName"])
+    if not name:
+        return None
+
+    has_connection_signal = bool(
+        first_non_empty(
+            node,
+            [
+                "lastConnected",
+                "lastConnectedMethod",
+                "lastConnectionMethod",
+                "lastInteractionMethod",
+                "lastConnectedDate",
+                "lastConnectionDate",
+                "lastInteractionDate",
+                "numberOfInteractions",
+                "interactionCount",
+            ],
+        )
+    )
+    if not has_connection_signal:
+        return None
+
+    last_connected = first_non_empty(node, ["lastConnected"])
+    last_connected_method = first_non_empty(
+        node,
+        ["lastConnectedMethod", "lastConnectionMethod", "lastInteractionMethod"],
+    )
+    last_connected_date = first_non_empty(
+        node,
+        ["lastConnectedDate", "lastConnectionDate", "lastInteractionDate"],
+    )
+
+    if isinstance(last_connected, str) and "," in last_connected:
+        left, right = [part.strip() for part in last_connected.split(",", 1)]
+        last_connected_method = last_connected_method or left or None
+        last_connected_date = last_connected_date or right or None
+    elif isinstance(last_connected, str):
+        last_connected_date = last_connected_date or last_connected.strip() or None
+
+    return {
+        "name": str(name).strip(),
+        "employer": first_non_empty(node, ["companyName", "employer", "company"]),
+        "title": first_non_empty(node, ["title", "role"]),
+        "last_connected_method": last_connected_method,
+        "last_connected_date": last_connected_date,
+        "number_of_interactions": to_int(
+            first_non_empty(node, ["numberOfInteractions", "interactionCount", "interactionsCount"])
+        ),
+    }
+
+
+def extract_probe_intent_signals(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for payload in probe_payloads:
+        endpoint = str(payload.get("endpoint") or "probe")
+        for node in iter_dict_nodes(payload.get("data")):
+            record = parse_intent_signal_record(node)
+            if record:
+                record["source"] = f"probe:{endpoint}"
+                rows.append(record)
+    return dedupe_simple_records(rows, keys=["topic", "strength", "date", "source"])
+
+
+def parse_intent_signal_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    topic = first_non_empty(node, ["topic", "intentTopic", "signalTopic", "name"])
+    strength = first_non_empty(node, ["intentStrength", "strength", "intentScore", "score"])
+    signal_date = first_non_empty(node, ["intentDate", "signalDate", "date", "createdDate"])
+
+    key_text = " ".join(str(key).lower() for key in node.keys())
+    if "intent" not in key_text and not first_non_empty(node, ["intentStrength", "intentScore", "intentDate"]):
+        return None
+    if not topic:
+        return None
+
+    return {
+        "topic": str(topic).strip(),
+        "strength": strength,
+        "date": signal_date,
+    }
+
+
+def extract_probe_recent_activity(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for payload in probe_payloads:
+        endpoint = str(payload.get("endpoint") or "probe")
+        for node in iter_dict_nodes(payload.get("data")):
+            record = parse_recent_activity_record(node)
+            if record:
+                record["source"] = f"probe:{endpoint}"
+                rows.append(record)
+    return dedupe_simple_records(rows, keys=["type", "date", "description", "source"])
+
+
+def parse_recent_activity_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    activity_type = first_non_empty(node, ["activityType", "type", "eventType"])
+    activity_date = first_non_empty(node, ["activityDate", "date", "eventDate", "createdDate"])
+    description = first_non_empty(node, ["description", "activityDescription", "details", "summary"])
+
+    key_text = " ".join(str(key).lower() for key in node.keys())
+    if "activity" not in key_text and not first_non_empty(node, ["activityType", "activityDate"]):
+        return None
+    if not any([activity_type, activity_date, description]):
+        return None
+
+    return {
+        "type": activity_type,
+        "date": activity_date,
+        "description": description,
+    }
 
 
 def normalize_research_inputs(value: Optional[Dict[str, Any]]) -> Dict[str, Any]:
