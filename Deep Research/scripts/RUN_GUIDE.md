@@ -31,6 +31,12 @@ Set-Content -Path .\token.txt -Value 'PASTE_RAW_JWT_HERE' -NoNewline
 py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --department "C-Suite" --token-file ".\token.txt"
 ```
 
+Expected result for this patch:
+
+- `Exact person match` stays `PASS`
+- `PERSON PROFILE` should now keep the correct match and also backfill richer fields when ProConnect search returns them
+- `last_updated`, `location`, `in_salesforce`, `function`, `level`, and other person fields should no longer stay blank if they exist on the matched search record
+
 ## 4) Only if needed: rerun with a real destination account override
 
 Use this only if you know the real Fannie Mae account id value.
@@ -69,6 +75,8 @@ $j.pass_fail.checks | Select-Object check,status,http,details | Format-Table -Wr
 $j.transition_payload.movement_event | Format-List
 "\nPERSON PROFILE:"
 $j.transition_payload.person_profile | Format-List
+"\nPERSON MATCH EVIDENCE:"
+$j.transition_payload.movement_evidence.person_match | Format-List
 "\nFROM COMPANY CONTEXT:"
 $j.transition_payload.from_company_context | Format-List
 "\nFROM COMPANY ACCOUNT TEAM:"
