@@ -35,12 +35,12 @@ py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Ca
 Expected result for this patch:
 
 - `Exact person match` stays `PASS`
-- `PERSON PROFILE` should now keep the correct match and also backfill richer fields from source-side probe data even when ProConnect returns PascalCase field names
-- `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, and `photo_url` should populate if they are present in ProConnect
-- `FROM COMPANY RELATIONSHIP NETWORK` can now include probe-discovered internal connections
-- `optional_sections.from_company` and `optional_sections.to_company` can now surface `intent_signals` and `recent_activity`
-- `probe_payload_shapes` now captures a lightweight summary of raw probe response structure, including `raw_text_preview` when the endpoint returns plain text instead of JSON
-- If warnings say `returned ProConnect app HTML instead of JSON`, that means the current probe route guess hit the ProConnect web shell and not a real backend data route
+- `PERSON PROFILE` should now keep the correct match and also backfill richer fields from the real `/api/prospects/{id}` detail route
+- `last_updated`, `title_external`, `in_salesforce`, `protiviti_alumni`, `contact_at_robert_half`, `photo_url`, `phone`, `past_job_experience`, and `education` should populate if they are present in ProConnect
+- `optional_sections.from_company` and `optional_sections.to_company` should now surface `intent_signals` from `/api/Intent`
+- `optional_sections.from_company` and `optional_sections.to_company` should now surface `recent_activity` from `/api/Scoop`
+- the `HTTP (last 10)` block should now include `/api/Intent`, `/api/Scoop`, and `/api/prospects/{id}`
+- warnings about `/api/taggedrelationships`, `/api/relationshiplead`, or `/api/userHistory` returning ProConnect HTML should be gone on the latest files
 
 ## 4) Only if needed: rerun with a real destination account override
 
@@ -166,9 +166,15 @@ $j.scenario_results | ForEach-Object {
 } | Format-Table -Wrap -AutoSize
 ```
 
-## 9) If HTML-shell probe warnings appear, capture one HAR and inspect the real routes
+## 9) Only if needed: capture one HAR and inspect the real routes
 
-Only do this if the run prints warnings like `returned ProConnect app HTML instead of JSON`.
+The current harness already uses the discovered real routes:
+
+- `/api/Intent`
+- `/api/Scoop`
+- `/api/prospects/{id}`
+
+Only do this if you are still missing fields after pulling latest `main`, or if a future run shows a new HTML-shell warning.
 
 Browser steps:
 
@@ -219,5 +225,6 @@ py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capit
 - `HTTP 400` on `/api/accounts/...`: bad account id override.
 - `CommandNotFoundException` with `py.\script.py`: missing space. Use `py .\script.py`.
 - Repeated org chart `500` warnings are currently non-blocking and can still result in an expected overall `WARN`.
+- warnings mentioning `/api/taggedrelationships`, `/api/relationshiplead`, or `/api/userHistory`: you are running stale files on the Windows box; pull latest `main` before debugging anything else.
 - `returned ProConnect app HTML instead of JSON`: the route is not a usable JSON API in this environment; run the HAR capture step above so we can discover the actual backend route.
 - `FileNotFoundError` from `proconnect_har_inspector.py`: check the exact saved filename with the `Get-ChildItem` block above. Common cause is Notepad saving `*.har.txt`.
