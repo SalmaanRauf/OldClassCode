@@ -1,6 +1,7 @@
 from __future__ import annotations
 import sys
 from pathlib import Path
+from dataclasses import asdict, is_dataclass
 
 
 
@@ -30,6 +31,35 @@ from tools.task_executor import task_executor
 from tools.response_formatter import response_formatter
 from services.company_profiles import load_company_profiles
 from services.prompt_generator import get_prompt_generator, ResearchParameters
+from services.transition_form_mapper import (
+    TRANSITION_ARTIFACTS_SESSION_KEY,
+    TRANSITION_EDIT_PENDING_SESSION_KEY,
+    TRANSITION_PREFLIGHT_SESSION_KEY,
+    TRANSITION_PROMPT_SESSION_KEY,
+    TRANSITION_PROMPT_OVERRIDE_SESSION_KEY,
+    TRANSITION_REQUEST_SESSION_KEY,
+    build_transition_form_props,
+    build_transition_request_from_form_response,
+    load_transition_request_session,
+    persist_transition_request_session,
+)
+from services.transition_brief_formatter import (
+    build_transition_artifacts,
+    build_transition_brief,
+    format_transition_brief_markdown,
+)
+from services.transition_playbook_orchestrator import TransitionPlaybookOrchestrator
+from services.transition_presenter import (
+    ACTION_ADJUST_TRANSITION,
+    ACTION_EDIT_PROMPT,
+    ACTION_RUN_RESEARCH,
+    ACTION_VIEW_ARTIFACT,
+    ACTION_VIEW_PROMPT,
+    build_transition_brief_payload,
+    build_transition_preflight_review,
+    build_transition_progress_content,
+)
+from services.transition_prompt_builder import TransitionPromptPackage
 
 # BD Analysis enrichment (auto-runs after Deep Research)
 from services.bd_orchestrator import BDOrchestrator
@@ -48,6 +78,7 @@ INDUSTRY_PROMPT_SESSION_KEY = "industry_prompt"
 RESEARCH_PARAMS_SESSION_KEY = "research_params"
 DEFAULT_MODE = "standard"
 DEFAULT_INDUSTRY = "general"
+TRANSITION_MODE = "transition"
 BD_TRACES_DIR = Path(__file__).parent.parent / "traces"
 
 # --- Input validation helpers ---
@@ -278,6 +309,148 @@ def _extract_structured_source_urls(response: Dict[str, Any]) -> List[str]:
 def _format_bd_report_as_section(report: MDReport) -> Optional[Dict[str, Any]]:
     """Format MDReport as a section dict for present_enhanced_response."""
     return format_bd_report_as_section(report)
+
+
+def _dump_model(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if hasattr(value, "dict"):
+        return value.dict()
+    if is_dataclass(value):
+        return asdict(value)
+    return value
+
+
+def _load_transition_preflight() -> Optional[Any]:
+    payload = cl.user_session.get(TRANSITION_PREFLIGHT_SESSION_KEY)
+    if not payload:
+        return None
+    from models.transition_schemas import TransitionPreflight
+
+    if isinstance(payload, TransitionPreflight):
+        return payload
+    if hasattr(TransitionPreflight, "model_validate"):
+        return TransitionPreflight.model_validate(payload)
+    return TransitionPreflight.parse_obj(payload)
+
+
+def _load_transition_prompt_package() -> Optional[TransitionPromptPackage]:
+    payload = cl.user_session.get(TRANSITION_PROMPT_SESSION_KEY)
+    if not payload:
+        return None
+    if isinstance(payload, TransitionPromptPackage):
+        return payload
+    return TransitionPromptPackage(
+        industry_key=str(payload.get("industry_key") or DEFAULT_INDUSTRY),
+        system_prompt=str(payload.get("system_prompt") or ""),
+        user_prompt=str(payload.get("user_prompt") or ""),
+    )
+
+
+def _persist_transition_prompt_package(prompt_package: TransitionPromptPackage) -> Dict[str, Any]:
+    payload = _dump_model(prompt_package)
+    cl.user_session.set(TRANSITION_PROMPT_SESSION_KEY, payload)
+    return payload
+
+
+def _get_transition_orchestrator() -> TransitionPlaybookOrchestrator:
+    orchestrator = cl.user_session.get("transition_playbook_orchestrator")
+    if orchestrator is None:
+        orchestrator = TransitionPlaybookOrchestrator()
+        cl.user_session.set("transition_playbook_orchestrator", orchestrator)
+    return orchestrator
+
+
+def _build_transition_progress_callback(progress_msg: cl.Message, request_payload: Dict[str, Any]):
+    events: List[Dict[str, Any]] = []
+
+    async def _progress_callback(event: Dict[str, Any]):
+        try:
+            events.append(dict(event))
+            progress_msg.content = build_transition_progress_content(request_payload, events)
+            await progress_msg.update()
+        except Exception as exc:
+            logger.warning("Transition progress callback error: %s", exc)
+
+    return events, _progress_callback
+
+
+async def _run_transition_preflight_flow(request) -> None:
+    progress_msg = cl.Message(content="**Transition Playbook**\n\nInitializing validation...")
+    await progress_msg.send()
+
+    request_payload = _dump_model(request)
+    events, progress_cb = _build_transition_progress_callback(progress_msg, request_payload)
+    try:
+        orchestrator = _get_transition_orchestrator()
+        preflight = await orchestrator.build_preflight(request, progress_cb=progress_cb)
+        prompt_package = _load_transition_prompt_package()
+        if not prompt_package:
+            from services.transition_prompt_builder import TransitionPromptBuilder
+
+            prompt_package = TransitionPromptBuilder().build(preflight)
+
+        cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, _dump_model(preflight))
+        _persist_transition_prompt_package(prompt_package)
+        cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
+        cl.user_session.set(TRANSITION_ARTIFACTS_SESSION_KEY, {})
+        cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, None)
+
+        if events:
+            progress_msg.content = build_transition_progress_content(request_payload, events)
+            await progress_msg.update()
+
+        await present_transition_preflight_review(preflight, prompt_package)
+    except Exception as exc:
+        logger.exception("Transition preflight failed: %s", exc)
+        progress_msg.content = "**Transition Playbook**\n\nValidation failed."
+        await progress_msg.update()
+        await cl.Message(
+            "Transition validation failed. Check the backend ProConnect token and try again."
+        ).send()
+
+
+async def _run_transition_research_flow() -> None:
+    request = load_transition_request_session(cl.user_session)
+    if not request:
+        await cl.Message("No transition scenario is loaded. Re-open the transition form first.").send()
+        return
+
+    progress_msg = cl.Message(content="**Transition Playbook**\n\nStarting research run...")
+    await progress_msg.send()
+
+    request_payload = _dump_model(request)
+    events, progress_cb = _build_transition_progress_callback(progress_msg, request_payload)
+    prompt_override = cl.user_session.get(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY)
+
+    try:
+        orchestrator = _get_transition_orchestrator()
+        result = await orchestrator.run_transition_playbook(
+            request,
+            progress_cb=progress_cb,
+            prompt_override=prompt_override,
+        )
+        cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, _dump_model(result.preflight))
+        _persist_transition_prompt_package(result.prompt_package)
+
+        brief = build_transition_brief(result)
+        artifacts = build_transition_artifacts(result)
+        cl.user_session.set(TRANSITION_ARTIFACTS_SESSION_KEY, artifacts)
+
+        if events:
+            progress_msg.content = build_transition_progress_content(request_payload, events)
+            await progress_msg.update()
+
+        await present_transition_brief(brief)
+    except Exception as exc:
+        logger.exception("Transition research flow failed: %s", exc)
+        progress_msg.content = "**Transition Playbook**\n\nResearch run failed."
+        await progress_msg.update()
+        await cl.Message(
+            "Transition research failed. Confirm the Deep Research environment and ProConnect token, then retry."
+        ).send()
 
 # --- Enhanced system integration ---
 
@@ -731,7 +904,7 @@ async def start():
         await cl.Message(welcome_msg).send()
 
         current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY)
-        if current_mode not in {"standard", "deep"}:
+        if current_mode not in {"standard", "deep", TRANSITION_MODE}:
             current_mode = "deep" if AppConfig.ENABLE_DEEP_RESEARCH else DEFAULT_MODE
             cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, current_mode)
         logger.info(
@@ -762,6 +935,11 @@ async def start():
                     label="Deep Research (slower)",
                     payload={"mode": "deep"},
                 ),
+                cl.Action(
+                    name="set_mode",
+                    label="Transition Playbook",
+                    payload={"mode": TRANSITION_MODE},
+                ),
             ]
             await cl.Message(
                 content="**Step 1:** Select research mode:",
@@ -789,7 +967,7 @@ async def update_mode(action: cl.Action):
         selected,
         session_id,
     )
-    if selected == "deep" and not AppConfig.ENABLE_DEEP_RESEARCH:
+    if selected in {"deep", TRANSITION_MODE} and not AppConfig.ENABLE_DEEP_RESEARCH:
         await cl.Message("Deep Research is not enabled in this environment.").send()
         cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
         return
@@ -800,12 +978,17 @@ async def update_mode(action: cl.Action):
         session_id,
         cl.user_session.get(DEEP_RESEARCH_SESSION_KEY),
     )
-    label = "Deep Research" if selected == "deep" else "Standard Analysis"
+    label = {
+        "deep": "Deep Research",
+        TRANSITION_MODE: "Transition Playbook",
+    }.get(selected, "Standard Analysis")
     await cl.Message(f"✓ Mode: **{label}**").send()
     
     # If Deep Research mode selected, show the research parameters form
     if selected == "deep":
         await show_research_form()
+    elif selected == TRANSITION_MODE:
+        await show_transition_form()
 
 
 async def show_research_form():
@@ -872,6 +1055,77 @@ async def show_research_form():
         await cl.Message("Form cancelled or timed out. You can type your research question directly.").send()
 
 
+async def show_transition_form():
+    """Show the transition playbook intake form using CustomElement."""
+    from services.prompt_loader import PromptLoader
+
+    loader = PromptLoader()
+    industries = loader.get_available_industries()
+    industry_options = [
+        {"value": key, "label": meta["display_name"]}
+        for key, meta in industries.items()
+    ]
+
+    request = load_transition_request_session(cl.user_session)
+    props = build_transition_form_props(industry_options=industry_options)
+    if request:
+        props.update(_dump_model(request))
+
+    form_element = cl.CustomElement(
+        name="TransitionForm",
+        display="inline",
+        props=props,
+    )
+
+    response = await cl.AskElementMessage(
+        content="**Configure the transition scenario below:**",
+        element=form_element,
+        timeout=300,
+    ).send()
+
+    if response and response.get("submitted"):
+        request = build_transition_request_from_form_response(response)
+        persist_transition_request_session(cl.user_session, request)
+        cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, None)
+        cl.user_session.set(TRANSITION_PROMPT_SESSION_KEY, None)
+        cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, None)
+        cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
+        cl.user_session.set(TRANSITION_ARTIFACTS_SESSION_KEY, {})
+        await _run_transition_preflight_flow(request)
+    else:
+        await cl.Message("Transition form cancelled or timed out.").send()
+
+
+async def present_transition_preflight_review(preflight, prompt_package):
+    """Render the compact transition validation review surface."""
+    payload = build_transition_preflight_review(preflight, prompt_package)
+    actions = [
+        cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
+        for action in payload.get("actions", [])
+    ]
+    view_prompt_action = payload.get("view_prompt_action")
+    if view_prompt_action:
+        actions.append(
+            cl.Action(
+                name=view_prompt_action["name"],
+                label=view_prompt_action["label"],
+                payload=view_prompt_action.get("payload", {}),
+            )
+        )
+
+    await cl.Message(content=payload["content"], actions=actions).send()
+
+
+async def present_transition_brief(brief):
+    """Render the compact transition brief surface."""
+    payload = build_transition_brief_payload(brief)
+    actions = [
+        cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
+        for action in payload.get("actions", [])
+    ]
+    await cl.Message(content=payload["content"], actions=actions).send()
+
+
 async def generate_research_prompt(params_dict: dict):
     """Generate and display the research prompt for user to copy/paste."""
     try:
@@ -918,6 +1172,57 @@ async def generate_research_prompt(params_dict: dict):
         await cl.Message(f"❌ Error generating prompt: {str(e)}").send()
 
 
+@cl.action_callback(ACTION_VIEW_PROMPT)
+async def transition_view_prompt(action: cl.Action):
+    prompt_package = _load_transition_prompt_package()
+    if not prompt_package:
+        await cl.Message("No generated prompt is available yet.").send()
+        return
+    await cl.Message(
+        f"**Generated Transition Prompt**\n\n```text\n{prompt_package.user_prompt}\n```"
+    ).send()
+
+
+@cl.action_callback(ACTION_EDIT_PROMPT)
+async def transition_edit_prompt(action: cl.Action):
+    prompt_package = _load_transition_prompt_package()
+    cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, True)
+    if prompt_package:
+        await cl.Message(
+            "Send your edited transition research prompt as the next message. "
+            "That text will replace the generated prompt for the run.\n\n"
+            f"Current prompt:\n```text\n{prompt_package.user_prompt}\n```"
+        ).send()
+    else:
+        await cl.Message(
+            "Send your edited transition research prompt as the next message."
+        ).send()
+
+
+@cl.action_callback(ACTION_ADJUST_TRANSITION)
+async def transition_adjust_transition(action: cl.Action):
+    await show_transition_form()
+
+
+@cl.action_callback(ACTION_RUN_RESEARCH)
+async def transition_run_research(action: cl.Action):
+    await _run_transition_research_flow()
+
+
+@cl.action_callback(ACTION_VIEW_ARTIFACT)
+async def transition_view_artifact(action: cl.Action):
+    payload = action.payload or {}
+    artifact_key = str(payload.get("artifact_key") or "").strip()
+    artifact_type = str(payload.get("artifact_type") or artifact_key).strip()
+    artifacts = cl.user_session.get(TRANSITION_ARTIFACTS_SESSION_KEY) or {}
+    content = str(artifacts.get(artifact_key) or "").strip()
+    if not content:
+        await cl.Message("That artifact is not available for this run yet.").send()
+        return
+    title = artifact_type.replace("_", " ").title()
+    await cl.Message(f"**{title}**\n\n{content}").send()
+
+
 
 @cl.on_message
 async def on_message(message: cl.Message):
@@ -940,9 +1245,36 @@ async def on_message(message: cl.Message):
             await cl.Message("Please enter a message.").send()
             return
 
+        current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
+
+        if current_mode == TRANSITION_MODE:
+            if cl.user_session.get(TRANSITION_EDIT_PENDING_SESSION_KEY):
+                cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
+                cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, user_text)
+
+                prompt_package = _load_transition_prompt_package()
+                preflight = _load_transition_preflight()
+                if prompt_package and preflight:
+                    updated_prompt = TransitionPromptPackage(
+                        industry_key=prompt_package.industry_key,
+                        system_prompt=prompt_package.system_prompt,
+                        user_prompt=user_text,
+                    )
+                    _persist_transition_prompt_package(updated_prompt)
+                    await cl.Message("Updated prompt captured for this transition run.").send()
+                    await present_transition_preflight_review(preflight, updated_prompt)
+                else:
+                    await cl.Message("Updated prompt captured for the next transition run.").send()
+                return
+
+            if load_transition_request_session(cl.user_session):
+                await cl.Message(
+                    "Transition mode is active. Use the review actions to run research, view the prompt, or adjust the scenario."
+                ).send()
+                return
+
         ctx.add_message("user", user_text)
 
-        current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
         logger.info(
             "Deep research mode check session=%s mode=%s feature_flag=%s",
             cl.user_session.get("session_id"),
