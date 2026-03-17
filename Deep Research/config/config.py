@@ -37,6 +37,10 @@ class Config:
     DEEP_RESEARCH_MODEL_DEPLOYMENT_NAME = os.getenv("DEEP_RESEARCH_MODEL_DEPLOYMENT_NAME")
     BING_CONNECTION_NAME = os.getenv("BING_CONNECTION_NAME")
 
+    # ProConnect backend configuration
+    PROCONNECT_BASE_URL = os.getenv("PROCONNECT_BASE_URL", "https://proconnect.protiviti.com")
+    PROCONNECT_TOKEN_FILE = os.getenv("PROCONNECT_TOKEN_FILE")
+
     # Feature flags
     ENABLE_DEEP_RESEARCH = os.getenv("ENABLE_DEEP_RESEARCH", "false").lower() in ("1", "true", "yes")
     ENABLE_BD_ATLAS_DIGESTION = os.getenv("ENABLE_BD_ATLAS_DIGESTION", "true").lower() in ("1", "true", "yes")

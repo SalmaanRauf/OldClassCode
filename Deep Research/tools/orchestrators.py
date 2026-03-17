@@ -361,7 +361,8 @@ async def general_research(prompt: str, *, bing_agent, progress: Optional[Callab
 async def run_deep_research(
     query: str, 
     industry: str = "general",
-    progress_callback = None
+    progress_callback = None,
+    instructions_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute Deep Research run via Azure AI Foundry.
@@ -379,7 +380,10 @@ async def run_deep_research(
     if not AppConfig.ENABLE_DEEP_RESEARCH:
         raise RuntimeError("Deep Research feature flag is disabled")
 
-    client = get_deep_research_client(industry=industry)
+    client = get_deep_research_client(
+        industry=industry,
+        instructions_override=instructions_override,
+    )
     logger.info(f"Got Deep Research client with industry={client._industry}")
     
     # Pass progress callback to client if provided

@@ -52,7 +52,7 @@ class DeepResearchClient:
     Combines robust streaming from demo_run.py with dynamic industry prompts.
     """
 
-    def __init__(self, industry: str = "general") -> None:
+    def __init__(self, industry: str = "general", instructions_override: Optional[str] = None) -> None:
         if not (AppConfig.PROJECT_ENDPOINT and AppConfig.MODEL_DEPLOYMENT_NAME):
             raise RuntimeError("Project endpoint and model deployment must be configured")
         if not (AppConfig.DEEP_RESEARCH_MODEL_DEPLOYMENT_NAME and AppConfig.BING_CONNECTION_NAME):
@@ -63,6 +63,7 @@ class DeepResearchClient:
         self._deep_model = AppConfig.DEEP_RESEARCH_MODEL_DEPLOYMENT_NAME
         self._bing_connection = AppConfig.BING_CONNECTION_NAME
         self._industry = industry
+        self._instructions_override = instructions_override
         self._runtime_policy = get_runtime_policy()
 
         self._credential: Optional[DefaultAzureCredential] = None
@@ -91,16 +92,23 @@ class DeepResearchClient:
             from services.prompt_loader import PromptLoader
             loader = PromptLoader()
             
-            try:
-                base_instructions = loader.load_prompt(self._industry)
-                prompt_meta = loader.get_prompt_metadata(self._industry)
+            if self._instructions_override:
+                base_instructions = self._instructions_override
                 logger.info(
-                    f"Loaded {prompt_meta['display_name']} prompt "
-                    f"(v{prompt_meta['version']})"
+                    "Using explicit Deep Research instructions override for industry=%s",
+                    self._industry,
                 )
-            except Exception as e:
-                logger.warning(f"Failed to load {self._industry} prompt, using general: {e}")
-                base_instructions = loader.load_prompt("general")
+            else:
+                try:
+                    base_instructions = loader.load_prompt(self._industry)
+                    prompt_meta = loader.get_prompt_metadata(self._industry)
+                    logger.info(
+                        f"Loaded {prompt_meta['display_name']} prompt "
+                        f"(v{prompt_meta['version']})"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to load {self._industry} prompt, using general: {e}")
+                    base_instructions = loader.load_prompt("general")
             
             enhanced_instructions = base_instructions + self._source_policy_instructions()
             
@@ -1037,7 +1045,10 @@ class DeepResearchClient:
 deep_research_client: Optional[DeepResearchClient] = None
 
 
-def get_deep_research_client(industry: str = "general") -> DeepResearchClient:
+def get_deep_research_client(
+    industry: str = "general",
+    instructions_override: Optional[str] = None,
+) -> DeepResearchClient:
     """
     Get or create Deep Research client for specified industry.
     
@@ -1056,9 +1067,16 @@ def get_deep_research_client(industry: str = "general") -> DeepResearchClient:
     )
     
     # Create new client if none exists or if industry changed
-    if deep_research_client is None or deep_research_client._industry != industry:
+    if (
+        deep_research_client is None
+        or deep_research_client._industry != industry
+        or deep_research_client._instructions_override != instructions_override
+    ):
         logger.info(f"Creating NEW Deep Research client for industry={industry}")
-        deep_research_client = DeepResearchClient(industry=industry)
+        deep_research_client = DeepResearchClient(
+            industry=industry,
+            instructions_override=instructions_override,
+        )
     else:
         logger.info(f"Reusing existing Deep Research client for industry={industry}")
     

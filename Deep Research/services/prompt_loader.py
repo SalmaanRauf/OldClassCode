@@ -48,6 +48,31 @@ class PromptLoader:
             }
         """
         return self._metadata["prompts"]
+
+    def resolve_industry_key(self, industry: Optional[str]) -> str:
+        """
+        Resolve an industry key with light normalization and safe fallback.
+
+        Returns:
+            A valid industry key present in metadata, or ``general``.
+        """
+        available = self._metadata["prompts"]
+        if not industry:
+            return "general"
+
+        normalized = str(industry).strip().lower().replace("&", "and").replace("-", "_").replace(" ", "_")
+        aliases = {
+            "financial": "financial_services",
+            "financial_services_and_real_estate": "financial_services",
+            "banking": "financial_services",
+            "banking_and_capital_markets": "financial_services",
+            "health": "healthcare",
+        }
+        normalized = aliases.get(normalized, normalized)
+
+        if normalized in available:
+            return normalized
+        return "general"
     
     def load_prompt(self, industry: str) -> str:
         """
@@ -108,4 +133,3 @@ class PromptLoader:
                 f"Available: {', '.join(available)}"
             )
         return self._metadata["prompts"][industry]
-
