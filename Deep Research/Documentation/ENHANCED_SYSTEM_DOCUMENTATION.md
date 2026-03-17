@@ -120,10 +120,29 @@ The formatted payload contains:
 
 ## 12. Deep Research Mode
 - **Purpose**: Opt-in workflow that routes user requests through the Azure AI Foundry Deep Research tool (o3-deep-research + Bing Grounding) to deliver multi-hop market analysis with traceable citations.
-- **Enablement**: Set `ENABLE_DEEP_RESEARCH=true` and configure `DEEP_RESEARCH_MODEL_DEPLOYMENT_NAME` plus `BING_CONNECTION_NAME` in `.env`. Chainlit exposes a mode selector so users can switch between Standard and Deep pipelines.
-- **Runtime Behaviour**: When Deep mode is active the app posts a single status update (“Performing Deep Research…”) and waits for the managed research pipeline to complete before rendering a consolidated report with sections, citations, and run metadata.
+- **Enablement**: Set `ENABLE_DEEP_RESEARCH=true` and configure `DEEP_RESEARCH_MODEL_DEPLOYMENT_NAME` plus `BING_CONNECTION_NAME` in `.env`. Chainlit exposes a mode selector so users can switch between Standard, Deep, and Transition Playbook pipelines.
+- **Runtime Behaviour**: When Deep mode is active the app keeps one progress message live and updates it with managed research polling metadata (status, source count, recent activity log, latest finding snippet) before rendering the consolidated report.
 - **Logging & Fallbacks**: Run and thread identifiers are logged at INFO. If a Deep Research call fails, the system logs the exception and falls back to the standard GWBS-based orchestrator with a user-facing warning.
+
+## 13. Transition Playbook Mode
+- **Purpose**: Supervised executive-transition workflow that validates a move with ProConnect, generates a transparent research plan, runs Deep Research, validates opportunities with Credentials, and ends with an action-oriented brief instead of a raw report dump.
+- **Entry Surface**: `TransitionForm.jsx` collects four required fields (`person`, `from company`, `to company`, `new role`) plus optional advanced hints. It is launched from a dedicated `Transition Playbook` mode action in `chainlit_app/main.py`.
+- **Preflight Phase**:
+  - `TransitionPlaybookOrchestrator.build_preflight(...)` loads ProConnect context via `ProConnectTransitionService`.
+  - The app renders a live factual progress card using structured stage events from `transition_presenter.build_transition_progress_content(...)`.
+  - User receives a compact validation surface with relationship indicators plus a secondary `View Generated Prompt` action.
+- **Research Phase**:
+  - `TransitionPlaybookOrchestrator.run_transition_playbook(...)` composes the transition prompt, preserves Deep Research polling, runs `BDOrchestrator` for Credentials + final analyst synthesis, then performs a final ProConnect actioning pass.
+  - Prompt edits are supported through a session-level prompt override rather than exposing the full system-prompt machinery in the UI.
+- **Output Phase**:
+  - `transition_brief_formatter.build_transition_brief(...)` converts the full run result into a compact `TransitionBrief`.
+  - Default user-visible output is intentionally small: transition summary, top opportunities, proof/warm paths, and recommended next actions.
+  - Full Deep Research markdown and a richer ProConnect dossier are stored as secondary artifacts and surfaced through action buttons rather than inline.
+- **Backend Auth**:
+  - ProConnect auth remains backend-only.
+  - Supported resolution order is environment token, explicit `PROCONNECT_TOKEN_FILE`, then the existing `token.txt` fallback through the shared ProConnect script resolver.
+  - This matches the demo constraint where the token is manually refreshed outside the MD-facing UI.
 
 ---
 
-*Last updated: 29 September 2025*
+*Last updated: 17 March 2026*

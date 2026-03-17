@@ -54,9 +54,23 @@ Failure to co-locate resources will result in `(unsupported_tool)` errors.
    BING_CONNECTION_NAME=<bing-connection-id-from-step-4>
    ```
 
+### Additional Configuration for Transition Playbook Mode (Optional)
+
+Transition Playbook mode layers ProConnect context on top of Deep Research so account leaders can validate a move, review a generated research plan, and then run a compact transition brief workflow.
+
+Required backend auth options for ProConnect:
+- `PROCONNECT_BEARER_TOKEN` or
+- `PROCONNECT_TOKEN_FILE`
+
+For the current demo flow, a manually refreshed backend `token.txt` file is also supported through the existing ProConnect script resolver. The UI never exposes this token.
+
+Runbook:
+- See [Documentation/TRANSITION_PLAYBOOK_RUN_GUIDE.md](/Users/salmaanrauf/Documents/BD%20Tool/Deep%20Research/Documentation/TRANSITION_PLAYBOOK_RUN_GUIDE.md) for the Windows/VPN validation steps.
+
 #### Switching Between Modes
-- Users can toggle between Standard and Deep Research modes via the Chainlit UI
+- Users can toggle between Standard, Deep Research, and Transition Playbook modes via the Chainlit UI
 - Deep Research mode automatically falls back to Standard mode on errors
+- Transition Playbook mode runs a ProConnect preflight first, shows a generated research prompt behind a secondary action, and only runs Deep Research after the user clicks `Run Research`
 - Check logs for detailed error messages if Deep Research fails
 
 ## What It Does
@@ -74,6 +88,7 @@ Failure to co-locate resources will result in `(unsupported_tool)` errors.
 - Centralized classifier: One source of truth for request classification and scope mapping in `services/classifier.py`, used by router, orchestrator, and legacy follow-ups.
 - General request handling: Multi-intent inputs (e.g., briefing + “risk/competitors/strategy”) are addressed automatically after the briefing using the unified follow-up pipeline.
 - Stable public API: Added `search_competitors` on the Bing agent (no private method coupling).
+- Transition Playbook workflow: Added a structured executive-move workflow with ProConnect preflight, live progress updates, editable prompt preview, compact transition brief output, and secondary artifact actions for full research and ProConnect dossier detail.
 
 ## High-Level Workflow
 
@@ -96,6 +111,13 @@ Failure to co-locate resources will result in `(unsupported_tool)` errors.
 4) Competitor ask (optional in the same turn):
 - A separate GWBS “competitors” task identifies top competitors and what they’re doing.
 - Present results with citations; run analyst only if the ask involves implications/strategy.
+
+5) Transition Playbook:
+- User selects `Transition Playbook` mode and completes the structured form (`person`, `from company`, `to company`, `new role`, optional advanced fields).
+- App runs a ProConnect preflight automatically and posts factual progress updates.
+- User reviews the compact transition validation screen and can inspect or edit the generated Deep Research prompt.
+- After `Run Research`, the app preserves Deep Research polling, runs Credentials / final analyst synthesis, then renders a compact transition brief.
+- Full Deep Research output and a richer ProConnect dossier are available behind secondary actions.
 
 ## ASCII Diagram
 
@@ -134,7 +156,7 @@ User ──▶ Chainlit (chainlit_app/main.py)
 ## File & Module Guide
 
 - chainlit_app/
-  - `main.py`: Chainlit UI handlers (chat start, on_message). Orchestrates new analysis, follow-ups, and comparison. Uses the tool orchestrator when `ENABLE_TOOL_ORCHESTRATOR` is true.
+  - `main.py`: Chainlit UI handlers (chat start, on_message). Orchestrates standard analysis, deep research, and transition playbook workflows. Uses the tool orchestrator when `ENABLE_TOOL_ORCHESTRATOR` is true.
   - `.chainlit/config.toml`: UI config.
   - `chainlit.md`: In-app readme.
 
@@ -156,9 +178,15 @@ User ──▶ Chainlit (chainlit_app/main.py)
   - `follow_up_handler.py`: Legacy follow-up handler, now using the centralized classifier (kept for compatibility when orchestrator is disabled).
   - `classifier.py`: Centralized classification (labels, scope mapping, and synthesis decision) used across router and orchestrators.
   - `cache.py`: Simple TTL cache with a stable `cache_key` builder.
+  - `transition_playbook_orchestrator.py`: Owns the transition workflow end-to-end (ProConnect preflight -> Deep Research -> Credentials/MD report -> ProConnect actioning).
+  - `proconnect_transition_service.py`: Runtime wrapper around the existing ProConnect stakeholder payload builder.
+  - `transition_prompt_builder.py`: Builds the transition-specific Deep Research system prompt overlay plus generated user prompt.
+  - `transition_brief_formatter.py`: Produces the compact transition brief and secondary artifact payloads.
+  - `transition_presenter.py`: Builds compact validation, progress, and brief surfaces for Chainlit.
 
 - models/
   - `schemas.py`: Pydantic contracts for tools/orchestrators (`CompanyRef`, `Citation`, `GWBSSection`, `FullGWBS`, `AnalysisItem`, `AnalysisEvent`, `Briefing`).
+  - `transition_schemas.py`: Dedicated Transition Playbook input, preflight, and compact brief contracts.
 
 - config/
   - `kernel_setup.py`: SK kernel initialization (ATLAS/Azure OpenAI): creates `Kernel`, adds service, configures JSON response format.
@@ -176,6 +204,10 @@ User ──▶ Chainlit (chainlit_app/main.py)
   - `requirements.txt`: Minimal dependencies for the chat use case.
   - `env.example`: Required environment variables and feature flag.
   - `launch_chainlit.py`: Launches Chainlit with environment validation and `PYTHONPATH` set.
+
+- public/elements/
+  - `ResearchForm.jsx`: Existing generic Deep Research research-parameter form.
+  - `TransitionForm.jsx`: Structured transition intake form for the executive-move workflow.
 
 ## How It Decides When To Use SK vs GWBS Direct
 
