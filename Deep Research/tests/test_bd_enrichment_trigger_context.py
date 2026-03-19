@@ -127,3 +127,37 @@ def test_financial_services_people_movement_phrase_maps_to_exec_transition():
     )
 
     assert trigger.signals == ["FS.EXEC.TRANSITION"]
+
+
+def test_financial_services_buyer_movement_phrase_maps_to_buyer_movement():
+    trigger = build_trigger_for_bd_enrichment(
+        sector="financial_services",
+        user_query=(
+            "Research Financial Services opportunities for Capital One focused on buyer movement in the US."
+        ),
+        session_params={
+            "signals": "",
+            "company": "Capital One",
+            "geography": "US",
+            "time_window": "180 days",
+        },
+    )
+
+    assert trigger.signals == ["FS.BUYER.MOVEMENT"]
+
+
+def test_financial_services_exec_and_buyer_movement_phrase_keeps_stable_order():
+    trigger = build_trigger_for_bd_enrichment(
+        sector="financial_services",
+        user_query=(
+            "Research Financial Services opportunities for Capital One focused on executive movement, buyer movement in the US."
+        ),
+        session_params={
+            "signals": "",
+            "company": "Capital One",
+            "geography": "US",
+            "time_window": "180 days",
+        },
+    )
+
+    assert trigger.signals[:2] == ["FS.EXEC.TRANSITION", "FS.BUYER.MOVEMENT"]

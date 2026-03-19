@@ -7,7 +7,7 @@ import re
 from typing import Any, Dict, List, Optional
 
 from models.bd_schemas import BDTrigger
-from services.signal_registry_service import get_signal_registry_service, SignalRegistryService
+from services.signal_registry_service import get_signal_registry_service
 
 
 def sanitize_user_prompt_context(user_query: str, max_chars: int = 600) -> Optional[str]:
@@ -48,29 +48,6 @@ def _parse_signals(value: Any) -> List[str]:
     if isinstance(value, str):
         return [part.strip() for part in re.split(r"[,\n;]", value) if part.strip()]
     return []
-
-
-def _extract_fs_signal_tokens_from_query(user_query: str) -> List[str]:
-    lowered = (user_query or "").lower()
-    normalized_query = SignalRegistryService._normalize_signal_token(user_query or "")
-    tokens: List[str] = []
-    seen = set()
-    aliases = sorted(SignalRegistryService.FS_ALIAS_MAP.keys(), key=len, reverse=True)
-    for alias in aliases:
-        raw_pattern = r"\b" + re.escape(alias).replace(r"\ ", r"\s+") + r"\b"
-        normalized_alias = SignalRegistryService._normalize_signal_token(alias)
-        normalized_pattern = (
-            r"\b" + re.escape(normalized_alias).replace(r"\ ", r"\s+") + r"\b"
-            if normalized_alias
-            else None
-        )
-        if re.search(raw_pattern, lowered) or (
-            normalized_pattern and re.search(normalized_pattern, normalized_query)
-        ):
-            if alias not in seen:
-                tokens.append(alias)
-                seen.add(alias)
-    return tokens
 
 
 def _parse_time_window_days(value: Any, fallback_text: str, default: int = 30) -> int:
@@ -168,10 +145,9 @@ def build_trigger_for_bd_enrichment(
         parsed_signals = _parse_signals_from_text(user_query)
     if is_fs_sector:
         canonical_fs = signal_registry.canonicalize_fs_signals(parsed_signals)
-        if not canonical_fs:
-            canonical_fs = signal_registry.canonicalize_fs_signals(
-                _extract_fs_signal_tokens_from_query(user_query)
-            )
+        extracted_fs = signal_registry.extract_fs_signal_codes_from_text(user_query)
+        if extracted_fs:
+            canonical_fs = signal_registry.canonicalize_fs_signals(canonical_fs + extracted_fs)
         all_requested = any(
             str(token).strip().lower() in {"all", "all signal", "all signals", "all relevant signals"}
             for token in raw_session_signals

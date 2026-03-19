@@ -60,6 +60,10 @@
                 "label": "CRO/CFO Transition",
                 "description": "New risk or finance leadership"
             },
+            "BUYER_MOVEMENT": {
+                "label": "Buyer Movement",
+                "description": "Promotion, role expansion, or new buyer move"
+            },
             "STRESS_TEST": {
                 "label": "Stress Test Issues",
                 "description": "CCAR/DFAST findings requiring response"

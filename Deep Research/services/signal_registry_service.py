@@ -16,6 +16,7 @@ class SignalRegistryService:
         "CONSENT_ORDER": "FS.CONSUMER.LITIGATION_SETTLEMENT",
         "MODEL_RISK": "FS.MODEL_RISK.FINDINGS",
         "CRO_TRANSITION": "FS.EXEC.TRANSITION",
+        "BUYER_MOVEMENT": "FS.BUYER.MOVEMENT",
         "STRESS_TEST": "FS.STRESS_TEST.ISSUES",
         "REG_DEADLINE": "FS.REGULATORY.DEADLINE",
         "AML_BSA": "FS.AML.BSA_FINDINGS",
@@ -29,6 +30,10 @@ class SignalRegistryService:
         "all signal": "__ALL__",
         "executive movement": "FS.EXEC.TRANSITION",
         "people movement": "FS.EXEC.TRANSITION",
+        "buyer movement": "FS.BUYER.MOVEMENT",
+        "buyer promotion": "FS.BUYER.MOVEMENT",
+        "buyer transition": "FS.BUYER.MOVEMENT",
+        "buyer promotion / scope expansion": "FS.BUYER.MOVEMENT",
         "leadership movement": "FS.EXEC.TRANSITION",
         "leadership change": "FS.EXEC.TRANSITION",
         "executive transition": "FS.EXEC.TRANSITION",
@@ -143,6 +148,39 @@ class SignalRegistryService:
                 _append(code)
 
         return canonical
+
+    def extract_fs_signal_aliases_from_text(self, text: str) -> List[str]:
+        """Find financial-services signal aliases mentioned in free text."""
+        lowered = (text or "").lower()
+        normalized_query = self._normalize_signal_token(text or "")
+        aliases: List[str] = []
+        seen = set()
+
+        for alias in sorted(self.FS_ALIAS_MAP.keys(), key=len, reverse=True):
+            raw_pattern = r"\b" + re.escape(alias).replace(r"\ ", r"\s+") + r"\b"
+            normalized_alias = self._normalize_signal_token(alias)
+            normalized_pattern = (
+                r"\b" + re.escape(normalized_alias).replace(r"\ ", r"\s+") + r"\b"
+                if normalized_alias
+                else None
+            )
+            if re.search(raw_pattern, lowered) or (
+                normalized_pattern and re.search(normalized_pattern, normalized_query)
+            ):
+                if alias not in seen:
+                    aliases.append(alias)
+                    seen.add(alias)
+
+        return aliases
+
+    def extract_fs_signal_codes_from_text(self, text: str) -> List[str]:
+        """Extract canonical FS signal codes from free text."""
+        canonical = self.canonicalize_fs_signals(self.extract_fs_signal_aliases_from_text(text))
+        if canonical:
+            return canonical
+        if re.search(r"\ball(?:\s+relevant)?\s+signals?\b", text or "", re.IGNORECASE):
+            return self.get_fs_signal_codes()
+        return []
 
 
 _signal_registry_service: Optional[SignalRegistryService] = None
