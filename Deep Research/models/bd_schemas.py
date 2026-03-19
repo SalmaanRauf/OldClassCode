@@ -10,6 +10,8 @@ These models define the data structures for:
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Literal
 
+from models.movement_schemas import MovementBrief
+
 try:
     from pydantic import BaseModel, Field
 except Exception:  # pragma: no cover
@@ -501,6 +503,10 @@ class BDContext(BaseModel):
     fs_normalization_diagnostics: Dict[str, Any] = Field(
         default_factory=dict,
         description="Detailed normalization diagnostics including reason codes"
+    )
+    movement_brief: Optional[MovementBrief] = Field(
+        None,
+        description="People movement brief artifact for movement-led workflows"
     )
     synthesis_status: Optional[str] = Field(
         None,
