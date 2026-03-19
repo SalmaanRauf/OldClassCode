@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -179,3 +180,157 @@ async def test_orchestrator_runs_pipeline_and_returns_movement_brief():
     assert result.deep_research_markdown.startswith("### Executive Summary")
     assert assembled["signal_evidence"][0].signal_code == "FS.EXEC.TRANSITION"
 
+
+@pytest.mark.asyncio
+async def test_orchestrator_wraps_deep_research_progress_metadata():
+    call_order = []
+    progress_events = []
+
+    class FakeFSSignalDigestor:
+        async def digest(self, **kwargs):
+            call_order.append("signal_digest")
+            return ([], {"status": "Succeeded"}, [])
+
+    class FakeMovementDigestor:
+        async def digest(self, **kwargs):
+            call_order.append("movement_digest")
+            return ([_movement(index) for index in range(2)], {"status": "Succeeded", "movements_returned": 2})
+
+    class FakeProConnectService:
+        def light_enrich_movements(self, movement_rows):
+            call_order.append("light_enrich")
+            return [{"movement": row} for row in movement_rows]
+
+        def deep_enrich_movements(self, movement_rows, *, max_rows=10):
+            call_order.append("deep_enrich")
+            return [{"movement": row} for row in movement_rows[:max_rows]]
+
+    class FakeRanker:
+        def rank(self, enriched_rows, max_rows=10):
+            call_order.append("rank")
+            return enriched_rows[:max_rows]
+
+    class FakeCredentialsService:
+        def build_proof_packets(self, ranked_rows):
+            call_order.append("credentials")
+            return {
+                row["movement"].person_name: MovementCredentialsProof(
+                    lookup_status="Matched",
+                    summary="Proof",
+                    matched_credentials=[],
+                )
+                for row in ranked_rows
+            }
+
+    class FakeAssembler:
+        def assemble(self, **kwargs):
+            call_order.append("assemble")
+            from models.movement_schemas import MovementAction, MovementBrief
+
+            rows = kwargs["movement_rows"][:2]
+            return MovementBrief(
+                executive_summary="Summary",
+                signal_summary=[],
+                movement_rows=rows,
+                where_to_act=[
+                    MovementAction(
+                        action_posture="Immediate Re-engagement",
+                        person_name=row.person_name,
+                        likely_play="Play",
+                        why_now="Why now",
+                        relationship_owner=None,
+                    )
+                    for row in rows
+                ],
+                takeaway="Takeaway",
+            )
+
+    async def fake_deep_research_runner(query, industry="general", progress_callback=None, **kwargs):
+        call_order.append(("deep_research_runner", query, industry))
+        assert callable(progress_callback)
+        await progress_callback(
+            "Polling for source updates",
+            {
+                "status": "in_progress",
+                "citation_count": 3,
+                "poll_count": 4,
+                "activity_log": ["Poll started", "Found 1 citation"],
+                "latest_text": "Polling for source updates",
+                "source_hint": "preserved",
+            },
+        )
+        return {
+            "type": "deep_research",
+            "summary": "Movement summary from Deep Research",
+            "sections": [],
+            "citations": [],
+            "metadata": {},
+        }
+
+    async def capture(event):
+        progress_events.append(event)
+
+    orchestrator = MovementBriefOrchestrator(
+        fs_signal_evidence_digestor=FakeFSSignalDigestor(),
+        movement_digestor=FakeMovementDigestor(),
+        proconnect_service=FakeProConnectService(),
+        ranker=FakeRanker(),
+        credentials_service=FakeCredentialsService(),
+        assembler=FakeAssembler(),
+        deep_research_runner=fake_deep_research_runner,
+    )
+
+    result = await orchestrator.run(_trigger(), progress_cb=capture)
+
+    assert call_order[0][0] == "deep_research_runner"
+    assert "signal_digest" in call_order
+    assert progress_events[0] == "Running Deep Research..."
+
+    deep_research_event = next(event for event in progress_events if isinstance(event, dict))
+    assert deep_research_event["stage"] == "running_deep_research"
+    assert deep_research_event["status"] == "in_progress"
+    assert deep_research_event["citation_count"] == 3
+    assert deep_research_event["poll_count"] == 4
+    assert deep_research_event["activity_log"] == ["Poll started", "Found 1 citation"]
+    assert deep_research_event["metadata"]["source_hint"] == "preserved"
+    assert "Normalizing financial-services signal evidence..." in progress_events
+    assert "Movement summary from Deep Research" in result.deep_research_markdown
+
+
+def test_orchestrator_builds_token_backed_proconnect_service(monkeypatch):
+    created = {}
+
+    class FakeClient:
+        def __init__(self, base_url: str, bearer_token: str):
+            created["client"] = {
+                "base_url": base_url,
+                "bearer_token": bearer_token,
+            }
+
+    monkeypatch.setattr(
+        "services.movement_brief_orchestrator.AppConfig",
+        SimpleNamespace(
+            PROCONNECT_TOKEN_FILE="/tmp/test-token.txt",
+            PROCONNECT_BASE_URL="https://example.proconnect",
+        ),
+    )
+    monkeypatch.setattr(
+        "services.movement_brief_orchestrator.resolve_bearer_token",
+        lambda _cli, token_file: ("Bearer fake-token", f"file:{token_file}"),
+    )
+    monkeypatch.setattr("services.movement_brief_orchestrator.ProConnectClient", FakeClient)
+
+    orchestrator = MovementBriefOrchestrator(
+        fs_signal_evidence_digestor=object(),
+        movement_digestor=object(),
+        ranker=object(),
+        assembler=object(),
+    )
+
+    service = orchestrator._get_proconnect_service()
+
+    assert created["client"] == {
+        "base_url": "https://example.proconnect",
+        "bearer_token": "Bearer fake-token",
+    }
+    assert service.client is not None

@@ -55,6 +55,113 @@ def _loader(name: str, company: str):
     return payloads.get(name)
 
 
+class _FakeLiveClient:
+    def __init__(self) -> None:
+        self.search_calls: list[str] = []
+        self.account_calls: list[str] = []
+        self.endpoint_calls: list[str] = []
+
+    def search_prospects(self, search_text):
+        self.search_calls.append(search_text)
+
+        if search_text == "Capital One":
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "value": [
+                        {
+                            "document": {
+                                "accountId": "001-cap-one",
+                                "companyName": "Capital One Financial Corporation",
+                                "name": "Capital One Financial Corporation",
+                            }
+                        }
+                    ]
+                },
+            }
+
+        if search_text == "Sarah Chen":
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "value": [
+                        {
+                            "document": {
+                                "contactId": "contact-123",
+                                "accountId": "001-cap-one",
+                                "companyName": "Capital One Financial Corporation",
+                                "name": "Sarah Chen",
+                                "title": "VP, Model Risk",
+                                "location": "McLean, VA, United States",
+                                "linkedinUrl": "https://linkedin.com/in/sarah-chen",
+                            }
+                        },
+                        {
+                            "document": {
+                                "contactId": "contact-999",
+                                "accountId": "001-other",
+                                "companyName": "Other Company",
+                                "name": "Sarah Chen",
+                                "title": "VP, Other Company",
+                            }
+                        },
+                    ]
+                },
+            }
+
+        return {"success": True, "status_code": 200, "data": {"value": []}}
+
+    def get_account_by_id(self, account_id: str):
+        self.account_calls.append(account_id)
+        return {
+            "success": True,
+            "status_code": 200,
+            "data": {
+                "id": "001-cap-one",
+                "name": "Capital One Financial Corporation",
+                "keyBuyers": [
+                    {
+                        "firstName": "Sarah",
+                        "lastName": "Chen",
+                        "title": "VP, Model Risk",
+                        "projects": [{"name": "Model Risk Refresh"}],
+                        "primaryKeyBuyerOf": [
+                            {"name": "Model Risk Refresh", "opportunityStage": "Closed - Won"}
+                        ],
+                        "relationshipOwner": "Ben L",
+                    }
+                ],
+            },
+        }
+
+    def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+        self.endpoint_calls.append(endpoint)
+
+        if endpoint == "/api/prospects/contact-123":
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "ContactId": "contact-123",
+                    "FirstName": "Sarah",
+                    "LastName": "Chen",
+                    "Title": "Director, Model Risk",
+                    "Location": "McLean, VA, United States",
+                    "LinkedInUrl": "https://linkedin.com/in/sarah-chen",
+                    "ExternalProspectView": {
+                        "Title": "Director, Model Risk",
+                        "Phone": "555-0101",
+                        "Location": "McLean, VA, United States",
+                        "LinkedInUrl": "https://linkedin.com/in/sarah-chen",
+                    },
+                },
+            }
+
+        raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+
 def test_light_enrichment_summarizes_known_and_worked_with_fields():
     service = ProConnectMovementService(person_loader=_loader)
 
@@ -120,3 +227,48 @@ def test_deep_enrichment_preserves_default_values_when_no_match_exists():
     assert enriched[0]["relationship_owner"] is None
     assert enriched[0]["person_match_status"] == "no_match"
     assert enriched[0]["person_detail"] == {}
+
+
+def test_live_client_path_exact_matches_person_and_hydrates_detail_once():
+    client = _FakeLiveClient()
+    service = ProConnectMovementService(client=client)
+
+    enriched = service.deep_enrich_movements([_row("Sarah Chen"), _row("Sarah Chen")], max_rows=5)
+
+    assert len(enriched) == 2
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["known"] is True
+    assert enriched[0]["worked_with"] is True
+    assert enriched[0]["project_count"] == 1
+    assert enriched[0]["win_count"] == 1
+    assert enriched[0]["relationship_owner"] == "Ben L"
+    assert enriched[0]["person_detail"]["title"] == "Director, Model Risk"
+    assert enriched[0]["person_detail"]["location"] == "McLean, VA, United States"
+    assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/sarah-chen"
+
+    assert client.search_calls == ["Capital One", "Sarah Chen"]
+    assert client.account_calls == ["001-cap-one"]
+    assert client.endpoint_calls == ["/api/prospects/contact-123"]
+
+
+def test_person_loader_takes_precedence_over_live_client_support():
+    class GuardedClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            raise AssertionError("live client should not be used when person_loader is provided")
+
+        def get_account_by_id(self, account_id: str):
+            raise AssertionError("live client should not be used when person_loader is provided")
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            raise AssertionError("live client should not be used when person_loader is provided")
+
+    service = ProConnectMovementService(
+        person_loader=_loader,
+        client=GuardedClient(),
+    )
+
+    enriched = service.deep_enrich_movements([_row("Sarah Chen")], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["person_detail"]["title"] == "VP, Model Risk"
+    assert enriched[0]["person_detail"]["location"] == "McLean, VA, United States"

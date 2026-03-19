@@ -3,9 +3,13 @@ Orchestration for the people movement brief workflow.
 """
 from __future__ import annotations
 
+import inspect
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
+from config.config import AppConfig
 from models.bd_schemas import BDTrigger, SignalEvidence
 from models.movement_schemas import MovementBrief, MovementCredentialsProof, MovementRecord
 from services.deep_research_formatter import (
@@ -20,8 +24,14 @@ from services.movement_ranker import MovementRanker
 from services.proconnect_movement_service import ProConnectMovementService
 from services.signal_registry_service import get_signal_registry_service
 
+SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-ProgressCallback = Callable[[str], Any]
+from proconnect_client import DEFAULT_BASE_URL, ProConnectClient, resolve_bearer_token  # noqa: E402
+
+
+ProgressCallback = Callable[[Any], Any]
 DeepResearchRunner = Callable[..., Awaitable[Dict[str, Any]]]
 
 
@@ -58,7 +68,7 @@ class MovementBriefOrchestrator:
         self.signal_registry = get_signal_registry_service()
         self.fs_signal_evidence_digestor = fs_signal_evidence_digestor or FSSignalEvidenceDigestor()
         self.movement_digestor = movement_digestor or FSMovementDigestor()
-        self.proconnect_service = proconnect_service or ProConnectMovementService()
+        self.proconnect_service = proconnect_service
         self.ranker = ranker or MovementRanker()
         self.credentials_service = credentials_service
         self.assembler = assembler or MovementBriefAssembler()
@@ -112,12 +122,13 @@ class MovementBriefOrchestrator:
         )
 
         await self._notify(progress_cb, "Matching movement leverage in ProConnect...")
-        light_enriched_rows = self.proconnect_service.light_enrich_movements(movement_rows)
+        proconnect_service = self._get_proconnect_service()
+        light_enriched_rows = proconnect_service.light_enrich_movements(movement_rows)
         ranked_rows = self.ranker.rank(light_enriched_rows, max_rows=10)
 
         await self._notify(progress_cb, "Deep-enriching top movement rows...")
         ranked_movements = [row["movement"] for row in ranked_rows]
-        deep_enriched_rows = self.proconnect_service.deep_enrich_movements(ranked_movements, max_rows=10)
+        deep_enriched_rows = proconnect_service.deep_enrich_movements(ranked_movements, max_rows=10)
 
         await self._notify(progress_cb, "Validating credentials for prioritized movers...")
         credentials_service = self._get_credentials_service()
@@ -152,16 +163,44 @@ class MovementBriefOrchestrator:
         trigger: BDTrigger,
         progress_cb: Optional[ProgressCallback],
     ) -> Dict[str, Any]:
-        if self.deep_research_runner is None:
-            return {}
-
+        runner = self._get_deep_research_runner()
         query = trigger.user_prompt_context or trigger.company_focus or trigger.sector
-        response = await self.deep_research_runner(
+        response = await runner(
             query,
-            industry=trigger.sector.replace(" ", "_").lower(),
-            progress_callback=progress_cb,
+            **self._build_runner_kwargs(
+                runner,
+                industry=trigger.sector.replace(" ", "_").lower(),
+                progress_callback=self._make_deep_research_progress_wrapper(progress_cb),
+            ),
         )
         return response if isinstance(response, dict) else {"summary": str(response or "")}
+
+    def _get_deep_research_runner(self) -> DeepResearchRunner:
+        if self.deep_research_runner is None:
+            from tools.orchestrators import run_deep_research
+
+            self.deep_research_runner = run_deep_research
+        return self.deep_research_runner
+
+    def _get_proconnect_service(self) -> ProConnectMovementService:
+        if self.proconnect_service is None:
+            token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)
+            base_url = getattr(AppConfig, "PROCONNECT_BASE_URL", DEFAULT_BASE_URL)
+            token, _ = resolve_bearer_token(None, token_file)
+            client = ProConnectClient(base_url=base_url, bearer_token=token)
+            self.proconnect_service = ProConnectMovementService(client=client)
+        return self.proconnect_service
+
+    @staticmethod
+    def _build_runner_kwargs(runner: DeepResearchRunner, **candidate_kwargs: Any) -> Dict[str, Any]:
+        signature = inspect.signature(runner)
+        params = signature.parameters
+        accepts_varkw = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+        kwargs: Dict[str, Any] = {}
+        for key, value in candidate_kwargs.items():
+            if key in params or accepts_varkw:
+                kwargs[key] = value
+        return kwargs
 
     def _get_credentials_service(self) -> MovementCredentialsService:
         if self.credentials_service is None:
@@ -169,6 +208,30 @@ class MovementBriefOrchestrator:
                 lookup=lambda _row: {"lookup_status": "No Match", "summary": "No proof lookup configured."}
             )
         return self.credentials_service
+
+    def _make_deep_research_progress_wrapper(
+        self,
+        progress_cb: Optional[ProgressCallback],
+    ) -> Callable[[str, Dict[str, Any]], Awaitable[None]]:
+        async def _wrapped(text: str, metadata: Dict[str, Any]) -> None:
+            if progress_cb is None:
+                return
+
+            event = {
+                "stage": "running_deep_research",
+                "message": text or "Deep Research activity update.",
+                "status": str(metadata.get("status") or "in_progress"),
+                "citation_count": metadata.get("citation_count", 0),
+                "poll_count": metadata.get("poll_count", 0),
+                "activity_log": metadata.get("activity_log", []),
+                "latest_text": metadata.get("latest_text") or text or "",
+                "metadata": dict(metadata),
+            }
+            result = progress_cb(event)
+            if hasattr(result, "__await__"):
+                await result  # type: ignore[misc]
+
+        return _wrapped
 
     @staticmethod
     async def _notify(progress_cb: Optional[ProgressCallback], message: str) -> None:
