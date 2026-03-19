@@ -43,10 +43,31 @@ from services.transition_form_mapper import (
     load_transition_request_session,
     persist_transition_request_session,
 )
+from services.movement_form_mapper import (
+    MOVEMENT_ARTIFACTS_SESSION_KEY,
+    MOVEMENT_BRIEF_SESSION_KEY,
+    MOVEMENT_EVIDENCE_ARTIFACT_KEY,
+    MOVEMENT_PROGRESS_SESSION_KEY,
+    MOVEMENT_REPORT_ARTIFACT_KEY,
+    MOVEMENT_REQUEST_SESSION_KEY,
+    MOVEMENT_SIGNALS_ARTIFACT_KEY,
+    build_movement_artifact_actions,
+    build_movement_artifacts,
+    build_movement_person_details_by_name,
+    build_movement_progress_content,
+    build_movement_request_from_form_response,
+    build_movement_row_action_context_by_person_name,
+    build_movement_trigger,
+    load_movement_artifacts_session,
+    load_movement_progress_session,
+    load_movement_request_session,
+    persist_movement_artifacts_session,
+    persist_movement_progress_session,
+    persist_movement_request_session,
+)
 from services.transition_brief_formatter import (
     build_transition_artifacts,
     build_transition_brief,
-    format_transition_brief_markdown,
 )
 from services.transition_playbook_orchestrator import TransitionPlaybookOrchestrator
 from services.transition_presenter import (
@@ -60,6 +81,11 @@ from services.transition_presenter import (
     build_transition_progress_content,
 )
 from services.transition_prompt_builder import TransitionPromptPackage
+from services.movement_brief_orchestrator import MovementBriefOrchestrator
+from services.movement_presenter import (
+    build_movement_brief_payload,
+    build_movement_scan_form_props,
+)
 
 # BD Analysis enrichment (auto-runs after Deep Research)
 from services.bd_orchestrator import BDOrchestrator
@@ -78,7 +104,9 @@ INDUSTRY_PROMPT_SESSION_KEY = "industry_prompt"
 RESEARCH_PARAMS_SESSION_KEY = "research_params"
 DEFAULT_MODE = "standard"
 DEFAULT_INDUSTRY = "general"
+MOVEMENT_MODE = "movement"
 TRANSITION_MODE = "transition"
+ACTION_START_NEW_MOVEMENT_SCAN = "movement_new_scan"
 BD_TRACES_DIR = Path(__file__).parent.parent / "traces"
 
 # --- Input validation helpers ---
@@ -168,7 +196,7 @@ async def _init_singletons() -> None:
         if not cl.user_session.get("router"):
             cl.user_session.set("router", QueryRouter())
     except Exception as e:
-        print(f"Error initializing singletons: {e}")
+        logger.exception("Error initializing singletons: %s", e)
         raise
 
 # --- Error handling helpers ---
@@ -363,6 +391,14 @@ def _get_transition_orchestrator() -> TransitionPlaybookOrchestrator:
     return orchestrator
 
 
+def _get_movement_orchestrator() -> MovementBriefOrchestrator:
+    orchestrator = cl.user_session.get("movement_brief_orchestrator")
+    if orchestrator is None:
+        orchestrator = MovementBriefOrchestrator()
+        cl.user_session.set("movement_brief_orchestrator", orchestrator)
+    return orchestrator
+
+
 def _build_transition_progress_callback(progress_msg: cl.Message, request_payload: Dict[str, Any]):
     events: List[Dict[str, Any]] = []
 
@@ -373,6 +409,22 @@ def _build_transition_progress_callback(progress_msg: cl.Message, request_payloa
             await progress_msg.update()
         except Exception as exc:
             logger.warning("Transition progress callback error: %s", exc)
+
+    return events, _progress_callback
+
+
+def _build_movement_progress_callback(progress_msg: cl.Message, request_payload: Dict[str, Any]):
+    events: List[Dict[str, Any]] = []
+
+    async def _progress_callback(event: Any):
+        try:
+            normalized = _normalize_movement_progress_event(event)
+            events.append(normalized)
+            persist_movement_progress_session(cl.user_session, events)
+            progress_msg.content = build_movement_progress_content(request_payload, events)
+            await progress_msg.update()
+        except Exception as exc:
+            logger.warning("Movement progress callback error: %s", exc)
 
     return events, _progress_callback
 
@@ -409,6 +461,42 @@ async def _run_transition_preflight_flow(request) -> None:
         await progress_msg.update()
         await cl.Message(
             "Transition validation failed. Check the backend ProConnect token and try again."
+        ).send()
+
+
+async def _run_movement_flow(request: Dict[str, Any]) -> None:
+    progress_msg = cl.Message(content="**People Movement Brief**\n\nStarting movement scan...")
+    await progress_msg.send()
+
+    request_payload = _dump_model(request)
+    events, progress_cb = _build_movement_progress_callback(progress_msg, request_payload)
+    try:
+        orchestrator = _get_movement_orchestrator()
+        trigger = build_movement_trigger(request)
+        result = await orchestrator.run(trigger, progress_cb=progress_cb)
+
+        artifacts = build_movement_artifacts(result)
+        persist_movement_artifacts_session(cl.user_session, artifacts)
+        cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, _dump_model(result.movement_brief))
+
+        events.append(
+            {
+                "stage": "brief_assembly",
+                "message": "Movement brief assembled.",
+                "status": "complete",
+            }
+        )
+        persist_movement_progress_session(cl.user_session, events)
+        progress_msg.content = build_movement_progress_content(request_payload, events)
+        await progress_msg.update()
+
+        await present_movement_brief(result)
+    except Exception as exc:
+        logger.exception("Movement research flow failed: %s", exc)
+        progress_msg.content = "**People Movement Brief**\n\nMovement scan failed."
+        await progress_msg.update()
+        await cl.Message(
+            "Movement brief generation failed. Confirm Deep Research and ProConnect access, then retry."
         ).send()
 
 
@@ -451,6 +539,43 @@ async def _run_transition_research_flow() -> None:
         await cl.Message(
             "Transition research failed. Confirm the Deep Research environment and ProConnect token, then retry."
         ).send()
+
+
+def _normalize_movement_progress_event(event: Any) -> Dict[str, Any]:
+    if isinstance(event, dict):
+        normalized = dict(event)
+    else:
+        normalized = {"message": str(event or "")}
+
+    message = _movement_text(normalized.get("message") or "")
+    stage = _movement_text(normalized.get("stage") or "")
+    if not stage:
+        stage = _infer_movement_stage(message)
+    normalized["message"] = message
+    normalized["stage"] = stage or "movement"
+    normalized["status"] = _movement_text(normalized.get("status") or "in_progress") or "in_progress"
+    return normalized
+
+
+def _infer_movement_stage(message: str) -> str:
+    lowered = message.lower()
+    if "signal evidence" in lowered or "account signals" in lowered:
+        return "account_signals"
+    if "extracting movement rows" in lowered:
+        return "movement_rows"
+    if "matching movement leverage" in lowered or "deep-enriching top movement rows" in lowered:
+        return "proconnect"
+    if "validating credentials" in lowered:
+        return "credentials"
+    if "assembling movement brief" in lowered:
+        return "brief_assembly"
+    if "deep research" in lowered:
+        return "deep_research_poll"
+    return ""
+
+
+def _movement_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
 
 # --- Enhanced system integration ---
 
@@ -904,7 +1029,7 @@ async def start():
         await cl.Message(welcome_msg).send()
 
         current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY)
-        if current_mode not in {"standard", "deep", TRANSITION_MODE}:
+        if current_mode not in {"standard", "deep", MOVEMENT_MODE, TRANSITION_MODE}:
             current_mode = "deep" if AppConfig.ENABLE_DEEP_RESEARCH else DEFAULT_MODE
             cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, current_mode)
         logger.info(
@@ -934,6 +1059,11 @@ async def start():
                     name="set_mode",
                     label="Deep Research (slower)",
                     payload={"mode": "deep"},
+                ),
+                cl.Action(
+                    name="set_mode",
+                    label="People Movement Brief",
+                    payload={"mode": MOVEMENT_MODE},
                 ),
                 cl.Action(
                     name="set_mode",
@@ -971,6 +1101,10 @@ async def update_mode(action: cl.Action):
         await cl.Message("Deep Research is not enabled in this environment.").send()
         cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
         return
+    if selected == MOVEMENT_MODE and not AppConfig.ENABLE_DEEP_RESEARCH:
+        await cl.Message("People Movement Brief mode is not available in this environment.").send()
+        cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
+        return
 
     cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, selected)
     logger.info(
@@ -980,6 +1114,7 @@ async def update_mode(action: cl.Action):
     )
     label = {
         "deep": "Deep Research",
+        MOVEMENT_MODE: "People Movement Brief",
         TRANSITION_MODE: "Transition Playbook",
     }.get(selected, "Standard Analysis")
     await cl.Message(f"✓ Mode: **{label}**").send()
@@ -987,6 +1122,8 @@ async def update_mode(action: cl.Action):
     # If Deep Research mode selected, show the research parameters form
     if selected == "deep":
         await show_research_form()
+    elif selected == MOVEMENT_MODE:
+        await show_movement_form()
     elif selected == TRANSITION_MODE:
         await show_transition_form()
 
@@ -1096,6 +1233,52 @@ async def show_transition_form():
         await cl.Message("Transition form cancelled or timed out.").send()
 
 
+async def show_movement_form():
+    """Show the people movement intake form using CustomElement."""
+    from services.prompt_loader import PromptLoader
+
+    loader = PromptLoader()
+    industries = loader.get_available_industries()
+    industry_options = [
+        {"value": key, "label": meta["display_name"]}
+        for key, meta in industries.items()
+    ]
+
+    request = load_movement_request_session(cl.user_session)
+    props = build_movement_scan_form_props(
+        industry_options=industry_options,
+        industry_override=(
+            (request or {}).get("industry_override")
+            or (request or {}).get("industry_key")
+            or "financial_services"
+        ),
+    )
+    if request:
+        props.update(request)
+
+    form_element = cl.CustomElement(
+        name="MovementScanForm",
+        display="inline",
+        props=props,
+    )
+
+    response = await cl.AskElementMessage(
+        content="**Configure the people movement scan below:**",
+        element=form_element,
+        timeout=300,
+    ).send()
+
+    if response and response.get("submitted"):
+        request = build_movement_request_from_form_response(response)
+        persist_movement_request_session(cl.user_session, request)
+        cl.user_session.set(MOVEMENT_PROGRESS_SESSION_KEY, [])
+        cl.user_session.set(MOVEMENT_ARTIFACTS_SESSION_KEY, {})
+        cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, None)
+        await _run_movement_flow(request)
+    else:
+        await cl.Message("Movement form cancelled or timed out.").send()
+
+
 async def present_transition_preflight_review(preflight, prompt_package):
     """Render the compact transition validation review surface."""
     payload = build_transition_preflight_review(preflight, prompt_package)
@@ -1124,6 +1307,39 @@ async def present_transition_brief(brief):
         for action in payload.get("actions", [])
     ]
     await cl.Message(content=payload["content"], actions=actions).send()
+
+
+async def present_movement_brief(result) -> None:
+    """Render the compact movement brief surface."""
+    payload = build_movement_brief_payload(
+        result.movement_brief,
+        person_details_by_name=build_movement_person_details_by_name(result),
+        row_action_context_by_person_name=build_movement_row_action_context_by_person_name(result),
+    )
+    brief_element = cl.CustomElement(
+        name="MovementBrief",
+        display="inline",
+        props=payload,
+    )
+    await cl.Message(
+        content="**People Movement Brief**",
+        elements=[brief_element],
+    ).send()
+
+    actions = [
+        cl.Action(
+            name=ACTION_START_NEW_MOVEMENT_SCAN,
+            label="Start New Scan",
+            payload={},
+        )
+    ] + [
+        cl.Action(name=item["name"], label=item["label"], payload=item.get("payload", {}))
+        for item in build_movement_artifact_actions()
+    ]
+    await cl.Message(
+        content="Open the supporting movement artifacts or launch another movement scan:",
+        actions=actions,
+    ).send()
 
 
 async def generate_research_prompt(params_dict: dict):
@@ -1214,13 +1430,25 @@ async def transition_view_artifact(action: cl.Action):
     payload = action.payload or {}
     artifact_key = str(payload.get("artifact_key") or "").strip()
     artifact_type = str(payload.get("artifact_type") or artifact_key).strip()
-    artifacts = cl.user_session.get(TRANSITION_ARTIFACTS_SESSION_KEY) or {}
+    current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
+    artifacts: Dict[str, str] = {}
+    if current_mode == MOVEMENT_MODE:
+        artifacts = load_movement_artifacts_session(cl.user_session)
+    elif current_mode == TRANSITION_MODE:
+        artifacts = cl.user_session.get(TRANSITION_ARTIFACTS_SESSION_KEY) or {}
+    else:
+        artifacts = load_movement_artifacts_session(cl.user_session) or cl.user_session.get(TRANSITION_ARTIFACTS_SESSION_KEY) or {}
     content = str(artifacts.get(artifact_key) or "").strip()
     if not content:
         await cl.Message("That artifact is not available for this run yet.").send()
         return
     title = artifact_type.replace("_", " ").title()
     await cl.Message(f"**{title}**\n\n{content}").send()
+
+
+@cl.action_callback(ACTION_START_NEW_MOVEMENT_SCAN)
+async def movement_start_new_scan(action: cl.Action):
+    await show_movement_form()
 
 
 
@@ -1272,6 +1500,15 @@ async def on_message(message: cl.Message):
                     "Transition mode is active. Use the review actions to run research, view the prompt, or adjust the scenario."
                 ).send()
                 return
+
+        if current_mode == MOVEMENT_MODE:
+            if load_movement_request_session(cl.user_session):
+                await cl.Message(
+                    "People Movement Brief mode is active. Use the artifact actions or re-open the movement form to start a new scan."
+                ).send()
+                return
+            await show_movement_form()
+            return
 
         ctx.add_message("user", user_text)
 
