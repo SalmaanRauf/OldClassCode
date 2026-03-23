@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from models.movement_schemas import (  # noqa: E402
     MovementAction,
     MovementBrief,
+    MovementBriefRequest,
     MovementCredentialsProof,
     MovementEvidence,
     MovementLeverageSummary,
@@ -25,6 +26,18 @@ def build_evidence() -> MovementEvidence:
         source_url="https://example.com/sarah-chen-promotion",
         source_title="Capital One leadership update",
     )
+
+
+def test_movement_brief_request_defaults_lookback_and_synthetic_mode():
+    request = MovementBriefRequest(
+        person_name="Jennifer Brady",
+        from_company="Capital One",
+        to_company="Fannie Mae",
+        new_role="Chief Information Officer",
+    )
+
+    assert request.lookback_days == 180
+    assert request.synthetic_scenario is True
 
 
 def test_movement_record_accepts_exec_and_buyer_categories():

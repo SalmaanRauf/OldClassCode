@@ -29,6 +29,23 @@ MovementActionPosture = Literal[
 MovementLookupStatus = Literal["Matched", "No Match", "Lookup Failed"]
 
 
+class MovementBriefRequest(BaseModel):
+    """Structured user input for the named-move people movement workflow."""
+
+    person_name: str = Field(..., description="Named mover driving the scan")
+    from_company: str = Field(..., description="Source company")
+    to_company: str = Field(..., description="Destination company")
+    new_role: str = Field(..., description="New destination role")
+    lookback_days: int = Field(180, ge=30, le=365, description="Movement lookback window")
+    synthetic_scenario: bool = Field(
+        True,
+        description="Whether this move is hypothetical for planning/demo purposes",
+    )
+    geography: Optional[str] = Field(None, description="Optional geography hint")
+    industry_override: Optional[str] = Field(None, description="Explicit industry override")
+    additional_context: Optional[str] = Field(None, description="Optional extra context")
+
+
 class MovementEvidence(BaseModel):
     """Source-backed evidence supporting a movement row."""
 

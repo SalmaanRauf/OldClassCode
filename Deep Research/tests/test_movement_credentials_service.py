@@ -3,65 +3,74 @@ Tests for movement credential proof packets.
 """
 import os
 import sys
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from models.movement_schemas import MovementEvidence, MovementRecord  # noqa: E402
+from models.bd_schemas import CredentialMatch, CredentialsResponse, Opportunity  # noqa: E402
 from services.movement_credentials_service import MovementCredentialsService  # noqa: E402
 
 
-def _row(name: str) -> MovementRecord:
-    return MovementRecord(
-        person_name=name,
-        target_company="Capital One",
-        previous_role="Director",
-        new_role="Vice President",
-        movement_type="Promoted",
-        category="BUYER",
-        company_context="internal",
-        evidence=MovementEvidence(
-            evidence_quote=f"{name} was promoted.",
-            source_url=f"https://example.com/{name.lower().replace(' ', '-')}",
+def _derived(person_name: str, title: str):
+    return SimpleNamespace(
+        person_name=person_name,
+        opportunity=Opportunity(
+            title=title,
+            agency="Fannie Mae",
+            scope="Derived scope",
+            confidence="High",
         ),
     )
 
 
 def test_credentials_service_prefers_person_account_linked_matches():
-    def lookup(row):
-        return {
-            "lookup_status": "Matched",
-            "summary": f"Prior delivery for {row.person_name} adjacent team.",
-            "matched_credentials": [
-                {"title": "Model Risk Remediation", "url": "https://example.com/cred"}
-            ],
-        }
+    service = MovementCredentialsService()
 
-    service = MovementCredentialsService(lookup=lookup)
-
-    packets = service.build_proof_packets([{"movement": _row("Sarah Chen")}])
+    packets = service.build_proof_packets(
+        [_derived("Sarah Chen", "Sarah Chen Play")],
+        {
+            "Sarah Chen Play": CredentialsResponse(
+                opportunity_title="Sarah Chen Play",
+                matches=[
+                    CredentialMatch(
+                        title="Model Risk Remediation",
+                        client_challenge="Challenge",
+                        value_provided="Value",
+                        url="https://example.com/cred",
+                    )
+                ],
+                lookup_status="Matched",
+            )
+        },
+    )
 
     assert packets["Sarah Chen"].lookup_status == "Matched"
     assert packets["Sarah Chen"].matched_credentials[0].title == "Model Risk Remediation"
+    assert "Matched credentials" in packets["Sarah Chen"].summary
 
 
 def test_credentials_service_keeps_no_match_packets_explicit():
-    service = MovementCredentialsService(
-        lookup=lambda row: {"lookup_status": "No Match", "summary": "No internal proof found."}
+    service = MovementCredentialsService()
+
+    packets = service.build_proof_packets(
+        [_derived("Unknown Person", "Unknown Person Play")],
+        {
+            "Unknown Person Play": CredentialsResponse(
+                opportunity_title="Unknown Person Play",
+                matches=[],
+                lookup_status="No Match",
+            )
+        },
     )
 
-    packets = service.build_proof_packets([{"movement": _row("Unknown Person")}])
-
     assert packets["Unknown Person"].lookup_status == "No Match"
-    assert packets["Unknown Person"].summary == "No internal proof found."
+    assert packets["Unknown Person"].summary == "No materially aligned credentials identified."
 
 
-def test_credentials_service_defaults_lookup_failures_without_dropping_row():
-    def lookup(_row):
-        raise RuntimeError("service unavailable")
+def test_credentials_service_defaults_missing_lookup_results_without_dropping_row():
+    service = MovementCredentialsService()
 
-    service = MovementCredentialsService(lookup=lookup)
-
-    packets = service.build_proof_packets([{"movement": _row("Sarah Chen")}])
+    packets = service.build_proof_packets([_derived("Sarah Chen", "Sarah Chen Play")], {})
 
     assert packets["Sarah Chen"].lookup_status == "Lookup Failed"
-    assert "service unavailable" in packets["Sarah Chen"].summary
+    assert "did not return a result" in packets["Sarah Chen"].summary

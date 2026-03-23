@@ -1,54 +1,56 @@
 """
-Credential proof packets for prioritized movement rows.
+Credential proof packet mapping for prioritized movement rows.
 """
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List
 
-from models.movement_schemas import MovementCredentialsProof, MovementCredentialReference
-
-
-LookupCallable = Callable[[Any], Dict[str, Any]]
+from models.bd_schemas import CredentialsResponse
+from models.movement_schemas import MovementCredentialReference, MovementCredentialsProof
 
 
 class MovementCredentialsService:
-    """Build proof packets for prioritized movement rows."""
+    """Map real credentials lookup results back onto prioritized movement rows."""
 
-    def __init__(self, lookup: LookupCallable):
-        self.lookup = lookup
-
-    def build_proof_packets(self, ranked_rows: List[Dict[str, Any]]) -> Dict[str, MovementCredentialsProof]:
+    def build_proof_packets(
+        self,
+        derived_opportunities: List[Any],
+        lookup_results: Dict[str, CredentialsResponse],
+    ) -> Dict[str, MovementCredentialsProof]:
         packets: Dict[str, MovementCredentialsProof] = {}
-        for row in ranked_rows:
-            movement = row["movement"]
-            key = movement.person_name
-            try:
-                raw = self.lookup(movement)
-                packets[key] = self._coerce(raw)
-            except Exception as exc:
-                packets[key] = MovementCredentialsProof(
+        for item in derived_opportunities:
+            person_name = str(getattr(item, "person_name", "") or "").strip()
+            opportunity = getattr(item, "opportunity", None)
+            opportunity_title = str(getattr(opportunity, "title", "") or "").strip()
+            if not person_name or not opportunity_title:
+                continue
+            response = lookup_results.get(opportunity_title)
+            if response is None:
+                packets[person_name] = MovementCredentialsProof(
                     lookup_status="Lookup Failed",
-                    summary=str(exc),
+                    summary="Credentials lookup did not return a result for this derived play.",
                     matched_credentials=[],
                 )
+                continue
+            packets[person_name] = self._coerce(response)
         return packets
 
-    def _coerce(self, payload: Dict[str, Any]) -> MovementCredentialsProof:
-        references = []
-        for item in payload.get("matched_credentials") or []:
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or "").strip()
-            url = str(item.get("url") or "").strip()
-            if not title or not url:
-                continue
-            references.append(MovementCredentialReference(title=title, url=url))
-
-        status = str(payload.get("lookup_status") or "No Match").strip()
-        if status not in {"Matched", "No Match", "Lookup Failed"}:
-            status = "No Match"
+    def _coerce(self, response: CredentialsResponse) -> MovementCredentialsProof:
+        references = [
+            MovementCredentialReference(title=match.title, url=match.url)
+            for match in list(response.matches or [])[:2]
+            if str(match.title or "").strip() and str(match.url or "").strip()
+        ]
+        summary = ""
+        if response.lookup_status == "Matched" and references:
+            titles = "; ".join(reference.title for reference in references)
+            summary = f"Matched credentials: {titles}."
+        elif response.lookup_status == "Lookup Failed":
+            summary = str(response.failure_reason or "Credential lookup failed.").strip()
+        else:
+            summary = "No materially aligned credentials identified."
         return MovementCredentialsProof(
-            lookup_status=status,
-            summary=str(payload.get("summary") or "").strip(),
+            lookup_status=response.lookup_status,
+            summary=summary,
             matched_credentials=references,
         )
