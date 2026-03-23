@@ -45,6 +45,13 @@ class MovementBriefRequest(BaseModel):
     industry_override: Optional[str] = Field(None, description="Explicit industry override")
     additional_context: Optional[str] = Field(None, description="Optional extra context")
 
+    @field_validator("person_name", "from_company", "to_company", "new_role")
+    @classmethod
+    def _reject_blank_required_fields(cls, value: str) -> str:
+        if not str(value or "").strip():
+            raise ValueError("value must not be blank")
+        return str(value).strip()
+
 
 class MovementEvidence(BaseModel):
     """Source-backed evidence supporting a movement row."""

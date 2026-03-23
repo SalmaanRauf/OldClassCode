@@ -72,6 +72,7 @@ from services.transition_brief_formatter import (
     build_transition_artifacts,
     build_transition_brief,
 )
+from services.element_response_utils import extract_element_response_payload
 from services.transition_playbook_orchestrator import TransitionPlaybookOrchestrator
 from services.transition_presenter import (
     ACTION_ADJUST_TRANSITION,
@@ -1248,20 +1249,34 @@ async def show_research_form():
     ).send()
     
     if response and response.get("submitted"):
+        payload = extract_element_response_payload(
+            response,
+            expected_keys=(
+                "sector",
+                "company",
+                "signals",
+                "service_lines",
+                "geography",
+                "min_value",
+                "time_window",
+                "max_opportunities",
+                "other_context",
+            ),
+        )
         # User submitted the form - fields are directly on the response object
-        logger.info(f"Research form submitted: {response}")
+        logger.info("Research form submitted: response_keys=%s payload_keys=%s", list(response.keys()), list(payload.keys()))
         
         # Extract form data from response (fields are directly accessible)
         form_data = {
-            "sector": response.get("sector", DEFAULT_INDUSTRY),
-            "company": response.get("company", ""),
-            "signals": response.get("signals", ""),
-            "service_lines": response.get("service_lines", ""),
-            "geography": response.get("geography", ""),
-            "min_value": response.get("min_value", ""),
-            "time_window": response.get("time_window", ""),
-            "max_opportunities": response.get("max_opportunities", "10"),
-            "other_context": response.get("other_context", "")
+            "sector": payload.get("sector", DEFAULT_INDUSTRY),
+            "company": payload.get("company", ""),
+            "signals": payload.get("signals", ""),
+            "service_lines": payload.get("service_lines", ""),
+            "geography": payload.get("geography", ""),
+            "min_value": payload.get("min_value", ""),
+            "time_window": payload.get("time_window", ""),
+            "max_opportunities": payload.get("max_opportunities", "10"),
+            "other_context": payload.get("other_context", "")
         }
         
         # Store in session
@@ -1303,7 +1318,16 @@ async def show_transition_form():
     ).send()
 
     if response and response.get("submitted"):
-        request = build_transition_request_from_form_response(response)
+        logger.info("Transition form submitted: response_keys=%s", list(response.keys()))
+        try:
+            request = build_transition_request_from_form_response(response)
+        except Exception as exc:
+            logger.warning("Transition form submission failed validation: %s", exc)
+            await cl.Message(
+                f"Transition form submission was incomplete or invalid: {exc}"
+            ).send()
+            await show_transition_form()
+            return
         persist_transition_request_session(cl.user_session, request)
         cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, None)
         cl.user_session.set(TRANSITION_PROMPT_SESSION_KEY, None)
@@ -1347,7 +1371,16 @@ async def show_movement_form():
     ).send()
 
     if response and response.get("submitted"):
-        request = build_movement_request_from_form_response(response)
+        logger.info("Movement form submitted: response_keys=%s", list(response.keys()))
+        try:
+            request = build_movement_request_from_form_response(response)
+        except Exception as exc:
+            logger.warning("Movement form submission failed validation: %s", exc)
+            await cl.Message(
+                f"Movement form submission was incomplete or invalid: {exc}"
+            ).send()
+            await show_movement_form()
+            return
         persist_movement_request_session(cl.user_session, request)
         cl.user_session.set(MOVEMENT_PROGRESS_SESSION_KEY, [])
         cl.user_session.set(MOVEMENT_ARTIFACTS_SESSION_KEY, {})

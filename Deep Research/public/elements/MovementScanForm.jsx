@@ -27,8 +27,7 @@ export default function MovementScanForm() {
         setValues((current) => ({ ...current, [field]: value }));
     };
 
-    const handleSubmit = (event) => {
-        event.preventDefault();
+    const handleSubmit = () => {
         if (typeof submitElement === "function") {
             submitElement({
                 ...values,
@@ -45,7 +44,6 @@ export default function MovementScanForm() {
 
     return (
         <Card className="w-full max-w-3xl border-[#dccfbf] bg-white/95 shadow-[0_18px_55px_rgba(48,36,18,0.08)]">
-            <form onSubmit={handleSubmit}>
                 <CardHeader className="space-y-3">
                     <div className="space-y-1">
                         <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-[#6f5a42]">
@@ -67,6 +65,7 @@ export default function MovementScanForm() {
                         <Input
                             id="person_name"
                             placeholder="Jennifer Brady"
+                            required
                             value={values.person_name}
                             onChange={(event) => handleChange("person_name", event.target.value)}
                         />
@@ -77,6 +76,7 @@ export default function MovementScanForm() {
                         <Input
                             id="new_role"
                             placeholder="Chief Information Officer"
+                            required
                             value={values.new_role}
                             onChange={(event) => handleChange("new_role", event.target.value)}
                         />
@@ -87,6 +87,7 @@ export default function MovementScanForm() {
                         <Input
                             id="from_company"
                             placeholder="Capital One"
+                            required
                             value={values.from_company}
                             onChange={(event) => handleChange("from_company", event.target.value)}
                         />
@@ -97,6 +98,7 @@ export default function MovementScanForm() {
                         <Input
                             id="to_company"
                             placeholder="Fannie Mae"
+                            required
                             value={values.to_company}
                             onChange={(event) => handleChange("to_company", event.target.value)}
                         />
@@ -110,6 +112,7 @@ export default function MovementScanForm() {
                             min="30"
                             max="365"
                             step="1"
+                            required
                             value={values.lookback_days}
                             onChange={(event) => handleChange("lookback_days", event.target.value)}
                         />
@@ -203,11 +206,10 @@ export default function MovementScanForm() {
                     <Button type="button" variant="outline" onClick={handleCancel} className="min-h-11">
                         {data.secondary_cta_label || "Cancel"}
                     </Button>
-                    <Button type="submit" className="min-h-11">
+                    <Button type="button" className="min-h-11" onClick={handleSubmit}>
                         {data.primary_cta_label || "Generate Research Plan"}
                     </Button>
                 </CardFooter>
-            </form>
         </Card>
     );
 }

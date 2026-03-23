@@ -41,6 +41,26 @@ def test_required_fields_map_into_transition_request() -> None:
     assert request.synthetic_scenario is True
 
 
+def test_nested_output_payload_maps_into_transition_request() -> None:
+    request = build_transition_request_from_form_response(
+        {
+            "submitted": True,
+            "output": {
+                "person_name": "Jennifer Brady",
+                "from_company": "Capital One",
+                "to_company": "Fannie Mae",
+                "new_role": "Chief Information Officer",
+                "synthetic_scenario": True,
+            },
+        }
+    )
+
+    assert request.person_name == "Jennifer Brady"
+    assert request.from_company == "Capital One"
+    assert request.to_company == "Fannie Mae"
+    assert request.new_role == "Chief Information Officer"
+
+
 def test_advanced_options_are_optional() -> None:
     request = build_transition_request_from_form_response(
         {
@@ -55,6 +75,26 @@ def test_advanced_options_are_optional() -> None:
     assert request.geography is None
     assert request.industry_override is None
     assert request.additional_context is None
+
+
+def test_blank_required_fields_raise_validation_error() -> None:
+    try:
+        build_transition_request_from_form_response(
+            {
+                "submitted": True,
+                "output": {
+                    "person_name": "",
+                    "from_company": "",
+                    "to_company": "",
+                    "new_role": "",
+                },
+            }
+        )
+    except Exception as exc:
+        message = str(exc)
+        assert "person_name" in message or "must not be blank" in message
+    else:
+        raise AssertionError("Expected blank required fields to fail validation")
 
 
 def test_synthetic_scenario_flag_persists_in_session() -> None:

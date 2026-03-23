@@ -41,6 +41,7 @@ export default function TransitionForm() {
                     <Input
                         id="person_name"
                         placeholder="Jennifer Brady"
+                        required
                         value={values.person_name}
                         onChange={(e) => handleChange("person_name", e.target.value)}
                     />
@@ -51,6 +52,7 @@ export default function TransitionForm() {
                     <Input
                         id="new_role"
                         placeholder="Chief Information Officer"
+                        required
                         value={values.new_role}
                         onChange={(e) => handleChange("new_role", e.target.value)}
                     />
@@ -61,6 +63,7 @@ export default function TransitionForm() {
                     <Input
                         id="from_company"
                         placeholder="Capital One"
+                        required
                         value={values.from_company}
                         onChange={(e) => handleChange("from_company", e.target.value)}
                     />
@@ -71,6 +74,7 @@ export default function TransitionForm() {
                     <Input
                         id="to_company"
                         placeholder="Fannie Mae"
+                        required
                         value={values.to_company}
                         onChange={(e) => handleChange("to_company", e.target.value)}
                     />

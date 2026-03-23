@@ -9,6 +9,7 @@ from models.bd_schemas import BDTrigger
 from models.movement_schemas import MovementBriefRequest
 from models.transition_schemas import TransitionRequest
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
+from services.element_response_utils import extract_element_response_payload
 
 
 DEFAULT_MOVEMENT_INDUSTRY = "financial_services"
@@ -67,23 +68,37 @@ def build_movement_request_from_form_response(
     default_industry: str = DEFAULT_MOVEMENT_INDUSTRY,
 ) -> MovementBriefRequest:
     """Map CustomElement response fields into a normalized movement request."""
-    industry_override = _normalize_text(response.get("industry_override"))
-    lookback_raw = response.get("lookback_days")
+    payload = extract_element_response_payload(
+        response,
+        expected_keys=(
+            "person_name",
+            "from_company",
+            "to_company",
+            "new_role",
+            "lookback_days",
+            "synthetic_scenario",
+            "industry_override",
+            "geography",
+            "additional_context",
+        ),
+    )
+    industry_override = _normalize_text(payload.get("industry_override"))
+    lookback_raw = payload.get("lookback_days")
     try:
         lookback_days = int(lookback_raw or 180)
     except (TypeError, ValueError):
         lookback_days = 180
 
     return MovementBriefRequest(
-        person_name=_normalize_text(response.get("person_name")),
-        from_company=_normalize_text(response.get("from_company")),
-        to_company=_normalize_text(response.get("to_company")),
-        new_role=_normalize_text(response.get("new_role")),
+        person_name=_normalize_text(payload.get("person_name")),
+        from_company=_normalize_text(payload.get("from_company")),
+        to_company=_normalize_text(payload.get("to_company")),
+        new_role=_normalize_text(payload.get("new_role")),
         lookback_days=max(30, min(365, lookback_days)),
-        synthetic_scenario=bool(response.get("synthetic_scenario", True)),
-        geography=_optional_text(response.get("geography")),
+        synthetic_scenario=bool(payload.get("synthetic_scenario", True)),
+        geography=_optional_text(payload.get("geography")),
         industry_override=_optional_text(industry_override),
-        additional_context=_optional_text(response.get("additional_context")),
+        additional_context=_optional_text(payload.get("additional_context")),
     )
 
 

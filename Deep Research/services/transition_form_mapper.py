@@ -6,6 +6,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from models.transition_schemas import TransitionRequest
+from services.element_response_utils import extract_element_response_payload
 
 
 TRANSITION_REQUEST_SESSION_KEY = "transition_request"
@@ -18,16 +19,30 @@ TRANSITION_EDIT_PENDING_SESSION_KEY = "transition_edit_pending"
 
 def build_transition_request_from_form_response(response: Dict[str, Any]) -> TransitionRequest:
     """Map CustomElement response fields into a TransitionRequest."""
+    payload = extract_element_response_payload(
+        response,
+        expected_keys=(
+            "person_name",
+            "from_company",
+            "to_company",
+            "new_role",
+            "synthetic_scenario",
+            "department_hint",
+            "geography",
+            "industry_override",
+            "additional_context",
+        ),
+    )
     return TransitionRequest(
-        person_name=str(response.get("person_name") or "").strip(),
-        from_company=str(response.get("from_company") or "").strip(),
-        to_company=str(response.get("to_company") or "").strip(),
-        new_role=str(response.get("new_role") or "").strip(),
-        synthetic_scenario=bool(response.get("synthetic_scenario")),
-        department_hint=_optional_text(response.get("department_hint")),
-        geography=_optional_text(response.get("geography")),
-        industry_override=_optional_text(response.get("industry_override")),
-        additional_context=_optional_text(response.get("additional_context")),
+        person_name=str(payload.get("person_name") or "").strip(),
+        from_company=str(payload.get("from_company") or "").strip(),
+        to_company=str(payload.get("to_company") or "").strip(),
+        new_role=str(payload.get("new_role") or "").strip(),
+        synthetic_scenario=bool(payload.get("synthetic_scenario")),
+        department_hint=_optional_text(payload.get("department_hint")),
+        geography=_optional_text(payload.get("geography")),
+        industry_override=_optional_text(payload.get("industry_override")),
+        additional_context=_optional_text(payload.get("additional_context")),
     )
 
 

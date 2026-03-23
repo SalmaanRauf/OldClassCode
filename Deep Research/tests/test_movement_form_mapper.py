@@ -113,6 +113,47 @@ def test_build_movement_request_normalizes_named_move_form_response_and_defaults
     assert request.additional_context == "Focus on executive and buyer movement."
 
 
+def test_build_movement_request_accepts_nested_output_payload() -> None:
+    request = build_movement_request_from_form_response(
+        {
+            "submitted": True,
+            "output": {
+                "person_name": "Jennifer Brady",
+                "from_company": "Capital One",
+                "to_company": "Fannie Mae",
+                "new_role": "Chief Information Officer",
+                "lookback_days": 180,
+                "synthetic_scenario": True,
+            },
+        }
+    )
+
+    assert request.person_name == "Jennifer Brady"
+    assert request.from_company == "Capital One"
+    assert request.to_company == "Fannie Mae"
+    assert request.new_role == "Chief Information Officer"
+
+
+def test_build_movement_request_rejects_blank_required_fields() -> None:
+    try:
+        build_movement_request_from_form_response(
+            {
+                "submitted": True,
+                "output": {
+                    "person_name": "",
+                    "from_company": "",
+                    "to_company": "",
+                    "new_role": "",
+                },
+            }
+        )
+    except Exception as exc:
+        message = str(exc)
+        assert "person_name" in message or "must not be blank" in message
+    else:
+        raise AssertionError("Expected blank required fields to fail validation")
+
+
 def test_build_movement_trigger_reuses_financial_services_signal_mapping_and_lookback():
     request = build_movement_request_from_form_response(
         {

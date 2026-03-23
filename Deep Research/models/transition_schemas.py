@@ -10,13 +10,18 @@ They represent:
 from typing import List, Literal, Optional
 
 try:
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, field_validator
 except Exception:  # pragma: no cover
     class BaseModel:  # type: ignore
         pass
 
     def Field(*args, **kwargs):  # type: ignore
         return None
+
+    def field_validator(*args, **kwargs):  # type: ignore
+        def decorator(func):
+            return func
+        return decorator
 
 
 TransitionConfidence = Literal["High", "Medium", "Low"]
@@ -39,6 +44,13 @@ class TransitionRequest(BaseModel):
     geography: Optional[str] = Field(None, description="Optional geography hint")
     industry_override: Optional[str] = Field(None, description="Explicit prompt-industry override")
     additional_context: Optional[str] = Field(None, description="Extra user-supplied planning context")
+
+    @field_validator("person_name", "from_company", "to_company", "new_role")
+    @classmethod
+    def _reject_blank_required_fields(cls, value: str) -> str:
+        if not str(value or "").strip():
+            raise ValueError("value must not be blank")
+        return str(value).strip()
 
 
 class TransitionPersonResolution(BaseModel):
