@@ -20,6 +20,7 @@ from models.bd_schemas import (  # noqa: E402
     Opportunity,
 )
 from services.credentials_lookup_runner import CredentialsLookupRunner  # noqa: E402
+from services import credentials_lookup_runner as credentials_lookup_module  # noqa: E402
 
 
 def _opportunity(title: str) -> Opportunity:
@@ -174,3 +175,25 @@ async def test_runner_skips_lookup_when_no_opportunities_are_provided():
     assert result.batch_diagnostics is None
     assert result.status_counts == {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
     assert result.lookups_executed_count == 0
+
+
+@pytest.mark.asyncio
+async def test_runner_lazy_loads_credentials_agent_via_factory(monkeypatch):
+    agent = MagicMock(spec=CredentialsAgent)
+    agent.find_credentials = AsyncMock(return_value=_matched_response("AI Governance"))
+    agent.find_credentials_batch = AsyncMock()
+
+    created = {"count": 0}
+
+    def fake_factory():
+        created["count"] += 1
+        return agent
+
+    monkeypatch.setattr(credentials_lookup_module, "_create_default_credentials_agent", fake_factory)
+
+    runner = CredentialsLookupRunner(credentials_agent=None)
+    result = await runner.run([_opportunity("AI Governance")], sector="Financial Services")
+
+    assert created["count"] == 1
+    assert agent.find_credentials.await_count == 1
+    assert result.results["AI Governance"].lookup_status == "Matched"

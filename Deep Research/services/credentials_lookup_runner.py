@@ -6,9 +6,8 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 
-from agents.credentials_agent import CredentialsAgent
 from models.bd_schemas import (
     CredentialsBatchDiagnostics,
     CredentialsLookupDiagnostics,
@@ -16,7 +15,17 @@ from models.bd_schemas import (
     Opportunity,
 )
 
+if TYPE_CHECKING:
+    from agents.credentials_agent import CredentialsAgent
+
 logger = logging.getLogger(__name__)
+
+
+def _create_default_credentials_agent() -> "CredentialsAgent":
+    """Import lazily to avoid startup-order issues during app bootstrap."""
+    from agents.credentials_agent import CredentialsAgent
+
+    return CredentialsAgent.from_env()
 
 
 @dataclass(frozen=True)
@@ -36,7 +45,7 @@ class CredentialsLookupRunner:
     def __init__(
         self,
         *,
-        credentials_agent: Optional[CredentialsAgent] = None,
+        credentials_agent: Optional["CredentialsAgent"] = None,
         lookup_mode: str = "serial_per_opportunity",
         retry_backoff_seconds: float = 1.0,
     ) -> None:
@@ -103,7 +112,7 @@ class CredentialsLookupRunner:
 
     async def _ensure_credentials_agent(self) -> None:
         if self.credentials_agent is None:
-            self.credentials_agent = CredentialsAgent.from_env()
+            self.credentials_agent = _create_default_credentials_agent()
 
     async def _lookup_single_with_retry(
         self,

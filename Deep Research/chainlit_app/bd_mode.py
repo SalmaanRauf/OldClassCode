@@ -15,8 +15,6 @@ import chainlit as cl
 from models.bd_schemas import BDTrigger, MDReport, MDReportOpportunity
 from services.bd_orchestrator import BDOrchestrator
 from services.opportunity_extractor import OpportunityExtractor
-from agents.credentials_agent import CredentialsAgent
-from agents.final_analyst_agent import FinalAnalystAgent
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -27,6 +25,18 @@ BD_TRIGGER_SESSION_KEY = "bd_trigger"
 
 # Traces directory
 TRACES_DIR = Path(__file__).parent.parent / "traces"
+
+
+def _create_default_credentials_agent():
+    from agents.credentials_agent import CredentialsAgent
+
+    return CredentialsAgent.from_env()
+
+
+def _create_default_final_analyst():
+    from agents.final_analyst_agent import FinalAnalystAgent
+
+    return FinalAnalystAgent()
 
 
 async def show_bd_mode_selection():
@@ -203,8 +213,8 @@ async def run_bd_orchestration(
         # Initialize orchestrator
         orchestrator = BDOrchestrator(
             extractor=OpportunityExtractor(),
-            credentials_agent=CredentialsAgent.from_env(),
-            final_analyst=FinalAnalystAgent(),
+            credentials_agent=_create_default_credentials_agent(),
+            final_analyst=_create_default_final_analyst(),
             traces_dir=TRACES_DIR
         )
         
