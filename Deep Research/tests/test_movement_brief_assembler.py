@@ -10,12 +10,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.bd_schemas import SignalEvidence  # noqa: E402
 from models.movement_schemas import (  # noqa: E402
+    MovementBriefRequest,
     MovementCredentialsProof,
     MovementEvidence,
     MovementLeverageSummary,
     MovementRecord,
 )
 from models.bd_schemas import BDTrigger  # noqa: E402
+from models.transition_schemas import (  # noqa: E402
+    AccountResolution,
+    QuickRelationshipIndicators,
+    TransitionPersonResolution,
+    TransitionPreflight,
+    TransitionRequest,
+)
 from services.movement_brief_assembler import MovementBriefAssembler  # noqa: E402
 
 
@@ -42,6 +50,51 @@ def _movement(index: int) -> MovementRecord:
             source_url=f"https://example.com/{index}",
             source_title=f"Source {index}",
         ),
+    )
+
+
+def _request() -> MovementBriefRequest:
+    return MovementBriefRequest(
+        person_name="Jennifer Brady",
+        from_company="Capital One",
+        to_company="Fannie Mae",
+        new_role="Chief Information Officer",
+        lookback_days=180,
+        synthetic_scenario=True,
+    )
+
+
+def _preflight() -> TransitionPreflight:
+    return TransitionPreflight(
+        request=TransitionRequest(
+            person_name="Jennifer Brady",
+            from_company="Capital One",
+            to_company="Fannie Mae",
+            new_role="Chief Information Officer",
+            synthetic_scenario=True,
+        ),
+        person_resolution=TransitionPersonResolution(
+            requested_name="Jennifer Brady",
+            match_status="matched",
+            matched_name="Jennifer Brady",
+            matched_title="Senior Director of Technology Risk",
+            match_source="from_key_buyers",
+            direct_person_evidence=True,
+        ),
+        from_account=AccountResolution(company_name="Capital One", resolved=True, account_id="001"),
+        to_account=AccountResolution(company_name="Fannie Mae", resolved=True, account_id="002"),
+        quick_indicators=QuickRelationshipIndicators(
+            warm_intro_path_available=True,
+            source_worked_before=True,
+            destination_worked_before=True,
+            source_key_buyer_count=12,
+            destination_key_buyer_count=8,
+            source_connected_colleague_count=4,
+            destination_connected_colleague_count=2,
+        ),
+        opportunity_hypotheses=[],
+        inferred_industry="financial_services",
+        suggested_research_prompt="Investigate movement.",
     )
 
 
@@ -96,16 +149,18 @@ def test_assemble_brief_caps_rows_and_actions_and_attaches_proof_packets():
     }
 
     brief = assembler.assemble(
+        request=_request(),
+        preflight=_preflight(),
         trigger=_trigger(),
         deep_research_summary="Capital One is under governance pressure and people movement is active.",
         signal_evidence=signal_evidence,
         ranked_rows=ranked_rows,
         deep_enriched_rows=deep_enriched_rows,
         credential_packets=credential_packets,
+        derived_opportunities=[object(), object()],
     )
 
-    assert "Deep Research Findings" in brief.executive_summary
-    assert "Credentials Agent Findings" in brief.executive_summary
+    assert "Jennifer Brady moved from Capital One to Fannie Mae as Chief Information Officer." in brief.executive_summary
     assert len(brief.signal_summary) == 2
     assert len(brief.movement_rows) == 10
     assert len(brief.where_to_act) == 3
@@ -118,7 +173,7 @@ def test_assemble_brief_caps_rows_and_actions_and_attaches_proof_packets():
     assert brief.movement_rows[0].leverage is not None
     assert brief.movement_rows[0].credentials_proof is not None
     assert brief.movement_rows[0].credentials_proof.lookup_status == "Matched"
-    assert "deep-enriched rows: 10" in brief.executive_summary.lower()
+    assert "matched credentials for 1 of 2 prioritized plays" in brief.executive_summary.lower()
 
 
 def test_assemble_brief_uses_fallback_actions_when_rows_are_sparse():

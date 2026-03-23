@@ -6,11 +6,17 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from models.bd_schemas import BDTrigger
+from models.movement_schemas import MovementBriefRequest
+from models.transition_schemas import TransitionRequest
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
 
 
 DEFAULT_MOVEMENT_INDUSTRY = "financial_services"
 MOVEMENT_REQUEST_SESSION_KEY = "movement_request"
+MOVEMENT_PREFLIGHT_SESSION_KEY = "movement_preflight"
+MOVEMENT_PROMPT_SESSION_KEY = "movement_prompt"
+MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY = "movement_prompt_override"
+MOVEMENT_EDIT_PENDING_SESSION_KEY = "movement_edit_pending"
 MOVEMENT_PROGRESS_SESSION_KEY = "movement_progress"
 MOVEMENT_BRIEF_SESSION_KEY = "movement_brief"
 MOVEMENT_ARTIFACTS_SESSION_KEY = "movement_artifacts"
@@ -23,29 +29,35 @@ MOVEMENT_EVIDENCE_ARTIFACT_KEY = "movement_evidence"
 def build_movement_form_props(
     industry_options: Optional[List[Dict[str, str]]] = None,
     *,
-    company_name: str = "",
-    account_id: str = "",
     person_name: str = "",
+    from_company: str = "",
+    to_company: str = "",
+    new_role: str = "",
+    lookback_days: int = 180,
+    synthetic_scenario: bool = True,
     industry_override: str = "",
     geography: str = "",
-    notes: str = "",
+    additional_context: str = "",
     show_advanced: bool = False,
 ) -> Dict[str, Any]:
     """Build stable props for the movement intake form."""
     return {
         "title": "Build a People Movement Brief",
-        "description": "Scan an account for executive and buyer movement, then enrich leverage.",
-        "company_name": _normalize_text(company_name),
-        "account_id": _normalize_text(account_id),
+        "description": "Validate the move, generate a research plan, and surface broader people movement.",
         "person_name": _normalize_text(person_name),
+        "from_company": _normalize_text(from_company),
+        "to_company": _normalize_text(to_company),
+        "new_role": _normalize_text(new_role),
+        "lookback_days": max(int(lookback_days or 180), 30),
+        "synthetic_scenario": bool(synthetic_scenario),
         "industry_override": _normalize_text(industry_override),
         "geography": _normalize_text(geography),
-        "notes": _normalize_text(notes),
+        "additional_context": _normalize_text(additional_context),
         "show_advanced": show_advanced,
         "industry_options": industry_options or [],
-        "primary_cta_label": "Run Movement Scan",
+        "primary_cta_label": "Generate Research Plan",
         "secondary_cta_label": "Cancel",
-        "scan_hint": "Use the company or account as the primary search anchor.",
+        "scan_hint": "Start from the named move, then expand into broader executive and buyer movement.",
     }
 
 
@@ -53,43 +65,45 @@ def build_movement_request_from_form_response(
     response: Dict[str, Any],
     *,
     default_industry: str = DEFAULT_MOVEMENT_INDUSTRY,
-) -> Dict[str, Any]:
+) -> MovementBriefRequest:
     """Map CustomElement response fields into a normalized movement request."""
-    company_name = _normalize_text(response.get("company_name"))
-    account_id = _normalize_text(response.get("account_id"))
-    person_name = _normalize_text(response.get("person_name"))
     industry_override = _normalize_text(response.get("industry_override"))
-    geography = _normalize_text(response.get("geography"))
-    notes = _normalize_text(response.get("notes"))
-    show_advanced = bool(response.get("show_advanced"))
+    lookback_raw = response.get("lookback_days")
+    try:
+        lookback_days = int(lookback_raw or 180)
+    except (TypeError, ValueError):
+        lookback_days = 180
 
-    request = {
-        "company_name": company_name,
-        "account_id": account_id,
-        "person_name": person_name,
-        "industry_override": industry_override,
-        "industry_key": industry_override or default_industry,
-        "geography": geography,
-        "notes": notes,
-        "show_advanced": show_advanced,
-    }
-    request["user_query"] = build_movement_user_query(request)
-    return request
+    return MovementBriefRequest(
+        person_name=_normalize_text(response.get("person_name")),
+        from_company=_normalize_text(response.get("from_company")),
+        to_company=_normalize_text(response.get("to_company")),
+        new_role=_normalize_text(response.get("new_role")),
+        lookback_days=max(30, min(365, lookback_days)),
+        synthetic_scenario=bool(response.get("synthetic_scenario", True)),
+        geography=_optional_text(response.get("geography")),
+        industry_override=_optional_text(industry_override),
+        additional_context=_optional_text(response.get("additional_context")),
+    )
 
 
-def persist_movement_request_session(session: Any, request: Dict[str, Any]) -> Dict[str, Any]:
+def persist_movement_request_session(session: Any, request: MovementBriefRequest | Dict[str, Any]) -> Dict[str, Any]:
     """Persist the movement request in a Chainlit-like session store."""
-    payload = dict(request)
+    payload = _dump_request(request)
     session.set(MOVEMENT_REQUEST_SESSION_KEY, payload)
     return payload
 
 
-def load_movement_request_session(session: Any) -> Optional[Dict[str, Any]]:
+def load_movement_request_session(session: Any) -> Optional[MovementBriefRequest]:
     """Load a persisted movement request from a Chainlit-like session store."""
     payload = session.get(MOVEMENT_REQUEST_SESSION_KEY)
     if not payload:
         return None
-    return dict(payload)
+    if isinstance(payload, MovementBriefRequest):
+        return payload
+    if hasattr(MovementBriefRequest, "model_validate"):
+        return MovementBriefRequest.model_validate(payload)
+    return MovementBriefRequest.parse_obj(payload)
 
 
 def persist_movement_progress_session(session: Any, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -118,20 +132,39 @@ def load_movement_artifacts_session(session: Any) -> Dict[str, str]:
     return {str(key): str(value) for key, value in payload.items()}
 
 
-def build_movement_trigger(request: Dict[str, Any]) -> BDTrigger:
+def build_transition_request_for_movement(request: MovementBriefRequest | Dict[str, Any]) -> TransitionRequest:
+    """Convert a movement request into the transition-style request used for ProConnect preflight."""
+    movement_request = _coerce_request(request)
+    return TransitionRequest(
+        person_name=movement_request.person_name,
+        from_company=movement_request.from_company,
+        to_company=movement_request.to_company,
+        new_role=movement_request.new_role,
+        synthetic_scenario=movement_request.synthetic_scenario,
+        geography=movement_request.geography,
+        industry_override=movement_request.industry_override,
+        additional_context=movement_request.additional_context,
+    )
+
+
+def build_movement_trigger(request: MovementBriefRequest | Dict[str, Any]) -> BDTrigger:
     """Build the BD trigger used by the movement workflow."""
-    sector = _normalize_text(request.get("industry_key")) or DEFAULT_MOVEMENT_INDUSTRY
-    user_query = build_movement_user_query(request)
+    movement_request = _coerce_request(request)
+    sector = _normalize_text(movement_request.industry_override) or DEFAULT_MOVEMENT_INDUSTRY
+    user_query = build_movement_user_query(movement_request)
     session_params = {
-        "company": _primary_company_focus(request),
-        "geography": _normalize_text(request.get("geography")),
+        "company": movement_request.to_company,
+        "geography": _normalize_text(movement_request.geography),
         "signals": ["All relevant signals"],
+        "time_window_days": movement_request.lookback_days,
     }
-    return build_trigger_for_bd_enrichment(
+    trigger = build_trigger_for_bd_enrichment(
         sector=sector,
         user_query=user_query,
         session_params=session_params,
     )
+    trigger.time_window_days = movement_request.lookback_days
+    return trigger
 
 
 def build_movement_artifacts(result: Any) -> Dict[str, str]:
@@ -219,44 +252,44 @@ def build_movement_row_action_context_by_person_name(result: Any) -> Dict[str, D
     return contexts
 
 
-def build_movement_user_query(request: Dict[str, Any]) -> str:
+def build_movement_user_query(request: MovementBriefRequest | Dict[str, Any]) -> str:
     """Compose a concise user-query context for the movement workflow."""
-    company_name = _normalize_text(request.get("company_name")) or "the target account"
-    account_id = _normalize_text(request.get("account_id"))
-    person_name = _normalize_text(request.get("person_name"))
-    geography = _normalize_text(request.get("geography"))
-    notes = _normalize_text(request.get("notes"))
-    industry_override = _normalize_text(request.get("industry_override"))
-
+    movement_request = _coerce_request(request)
     parts = [
-        f"Run a people movement brief for {company_name}.",
-        "Find all relevant financial-services signals, but bias the analysis toward executive movement and buyer movement and why they matter now.",
+        (
+            f"{movement_request.person_name} has moved from {movement_request.from_company} "
+            f"to {movement_request.to_company}, with a new role as {movement_request.new_role}."
+        ),
+        (
+            f"Source all relevant information and find executive and buyer movement within the last "
+            f"{movement_request.lookback_days} days."
+        ),
+        "Keep the research broad across financial-services signals, but bias the analysis toward executive movement, buyer movement, and why the move matters now.",
     ]
-    if account_id:
-        parts.append(f"Account ID: {account_id}.")
-    if person_name:
-        parts.append(f"Named person to prioritize: {person_name}.")
-    if geography:
-        parts.append(f"Geography: {geography}.")
-    if notes:
-        parts.append(f"Notes: {notes}.")
-    if industry_override and industry_override != DEFAULT_MOVEMENT_INDUSTRY:
-        parts.append(f"Industry override: {industry_override}.")
+    if movement_request.synthetic_scenario:
+        parts.append("Treat this as a hypothetical planning scenario for demo purposes.")
+    if movement_request.geography:
+        parts.append(f"Geography: {movement_request.geography}.")
+    if movement_request.additional_context:
+        parts.append(f"Additional context: {movement_request.additional_context}.")
+    if movement_request.industry_override and movement_request.industry_override != DEFAULT_MOVEMENT_INDUSTRY:
+        parts.append(f"Industry override: {movement_request.industry_override}.")
     return " ".join(parts).strip()
 
 
-def build_movement_progress_content(request: Dict[str, Any], events: List[Dict[str, Any]]) -> str:
+def build_movement_progress_content(request: MovementBriefRequest | Dict[str, Any], events: List[Dict[str, Any]]) -> str:
     """Render a factual movement progress card from stage events."""
-    company_name = _normalize_text(request.get("company_name")) or _normalize_text(request.get("account_id"))
-    if not company_name:
-        company_name = _normalize_text(request.get("person_name")) or "Unknown account"
-    industry = _format_industry_label(_normalize_text(request.get("industry_key")) or DEFAULT_MOVEMENT_INDUSTRY)
+    movement_request = _coerce_request(request)
+    industry = _format_industry_label(_normalize_text(movement_request.industry_override) or DEFAULT_MOVEMENT_INDUSTRY)
 
     state = _derive_progress_state(events)
     lines = [
         "**People Movement Brief In Progress**",
         "",
-        f"Account: {company_name}",
+        f"Person: {movement_request.person_name}",
+        f"Move: {movement_request.from_company} -> {movement_request.to_company}",
+        f"Target role: {movement_request.new_role}",
+        f"Lookback: {movement_request.lookback_days} days",
         f"Industry: {industry}",
         f"Stage: {state['current_stage_label']}",
         f"Status: {state['current_status']}",
@@ -291,6 +324,9 @@ def build_movement_progress_content(request: Dict[str, Any], events: List[Dict[s
 
 def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     pipeline = [
+        ["Move validation", "pending"],
+        ["Relationship context", "pending"],
+        ["Research plan", "pending"],
         ["Account signals", "pending"],
         ["Executive movement", "pending"],
         ["Buyer movement", "pending"],
@@ -327,30 +363,36 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 
         if stage_key == "movement_rows":
             movement_status = "complete" if latest_status == "complete" else "in progress"
-            pipeline[1][1] = movement_status
-            pipeline[2][1] = movement_status
+            pipeline[4][1] = movement_status
+            pipeline[5][1] = movement_status
         elif stage_key == "proconnect":
-            pipeline[1][1] = "complete"
-            pipeline[2][1] = "complete"
-            pipeline[3][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key == "credentials":
-            pipeline[1][1] = "complete"
-            pipeline[2][1] = "complete"
-            pipeline[3][1] = "complete"
-            pipeline[4][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key == "brief_assembly":
-            pipeline[1][1] = "complete"
-            pipeline[2][1] = "complete"
-            pipeline[3][1] = "complete"
             pipeline[4][1] = "complete"
-            pipeline[5][1] = "complete" if latest_status == "complete" else "in progress"
+            pipeline[5][1] = "complete"
+            pipeline[6][1] = "complete" if latest_status == "complete" else "in progress"
+        elif stage_key == "credentials":
+            pipeline[4][1] = "complete"
+            pipeline[5][1] = "complete"
+            pipeline[6][1] = "complete"
+            pipeline[7][1] = "complete" if latest_status == "complete" else "in progress"
+        elif stage_key == "brief_assembly":
+            pipeline[4][1] = "complete"
+            pipeline[5][1] = "complete"
+            pipeline[6][1] = "complete"
+            pipeline[7][1] = "complete"
+            pipeline[8][1] = "complete" if latest_status == "complete" else "in progress"
 
     if last_index >= 0:
         for idx, item in enumerate(pipeline):
             if idx < last_index:
                 item[1] = "complete"
 
-    if latest_stage == "movement_rows":
+    if latest_stage == "resolving_named_move":
+        current_stage_label = "Move validation"
+    elif latest_stage == "building_relationship_context":
+        current_stage_label = "Relationship context"
+    elif latest_stage == "generating_research_plan":
+        current_stage_label = "Research plan"
+    elif latest_stage == "movement_rows":
         current_stage_label = "Executive movement / buyer movement"
     elif latest_stage == "proconnect":
         current_stage_label = "ProConnect matching/enrichment"
@@ -386,6 +428,12 @@ def _event_stage_key(event: Dict[str, Any]) -> str:
         return "deep_research_poll"
     if "signal evidence" in message or "account signals" in message:
         return "account_signals"
+    if "named move" in message:
+        return "resolving_named_move"
+    if "relationship context" in message:
+        return "building_relationship_context"
+    if "research plan" in message:
+        return "generating_research_plan"
     if "extracting movement rows" in message:
         return "movement_rows"
     if "matching movement leverage" in message or "deep-enriching top movement rows" in message:
@@ -401,11 +449,14 @@ def _event_stage_key(event: Dict[str, Any]) -> str:
 
 def _stage_index(stage_key: str) -> int:
     order = {
-        "account_signals": 0,
-        "movement_rows": 1,
-        "proconnect": 3,
-        "credentials": 4,
-        "brief_assembly": 5,
+        "resolving_named_move": 0,
+        "building_relationship_context": 1,
+        "generating_research_plan": 2,
+        "account_signals": 3,
+        "movement_rows": 4,
+        "proconnect": 6,
+        "credentials": 7,
+        "brief_assembly": 8,
     }
     return order.get(stage_key, -1)
 
@@ -527,14 +578,6 @@ def _format_deep_research_report(markdown: str) -> str:
     return text or "No Deep Research report was captured for this run."
 
 
-def _primary_company_focus(request: Dict[str, Any]) -> str:
-    for key in ("company_name", "account_id", "person_name"):
-        value = _normalize_text(request.get(key))
-        if value:
-            return value
-    return ""
-
-
 def _format_industry_label(industry_key: str) -> str:
     return (industry_key or DEFAULT_MOVEMENT_INDUSTRY).replace("_", " ").title()
 
@@ -549,3 +592,40 @@ def _default_row_action_summary(movement: Any, action_posture: str) -> str:
 
 def _normalize_text(value: Any) -> str:
     return " ".join(str(value or "").split()).strip()
+
+
+def _optional_text(value: Any) -> Optional[str]:
+    text = _normalize_text(value)
+    return text or None
+
+
+def _coerce_request(request: MovementBriefRequest | Dict[str, Any]) -> MovementBriefRequest:
+    if isinstance(request, MovementBriefRequest):
+        return request
+    if isinstance(request, dict):
+        if any(key in request for key in ("company_name", "account_id", "person_name")) and not all(
+            key in request for key in ("from_company", "to_company", "new_role")
+        ):
+            company_name = _normalize_text(request.get("company_name")) or _normalize_text(request.get("account_id"))
+            return MovementBriefRequest(
+                person_name=_normalize_text(request.get("person_name")) or "Unknown person",
+                from_company=company_name or "Unknown source",
+                to_company=company_name or "Unknown destination",
+                new_role=_normalize_text(request.get("new_role")) or "Unknown role",
+                lookback_days=int(request.get("lookback_days") or 180),
+                synthetic_scenario=bool(request.get("synthetic_scenario", True)),
+                geography=_optional_text(request.get("geography")),
+                industry_override=_optional_text(request.get("industry_override") or request.get("industry_key")),
+                additional_context=_optional_text(request.get("additional_context") or request.get("notes")),
+            )
+    if hasattr(MovementBriefRequest, "model_validate"):
+        return MovementBriefRequest.model_validate(request)
+    return MovementBriefRequest.parse_obj(request)
+
+
+def _dump_request(request: MovementBriefRequest | Dict[str, Any]) -> Dict[str, Any]:
+    if isinstance(request, MovementBriefRequest):
+        if hasattr(request, "model_dump"):
+            return request.model_dump()
+        return request.dict()
+    return dict(request)

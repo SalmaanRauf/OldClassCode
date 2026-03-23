@@ -16,11 +16,13 @@ from services.movement_form_mapper import (  # noqa: E402
     MOVEMENT_SIGNALS_ARTIFACT_KEY,
     build_movement_artifact_actions,
     build_movement_artifacts,
+    build_movement_form_props,
     build_movement_person_details_by_name,
     build_movement_progress_content,
     build_movement_request_from_form_response,
     build_movement_row_action_context_by_person_name,
     build_movement_trigger,
+    build_transition_request_for_movement,
 )
 from services.signal_registry_service import get_signal_registry_service  # noqa: E402
 
@@ -57,38 +59,72 @@ def _movement_brief() -> MovementBrief:
     )
 
 
-def test_build_movement_request_normalizes_form_response_and_defaults_industry():
+def test_build_movement_form_props_defaults_to_named_move_intake():
+    props = build_movement_form_props(
+        industry_options=[{"value": "financial_services", "label": "Financial Services"}],
+        person_name=" Jennifer Brady ",
+        from_company=" Capital One ",
+        to_company=" Fannie Mae ",
+        new_role=" Chief Information Officer ",
+        lookback_days=365,
+        industry_override=" general ",
+        geography=" United States ",
+        additional_context=" Focus on buyer movement. ",
+        show_advanced=True,
+    )
+
+    assert props["title"] == "Build a People Movement Brief"
+    assert props["person_name"] == "Jennifer Brady"
+    assert props["from_company"] == "Capital One"
+    assert props["to_company"] == "Fannie Mae"
+    assert props["new_role"] == "Chief Information Officer"
+    assert props["lookback_days"] == 365
+    assert props["industry_override"] == "general"
+    assert props["geography"] == "United States"
+    assert props["additional_context"] == "Focus on buyer movement."
+    assert props["show_advanced"] is True
+    assert props["primary_cta_label"] == "Generate Research Plan"
+
+
+def test_build_movement_request_normalizes_named_move_form_response_and_defaults_industry():
     request = build_movement_request_from_form_response(
         {
-            "company_name": "  Capital One  ",
-            "account_id": "  ACCT-123  ",
-            "person_name": "  Sarah Chen  ",
+            "person_name": "  Jennifer Brady  ",
+            "from_company": "  Capital One  ",
+            "to_company": "  Fannie Mae  ",
+            "new_role": "  Chief Information Officer  ",
+            "lookback_days": "",
+            "synthetic_scenario": True,
             "industry_override": "",
             "geography": "  United States  ",
-            "notes": "  buyer movement and executive movement  ",
+            "additional_context": "  Focus on executive and buyer movement.  ",
             "show_advanced": True,
         }
     )
 
-    assert request["company_name"] == "Capital One"
-    assert request["account_id"] == "ACCT-123"
-    assert request["person_name"] == "Sarah Chen"
-    assert request["industry_key"] == "financial_services"
-    assert request["geography"] == "United States"
-    assert request["show_advanced"] is True
-    assert "Capital One" in request["user_query"]
-    assert "buyer movement" in request["user_query"].lower()
+    assert request.person_name == "Jennifer Brady"
+    assert request.from_company == "Capital One"
+    assert request.to_company == "Fannie Mae"
+    assert request.new_role == "Chief Information Officer"
+    assert request.lookback_days == 180
+    assert request.synthetic_scenario is True
+    assert request.industry_override is None
+    assert request.geography == "United States"
+    assert request.additional_context == "Focus on executive and buyer movement."
 
 
-def test_build_movement_trigger_reuses_financial_services_signal_mapping():
+def test_build_movement_trigger_reuses_financial_services_signal_mapping_and_lookback():
     request = build_movement_request_from_form_response(
         {
-            "company_name": "Capital One",
-            "account_id": "",
-            "person_name": "",
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "synthetic_scenario": True,
             "industry_override": "financial_services",
-            "geography": "",
-            "notes": "",
+            "geography": "United States",
+            "additional_context": "",
             "show_advanced": False,
         }
     )
@@ -96,9 +132,40 @@ def test_build_movement_trigger_reuses_financial_services_signal_mapping():
     trigger = build_movement_trigger(request)
 
     assert trigger.sector == "Financial Services"
-    assert trigger.company_focus == "Capital One"
+    assert trigger.company_focus == "Fannie Mae"
+    assert trigger.time_window_days == 180
     assert trigger.signals == get_signal_registry_service().get_fs_signal_codes()
-    assert "people movement" in (trigger.user_prompt_context or "").lower()
+    assert "Jennifer Brady" in (trigger.user_prompt_context or "")
+    assert "Capital One" in (trigger.user_prompt_context or "")
+    assert "Fannie Mae" in (trigger.user_prompt_context or "")
+
+
+def test_build_transition_request_for_movement_reuses_named_move_transition_shape():
+    request = build_movement_request_from_form_response(
+        {
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "synthetic_scenario": True,
+            "industry_override": "financial_services",
+            "geography": "United States",
+            "additional_context": "POC demo",
+            "show_advanced": True,
+        }
+    )
+
+    transition_request = build_transition_request_for_movement(request)
+
+    assert transition_request.person_name == "Jennifer Brady"
+    assert transition_request.from_company == "Capital One"
+    assert transition_request.to_company == "Fannie Mae"
+    assert transition_request.new_role == "Chief Information Officer"
+    assert transition_request.synthetic_scenario is True
+    assert transition_request.geography == "United States"
+    assert transition_request.industry_override == "financial_services"
+    assert transition_request.additional_context == "POC demo"
 
 
 def test_build_movement_artifacts_exposes_full_report_signals_and_evidence():
@@ -248,8 +315,12 @@ def test_build_movement_person_details_and_row_action_context_capture_non_top_ro
 def test_build_movement_progress_content_tracks_pipeline_and_deep_research_polling():
     content = build_movement_progress_content(
         {
-            "company_name": "Capital One",
-            "industry_key": "financial_services",
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "industry_override": "financial_services",
         },
         [
             {
@@ -283,7 +354,9 @@ def test_build_movement_progress_content_tracks_pipeline_and_deep_research_polli
     )
 
     assert "People Movement Brief In Progress" in content
-    assert "Account: Capital One" in content
+    assert "Person: Jennifer Brady" in content
+    assert "Move: Capital One -> Fannie Mae" in content
+    assert "Lookback: 180 days" in content
     assert "Account signals: complete" in content
     assert "Executive movement: complete" in content
     assert "Buyer movement: complete" in content

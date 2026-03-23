@@ -8,12 +8,14 @@ from typing import Any, Dict, List, Optional
 
 from models.bd_schemas import BDTrigger, SignalEvidence
 from models.movement_schemas import (
+    MovementBriefRequest,
     MovementAction,
     MovementBrief,
     MovementCredentialsProof,
     MovementLeverageSummary,
     MovementRecord,
 )
+from models.transition_schemas import TransitionPreflight
 
 
 @dataclass(frozen=True)
@@ -35,6 +37,8 @@ class MovementBriefAssembler:
     def assemble(
         self,
         *,
+        request: Optional[MovementBriefRequest] = None,
+        preflight: Optional[TransitionPreflight] = None,
         trigger: BDTrigger,
         signal_evidence: List[SignalEvidence],
         movement_rows: Optional[List[MovementRecord]] = None,
@@ -42,6 +46,8 @@ class MovementBriefAssembler:
         deep_enriched_rows: List[Dict[str, Any]],
         credential_packets: Dict[str, MovementCredentialsProof],
         deep_research_summary: str = "",
+        derived_opportunities: Optional[List[Any]] = None,
+        credentials_lookup: Optional[Any] = None,
     ) -> MovementBrief:
         ordered_rows = self._order_ranked_rows(ranked_rows)
         visible_rows = [
@@ -51,6 +57,8 @@ class MovementBriefAssembler:
         signal_summary = self._build_signal_summary(trigger, signal_evidence, deep_research_summary)
         where_to_act = self._build_actions(trigger, ordered_rows)
         executive_summary = self._build_executive_summary(
+            request=request,
+            preflight=preflight,
             trigger=trigger,
             signal_evidence=signal_evidence,
             visible_rows=visible_rows,
@@ -58,6 +66,8 @@ class MovementBriefAssembler:
             credential_packets=credential_packets,
             deep_research_summary=deep_research_summary,
             where_to_act=where_to_act,
+            derived_opportunities=derived_opportunities or [],
+            credentials_lookup=credentials_lookup,
         )
         takeaway = self._build_takeaway(trigger, visible_rows, signal_summary, where_to_act)
 
@@ -186,6 +196,8 @@ class MovementBriefAssembler:
     def _build_executive_summary(
         self,
         *,
+        request: Optional[MovementBriefRequest],
+        preflight: Optional[TransitionPreflight],
         trigger: BDTrigger,
         signal_evidence: List[SignalEvidence],
         visible_rows: List[MovementRecord],
@@ -193,34 +205,23 @@ class MovementBriefAssembler:
         credential_packets: Dict[str, MovementCredentialsProof],
         deep_research_summary: str,
         where_to_act: List[MovementAction],
+        derived_opportunities: List[Any],
+        credentials_lookup: Optional[Any],
     ) -> str:
         confirmed = [item for item in signal_evidence if item.status == "Confirmed"]
-        matched = [packet for packet in credential_packets.values() if packet.lookup_status == "Matched"]
-        matched_summary = ", ".join(
-            f"{name} ({len(packet.matched_credentials)} creds)"
-            for name, packet in list(credential_packets.items())[:3]
-            if packet.lookup_status == "Matched"
-        ) or "None"
-        if not deep_research_summary.strip():
-            deep_research_summary = f"{trigger.company_focus or trigger.sector} people movement scan completed."
-
-        lines = [
-            "Deep Research Findings",
-            f"- {deep_research_summary.strip()}",
-            f"- Confirmed signals: {len(confirmed)} | Movement rows retained: {len(visible_rows)} | Deep-enriched rows: {len(deep_enriched_rows[:10])}",
-            "",
-            "Credentials Agent Findings",
-            f"- Lookups executed: {len(credential_packets)} | Matched: {len(matched)} | No Match: {len(credential_packets) - len(matched)} | Lookup Failed: {len([packet for packet in credential_packets.values() if packet.lookup_status == 'Lookup Failed'])}",
-            f"- Top matched credentials by opportunity: {matched_summary}",
-            "",
-            "Combined Report & Action Items",
-        ]
-
-        for action in where_to_act[:3]:
-            suffix = f" ({action.relationship_owner})" if action.relationship_owner else ""
-            lines.append(f"- {action.person_name}: {action.likely_play}{suffix}")
-
-        return "\n".join(lines)
+        lead = visible_rows[0].person_name if visible_rows else (request.person_name if request else trigger.company_focus or trigger.sector)
+        from_company = preflight.from_account.company_name if preflight else (request.from_company if request else "the source account")
+        to_company = preflight.to_account.company_name if preflight else (request.to_company if request else trigger.company_focus or "the destination account")
+        new_role = request.new_role if request else "the new role"
+        matched_count = len([packet for packet in credential_packets.values() if packet.lookup_status == "Matched"])
+        summary = deep_research_summary.strip() or f"Broader signals reinforce the move context at {to_company}."
+        action_hint = where_to_act[0].likely_play if where_to_act else "prioritize the strongest movement-led advisory opening"
+        return (
+            f"{request.person_name if request else lead} moved from {from_company} to {to_company} as {new_role}. "
+            f"{summary} The brief retained {len(visible_rows)} visible movement rows, confirmed {len(confirmed)} supporting signals, "
+            f"and matched credentials for {matched_count} of {len(derived_opportunities)} prioritized plays. "
+            f"Lead with {lead} and {action_hint.lower()}."
+        )
 
     def _build_takeaway(
         self,
