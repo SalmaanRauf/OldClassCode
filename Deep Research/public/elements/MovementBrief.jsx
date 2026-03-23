@@ -29,6 +29,7 @@ export default function MovementBrief() {
     const actions = safeList(data.where_to_act);
     const controls = safeList(data.secondary_controls);
     const stats = data.stats || {};
+    const moveSummary = data.move_summary || {};
 
     const onSecondaryControl = (control) => {
         if (typeof submitElement !== "function") {
@@ -72,10 +73,22 @@ export default function MovementBrief() {
                 </header>
 
                 <main className="mt-4 grid gap-4">
-                    <SectionCard title="Executive Summary">
-                        <p className="max-w-4xl text-sm leading-7 text-slate-700 whitespace-pre-line">
-                            {data.executive_summary || "No executive summary available."}
-                        </p>
+                    <SectionCard title="Move Summary">
+                        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_18rem]">
+                            <div>
+                                <p className="max-w-4xl text-sm leading-7 text-slate-700 whitespace-pre-line">
+                                    {moveSummary.summary_text || "No move summary available."}
+                                </p>
+                            </div>
+                            <div className="grid gap-3">
+                                <Definition label="Person" value={moveSummary.person_name || "—"} />
+                                <Definition label="Move" value={`${moveSummary.from_company || "—"} -> ${moveSummary.to_company || "—"}`} />
+                                <Definition label="Target Role" value={moveSummary.new_role || "—"} />
+                                <Definition label="Lookback" value={`${moveSummary.lookback_days || 180} days`} />
+                                <Definition label="Scenario" value={moveSummary.synthetic_scenario ? "Synthetic" : "Live"} />
+                                <Definition label="Warm Path" value={moveSummary.warm_intro_path_available ? "Yes" : "No"} />
+                            </div>
+                        </div>
                     </SectionCard>
 
                     <SectionCard title="Signal Summary">

@@ -46,8 +46,12 @@ from services.transition_form_mapper import (
 from services.movement_form_mapper import (
     MOVEMENT_ARTIFACTS_SESSION_KEY,
     MOVEMENT_BRIEF_SESSION_KEY,
+    MOVEMENT_EDIT_PENDING_SESSION_KEY,
     MOVEMENT_EVIDENCE_ARTIFACT_KEY,
+    MOVEMENT_PREFLIGHT_SESSION_KEY,
     MOVEMENT_PROGRESS_SESSION_KEY,
+    MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY,
+    MOVEMENT_PROMPT_SESSION_KEY,
     MOVEMENT_REPORT_ARTIFACT_KEY,
     MOVEMENT_REQUEST_SESSION_KEY,
     MOVEMENT_SIGNALS_ARTIFACT_KEY,
@@ -57,7 +61,6 @@ from services.movement_form_mapper import (
     build_movement_progress_content,
     build_movement_request_from_form_response,
     build_movement_row_action_context_by_person_name,
-    build_movement_trigger,
     load_movement_artifacts_session,
     load_movement_progress_session,
     load_movement_request_session,
@@ -82,9 +85,15 @@ from services.transition_presenter import (
 )
 from services.transition_prompt_builder import TransitionPromptPackage
 from services.movement_brief_orchestrator import MovementBriefOrchestrator
+from services.movement_prompt_builder import MovementPromptBuilder, MovementPromptPackage
 from services.movement_presenter import (
+    ACTION_ADJUST_MOVEMENT,
+    ACTION_EDIT_MOVEMENT_PROMPT,
+    ACTION_RUN_MOVEMENT_RESEARCH,
+    ACTION_VIEW_MOVEMENT_PROMPT,
     build_movement_brief_payload,
-    build_movement_scan_form_props,
+    build_movement_form_props,
+    build_movement_preflight_review,
 )
 
 # BD Analysis enrichment (auto-runs after Deep Research)
@@ -383,6 +392,38 @@ def _persist_transition_prompt_package(prompt_package: TransitionPromptPackage) 
     return payload
 
 
+def _load_movement_preflight() -> Optional[Any]:
+    payload = cl.user_session.get(MOVEMENT_PREFLIGHT_SESSION_KEY)
+    if not payload:
+        return None
+    from models.transition_schemas import TransitionPreflight
+
+    if isinstance(payload, TransitionPreflight):
+        return payload
+    if hasattr(TransitionPreflight, "model_validate"):
+        return TransitionPreflight.model_validate(payload)
+    return TransitionPreflight.parse_obj(payload)
+
+
+def _load_movement_prompt_package() -> Optional[MovementPromptPackage]:
+    payload = cl.user_session.get(MOVEMENT_PROMPT_SESSION_KEY)
+    if not payload:
+        return None
+    if isinstance(payload, MovementPromptPackage):
+        return payload
+    return MovementPromptPackage(
+        industry_key=str(payload.get("industry_key") or DEFAULT_INDUSTRY),
+        system_prompt=str(payload.get("system_prompt") or ""),
+        user_prompt=str(payload.get("user_prompt") or ""),
+    )
+
+
+def _persist_movement_prompt_package(prompt_package: MovementPromptPackage) -> Dict[str, Any]:
+    payload = _dump_model(prompt_package)
+    cl.user_session.set(MOVEMENT_PROMPT_SESSION_KEY, payload)
+    return payload
+
+
 def _get_transition_orchestrator() -> TransitionPlaybookOrchestrator:
     orchestrator = cl.user_session.get("transition_playbook_orchestrator")
     if orchestrator is None:
@@ -464,17 +505,58 @@ async def _run_transition_preflight_flow(request) -> None:
         ).send()
 
 
-async def _run_movement_flow(request: Dict[str, Any]) -> None:
-    progress_msg = cl.Message(content="**People Movement Brief**\n\nStarting movement scan...")
+async def _run_movement_preflight_flow(request) -> None:
+    progress_msg = cl.Message(content="**People Movement Brief**\n\nInitializing named-move validation...")
     await progress_msg.send()
 
     request_payload = _dump_model(request)
     events, progress_cb = _build_movement_progress_callback(progress_msg, request_payload)
     try:
         orchestrator = _get_movement_orchestrator()
-        trigger = build_movement_trigger(request)
-        result = await orchestrator.run(trigger, progress_cb=progress_cb)
+        preflight_result = await orchestrator.build_preflight(request, progress_cb=progress_cb)
+        cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, _dump_model(preflight_result.preflight))
+        _persist_movement_prompt_package(preflight_result.prompt_package)
+        cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
+        cl.user_session.set(MOVEMENT_ARTIFACTS_SESSION_KEY, {})
+        cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, None)
+        cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, None)
 
+        if events:
+            progress_msg.content = build_movement_progress_content(request_payload, events)
+            await progress_msg.update()
+
+        await present_movement_preflight_review(request, preflight_result.preflight, preflight_result.prompt_package)
+    except Exception as exc:
+        logger.exception("Movement preflight failed: %s", exc)
+        progress_msg.content = "**People Movement Brief**\n\nMove validation failed."
+        await progress_msg.update()
+        await cl.Message(
+            "People movement validation failed. Confirm the backend ProConnect token and try again."
+        ).send()
+
+
+async def _run_movement_research_flow() -> None:
+    request = load_movement_request_session(cl.user_session)
+    if not request:
+        await cl.Message("No people movement scenario is loaded. Re-open the movement form first.").send()
+        return
+
+    progress_msg = cl.Message(content="**People Movement Brief**\n\nStarting research run...")
+    await progress_msg.send()
+
+    request_payload = _dump_model(request)
+    events, progress_cb = _build_movement_progress_callback(progress_msg, request_payload)
+    prompt_override = cl.user_session.get(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY)
+    try:
+        orchestrator = _get_movement_orchestrator()
+        result = await orchestrator.run(
+            request,
+            progress_cb=progress_cb,
+            prompt_override=prompt_override,
+        )
+
+        cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, _dump_model(result.preflight))
+        _persist_movement_prompt_package(result.prompt_package)
         artifacts = build_movement_artifacts(result)
         persist_movement_artifacts_session(cl.user_session, artifacts)
         cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, _dump_model(result.movement_brief))
@@ -493,10 +575,10 @@ async def _run_movement_flow(request: Dict[str, Any]) -> None:
         await present_movement_brief(result)
     except Exception as exc:
         logger.exception("Movement research flow failed: %s", exc)
-        progress_msg.content = "**People Movement Brief**\n\nMovement scan failed."
+        progress_msg.content = "**People Movement Brief**\n\nMovement research failed."
         await progress_msg.update()
         await cl.Message(
-            "Movement brief generation failed. Confirm Deep Research and ProConnect access, then retry."
+            "People movement research failed. Confirm Deep Research, ProConnect, and credentials access, then retry."
         ).send()
 
 
@@ -1245,16 +1327,12 @@ async def show_movement_form():
     ]
 
     request = load_movement_request_session(cl.user_session)
-    props = build_movement_scan_form_props(
+    props = build_movement_form_props(
         industry_options=industry_options,
-        industry_override=(
-            (request or {}).get("industry_override")
-            or (request or {}).get("industry_key")
-            or "financial_services"
-        ),
+        industry_override=getattr(request, "industry_override", None) or "financial_services",
     )
     if request:
-        props.update(request)
+        props.update(_dump_model(request))
 
     form_element = cl.CustomElement(
         name="MovementScanForm",
@@ -1274,7 +1352,11 @@ async def show_movement_form():
         cl.user_session.set(MOVEMENT_PROGRESS_SESSION_KEY, [])
         cl.user_session.set(MOVEMENT_ARTIFACTS_SESSION_KEY, {})
         cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, None)
-        await _run_movement_flow(request)
+        cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, None)
+        cl.user_session.set(MOVEMENT_PROMPT_SESSION_KEY, None)
+        cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, None)
+        cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
+        await _run_movement_preflight_flow(request)
     else:
         await cl.Message("Movement form cancelled or timed out.").send()
 
@@ -1299,6 +1381,25 @@ async def present_transition_preflight_review(preflight, prompt_package):
     await cl.Message(content=payload["content"], actions=actions).send()
 
 
+async def present_movement_preflight_review(request, preflight, prompt_package):
+    """Render the named-move review surface before movement research launches."""
+    payload = build_movement_preflight_review(request, preflight, prompt_package)
+    actions = [
+        cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
+        for action in payload.get("actions", [])
+    ]
+    view_prompt_action = payload.get("view_prompt_action")
+    if view_prompt_action:
+        actions.append(
+            cl.Action(
+                name=view_prompt_action["name"],
+                label=view_prompt_action["label"],
+                payload=view_prompt_action.get("payload", {}),
+            )
+        )
+    await cl.Message(content=payload["content"], actions=actions).send()
+
+
 async def present_transition_brief(brief):
     """Render the compact transition brief surface."""
     payload = build_transition_brief_payload(brief)
@@ -1313,6 +1414,8 @@ async def present_movement_brief(result) -> None:
     """Render the compact movement brief surface."""
     payload = build_movement_brief_payload(
         result.movement_brief,
+        request=result.request,
+        preflight=result.preflight,
         person_details_by_name=build_movement_person_details_by_name(result),
         row_action_context_by_person_name=build_movement_row_action_context_by_person_name(result),
     )
@@ -1425,6 +1528,43 @@ async def transition_run_research(action: cl.Action):
     await _run_transition_research_flow()
 
 
+@cl.action_callback(ACTION_VIEW_MOVEMENT_PROMPT)
+async def movement_view_prompt(action: cl.Action):
+    prompt_package = _load_movement_prompt_package()
+    if not prompt_package:
+        await cl.Message("No generated prompt is available yet.").send()
+        return
+    await cl.Message(
+        f"**Generated People Movement Prompt**\n\n```text\n{prompt_package.user_prompt}\n```"
+    ).send()
+
+
+@cl.action_callback(ACTION_EDIT_MOVEMENT_PROMPT)
+async def movement_edit_prompt(action: cl.Action):
+    prompt_package = _load_movement_prompt_package()
+    cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, True)
+    if prompt_package:
+        await cl.Message(
+            "Send your edited people movement research prompt as the next message. "
+            "That text will replace the generated prompt for the run.\n\n"
+            f"Current prompt:\n```text\n{prompt_package.user_prompt}\n```"
+        ).send()
+    else:
+        await cl.Message(
+            "Send your edited people movement research prompt as the next message."
+        ).send()
+
+
+@cl.action_callback(ACTION_ADJUST_MOVEMENT)
+async def movement_adjust_move(action: cl.Action):
+    await show_movement_form()
+
+
+@cl.action_callback(ACTION_RUN_MOVEMENT_RESEARCH)
+async def movement_run_research(action: cl.Action):
+    await _run_movement_research_flow()
+
+
 @cl.action_callback(ACTION_VIEW_ARTIFACT)
 async def transition_view_artifact(action: cl.Action):
     payload = action.payload or {}
@@ -1502,9 +1642,29 @@ async def on_message(message: cl.Message):
                 return
 
         if current_mode == MOVEMENT_MODE:
+            if cl.user_session.get(MOVEMENT_EDIT_PENDING_SESSION_KEY):
+                cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
+                cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, user_text)
+
+                prompt_package = _load_movement_prompt_package()
+                preflight = _load_movement_preflight()
+                request = load_movement_request_session(cl.user_session)
+                if prompt_package and preflight and request:
+                    updated_prompt = MovementPromptPackage(
+                        industry_key=prompt_package.industry_key,
+                        system_prompt=prompt_package.system_prompt,
+                        user_prompt=user_text,
+                    )
+                    _persist_movement_prompt_package(updated_prompt)
+                    await cl.Message("Updated prompt captured for this people movement run.").send()
+                    await present_movement_preflight_review(request, preflight, updated_prompt)
+                else:
+                    await cl.Message("Updated prompt captured for the next people movement run.").send()
+                return
+
             if load_movement_request_session(cl.user_session):
                 await cl.Message(
-                    "People Movement Brief mode is active. Use the artifact actions or re-open the movement form to start a new scan."
+                    "People Movement Brief mode is active. Use the review actions to run research, view the prompt, or adjust the scenario."
                 ).send()
                 return
             await show_movement_form()

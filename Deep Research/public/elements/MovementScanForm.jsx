@@ -10,12 +10,15 @@ export default function MovementScanForm() {
     const data = props || {};
     const [showAdvanced, setShowAdvanced] = useState(Boolean(data.show_advanced));
     const [values, setValues] = useState({
-        company_name: data.company_name || "",
-        account_id: data.account_id || "",
-        industry_override: data.industry_override || "",
         person_name: data.person_name || "",
+        from_company: data.from_company || "",
+        to_company: data.to_company || "",
+        new_role: data.new_role || "",
+        lookback_days: data.lookback_days || 180,
+        synthetic_scenario: data.synthetic_scenario ?? true,
+        industry_override: data.industry_override || "",
         geography: data.geography || "",
-        notes: data.notes || "",
+        additional_context: data.additional_context || "",
     });
 
     const industryOptions = Array.isArray(data.industry_options) ? data.industry_options : [];
@@ -46,58 +49,87 @@ export default function MovementScanForm() {
                 <CardHeader className="space-y-3">
                     <div className="space-y-1">
                         <p className="text-[0.68rem] font-semibold uppercase tracking-[0.28em] text-[#6f5a42]">
-                            Movement scan
+                            People movement
                         </p>
                         <CardTitle className="font-serif text-2xl tracking-[-0.04em] text-slate-950">
                             {data.title || "Build a People Movement Brief"}
                         </CardTitle>
                     </div>
                     <CardDescription className="max-w-2xl text-sm leading-6 text-slate-600">
-                        {data.description || "Scan an account for executive and buyer movement, then enrich leverage."}
+                        {data.description || "Validate the move, generate a research plan, and surface broader people movement."}
                     </CardDescription>
                     <p className="text-sm leading-6 text-slate-500">{data.scan_hint || ""}</p>
                 </CardHeader>
 
                 <CardContent className="grid gap-4 sm:grid-cols-2">
-                    <div className="flex flex-col gap-2 sm:col-span-2">
-                        <Label htmlFor="company_name">Company / Account</Label>
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="person_name">Person</Label>
                         <Input
-                            id="company_name"
+                            id="person_name"
+                            placeholder="Jennifer Brady"
+                            value={values.person_name}
+                            onChange={(event) => handleChange("person_name", event.target.value)}
+                        />
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="new_role">New Role</Label>
+                        <Input
+                            id="new_role"
+                            placeholder="Chief Information Officer"
+                            value={values.new_role}
+                            onChange={(event) => handleChange("new_role", event.target.value)}
+                        />
+                    </div>
+
+                    <div className="flex flex-col gap-2">
+                        <Label htmlFor="from_company">From Company</Label>
+                        <Input
+                            id="from_company"
                             placeholder="Capital One"
-                            value={values.company_name}
-                            onChange={(event) => handleChange("company_name", event.target.value)}
-                            aria-describedby="movement-scan-hint"
+                            value={values.from_company}
+                            onChange={(event) => handleChange("from_company", event.target.value)}
                         />
                     </div>
 
                     <div className="flex flex-col gap-2">
-                        <Label htmlFor="account_id">Account ID</Label>
+                        <Label htmlFor="to_company">To Company</Label>
                         <Input
-                            id="account_id"
-                            placeholder="Optional account reference"
-                            value={values.account_id}
-                            onChange={(event) => handleChange("account_id", event.target.value)}
+                            id="to_company"
+                            placeholder="Fannie Mae"
+                            value={values.to_company}
+                            onChange={(event) => handleChange("to_company", event.target.value)}
                         />
                     </div>
 
                     <div className="flex flex-col gap-2">
-                        <Label htmlFor="industry_override">Industry Override</Label>
-                        <Select
-                            value={values.industry_override || "__infer__"}
-                            onValueChange={(value) => handleChange("industry_override", value === "__infer__" ? "" : value)}
-                        >
-                            <SelectTrigger id="industry_override">
-                                <SelectValue placeholder="Infer from account context" />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="__infer__">Infer from account context</SelectItem>
-                                {industryOptions.map((option) => (
-                                    <SelectItem key={option.value} value={option.value}>
-                                        {option.label}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
+                        <Label htmlFor="lookback_days">Lookback Days</Label>
+                        <Input
+                            id="lookback_days"
+                            type="number"
+                            min="30"
+                            max="365"
+                            step="1"
+                            value={values.lookback_days}
+                            onChange={(event) => handleChange("lookback_days", event.target.value)}
+                        />
+                    </div>
+
+                    <div className="rounded-[20px] border border-[#e7dccb] bg-[#fcfaf7] px-4 py-4">
+                        <div className="flex items-center gap-3">
+                            <input
+                                id="synthetic_scenario"
+                                type="checkbox"
+                                checked={Boolean(values.synthetic_scenario)}
+                                onChange={(event) => handleChange("synthetic_scenario", event.target.checked)}
+                            />
+                            <Label htmlFor="synthetic_scenario" className="mb-0 cursor-pointer">
+                                Synthetic scenario
+                            </Label>
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-slate-600">
+                            Keep this on for demo or hypothetical move scenarios.
+                        </p>
                     </div>
 
                     <div className="sm:col-span-2 rounded-[20px] border border-[#e7dccb] bg-[#fcfaf7] px-4 py-4">
@@ -105,7 +137,7 @@ export default function MovementScanForm() {
                             <div>
                                 <p className="text-sm font-medium text-slate-900">Advanced options</p>
                                 <p className="mt-1 text-sm leading-6 text-slate-600">
-                                    Use these only when the target account needs a named-person path or extra context.
+                                    Override industry inference or add context that should shape the research plan.
                                 </p>
                             </div>
                             <Button
@@ -122,20 +154,7 @@ export default function MovementScanForm() {
                     </div>
 
                     {showAdvanced ? (
-                        <div
-                            id="movement-scan-advanced"
-                            className="grid gap-4 sm:col-span-2 sm:grid-cols-2"
-                        >
-                            <div className="flex flex-col gap-2">
-                                <Label htmlFor="person_name">Named Person</Label>
-                                <Input
-                                    id="person_name"
-                                    placeholder="Jennifer Brady"
-                                    value={values.person_name}
-                                    onChange={(event) => handleChange("person_name", event.target.value)}
-                                />
-                            </div>
-
+                        <div id="movement-scan-advanced" className="grid gap-4 sm:col-span-2 sm:grid-cols-2">
                             <div className="flex flex-col gap-2">
                                 <Label htmlFor="geography">Geography</Label>
                                 <Input
@@ -146,22 +165,38 @@ export default function MovementScanForm() {
                                 />
                             </div>
 
+                            <div className="flex flex-col gap-2">
+                                <Label htmlFor="industry_override">Industry Override</Label>
+                                <Select
+                                    value={values.industry_override || "__infer__"}
+                                    onValueChange={(value) => handleChange("industry_override", value === "__infer__" ? "" : value)}
+                                >
+                                    <SelectTrigger id="industry_override">
+                                        <SelectValue placeholder="Financial Services" />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="__infer__">Financial Services (default)</SelectItem>
+                                        {industryOptions.map((option) => (
+                                            <SelectItem key={option.value} value={option.value}>
+                                                {option.label}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+
                             <div className="flex flex-col gap-2 sm:col-span-2">
-                                <Label htmlFor="notes">Notes</Label>
+                                <Label htmlFor="additional_context">Additional Context</Label>
                                 <Textarea
-                                    id="notes"
-                                    placeholder="Optional context, timing, or focus areas."
+                                    id="additional_context"
+                                    placeholder="Optional context, urgency, or focus areas."
                                     rows={3}
-                                    value={values.notes}
-                                    onChange={(event) => handleChange("notes", event.target.value)}
+                                    value={values.additional_context}
+                                    onChange={(event) => handleChange("additional_context", event.target.value)}
                                 />
                             </div>
                         </div>
                     ) : null}
-
-                    <p id="movement-scan-hint" className="sr-only">
-                        {data.scan_hint || "Use the company or account as the primary search anchor."}
-                    </p>
                 </CardContent>
 
                 <CardFooter className="flex flex-col gap-3 border-t border-[#ece1d2] bg-[#fcfaf7] px-6 py-4 sm:flex-row sm:justify-end">
@@ -169,7 +204,7 @@ export default function MovementScanForm() {
                         {data.secondary_cta_label || "Cancel"}
                     </Button>
                     <Button type="submit" className="min-h-11">
-                        {data.primary_cta_label || "Run Movement Scan"}
+                        {data.primary_cta_label || "Generate Research Plan"}
                     </Button>
                 </CardFooter>
             </form>

@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.movement_schemas import (  # noqa: E402
     MovementAction,
+    MovementBriefRequest,
     MovementBrief,
     MovementCredentialReference,
     MovementCredentialsProof,
@@ -17,11 +18,25 @@ from models.movement_schemas import (  # noqa: E402
     MovementLeverageSummary,
     MovementRecord,
 )
+from models.transition_schemas import (  # noqa: E402
+    AccountResolution,
+    OpportunityHypothesis,
+    QuickRelationshipIndicators,
+    TransitionPersonResolution,
+    TransitionPreflight,
+    TransitionRequest,
+)
 from services.movement_presenter import (  # noqa: E402
+    ACTION_ADJUST_MOVEMENT,
+    ACTION_EDIT_MOVEMENT_PROMPT,
+    ACTION_RUN_MOVEMENT_RESEARCH,
+    ACTION_VIEW_MOVEMENT_PROMPT,
     MOVEMENT_TABLE_COLUMNS,
     build_movement_brief_payload,
-    build_movement_scan_form_props,
+    build_movement_form_props,
+    build_movement_preflight_review,
 )
+from services.movement_prompt_builder import MovementPromptPackage  # noqa: E402
 
 
 def _movement(index: int, *, with_proof: bool = False) -> MovementRecord:
@@ -86,31 +101,126 @@ def _brief(movement_rows, where_to_act, signal_summary=None):
     )
 
 
-def test_build_movement_scan_form_props_trims_and_defaults():
-    props = build_movement_scan_form_props(
+def _request() -> MovementBriefRequest:
+    return MovementBriefRequest(
+        person_name="Jennifer Brady",
+        from_company="Capital One",
+        to_company="Fannie Mae",
+        new_role="Chief Information Officer",
+        lookback_days=180,
+        synthetic_scenario=True,
+        geography="United States",
+        industry_override="financial_services",
+        additional_context="POC demo scenario",
+    )
+
+
+def _preflight() -> TransitionPreflight:
+    return TransitionPreflight(
+        request=TransitionRequest(
+            person_name="Jennifer Brady",
+            from_company="Capital One",
+            to_company="Fannie Mae",
+            new_role="Chief Information Officer",
+            synthetic_scenario=True,
+            industry_override="financial_services",
+            additional_context="POC demo scenario",
+        ),
+        person_resolution=TransitionPersonResolution(
+            requested_name="Jennifer Brady",
+            match_status="matched",
+            matched_name="Jennifer Brady",
+            matched_title="Senior Director of Technology Risk",
+            match_source="from_key_buyers",
+            direct_person_evidence=True,
+        ),
+        from_account=AccountResolution(
+            company_name="Capital One Financial Corporation",
+            resolved=True,
+            account_id="00130000000BYU2AAO",
+        ),
+        to_account=AccountResolution(
+            company_name="Federal National Mortgage Association (Fannie Mae)",
+            resolved=True,
+            account_id="00130000000BYUIAA4",
+        ),
+        quick_indicators=QuickRelationshipIndicators(
+            warm_intro_path_available=True,
+            source_worked_before=True,
+            destination_worked_before=True,
+            source_key_buyer_count=24,
+            destination_key_buyer_count=14,
+            source_connected_colleague_count=5,
+            destination_connected_colleague_count=1,
+        ),
+        opportunity_hypotheses=[
+            OpportunityHypothesis(
+                title="AI governance program",
+                rationale="CIO transition increases pressure around AI oversight.",
+                confidence="High",
+            )
+        ],
+        inferred_industry="financial_services",
+        suggested_research_prompt="Investigate executive and buyer movement at Fannie Mae over the last 180 days.",
+    )
+
+
+def test_build_movement_form_props_trims_and_defaults():
+    props = build_movement_form_props(
         industry_options=[{"value": "financial_services", "label": "Financial Services"}],
-        company_name="  Capital One  ",
-        account_id="  ACCT-123  ",
         person_name="  Jennifer Brady  ",
+        from_company="  Capital One  ",
+        to_company="  Fannie Mae  ",
+        new_role="  Chief Information Officer  ",
+        lookback_days=365,
+        synthetic_scenario=False,
         industry_override="  general  ",
         geography="  United States  ",
-        notes="  Focus on buyer movement  ",
+        additional_context="  Focus on buyer movement  ",
         show_advanced=True,
     )
 
     assert props["title"] == "Build a People Movement Brief"
-    assert props["description"].startswith("Scan an account")
-    assert props["company_name"] == "Capital One"
-    assert props["account_id"] == "ACCT-123"
+    assert props["description"].startswith("Validate the move")
     assert props["person_name"] == "Jennifer Brady"
+    assert props["from_company"] == "Capital One"
+    assert props["to_company"] == "Fannie Mae"
+    assert props["new_role"] == "Chief Information Officer"
+    assert props["lookback_days"] == 365
+    assert props["synthetic_scenario"] is False
     assert props["industry_override"] == "general"
     assert props["geography"] == "United States"
-    assert props["notes"] == "Focus on buyer movement"
+    assert props["additional_context"] == "Focus on buyer movement"
     assert props["show_advanced"] is True
     assert props["industry_options"] == [{"value": "financial_services", "label": "Financial Services"}]
-    assert props["primary_cta_label"] == "Run Movement Scan"
+    assert props["primary_cta_label"] == "Generate Research Plan"
     assert props["secondary_cta_label"] == "Cancel"
-    assert props["scan_hint"].startswith("Use the company or account")
+    assert props["scan_hint"].startswith("Start from the named move")
+
+
+def test_build_movement_preflight_review_shows_move_context_and_prompt_actions():
+    payload = build_movement_preflight_review(
+        _request(),
+        _preflight(),
+        MovementPromptPackage(
+            industry_key="financial_services",
+            system_prompt="FS prompt",
+            user_prompt="Generated move prompt.",
+        ),
+    )
+
+    assert "People Movement Brief Review" in payload["content"]
+    assert "Jennifer Brady" in payload["content"]
+    assert "Capital One -> Fannie Mae" in payload["content"]
+    assert "180 days" in payload["content"]
+    assert "Synthetic" in payload["content"]
+    assert "AI governance program" in payload["content"]
+    assert payload["actions"] == [
+        {"name": ACTION_RUN_MOVEMENT_RESEARCH, "label": "Run Research", "payload": {}},
+        {"name": ACTION_EDIT_MOVEMENT_PROMPT, "label": "Edit Prompt", "payload": {}},
+        {"name": ACTION_ADJUST_MOVEMENT, "label": "Adjust Movement", "payload": {}},
+    ]
+    assert payload["view_prompt_action"]["name"] == ACTION_VIEW_MOVEMENT_PROMPT
 
 
 def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_detail_content():
@@ -128,6 +238,8 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
 
     payload = build_movement_brief_payload(
         _brief(movement_rows, where_to_act),
+        request=_request(),
+        preflight=_preflight(),
         secondary_controls=[
             {
                 "label": "View Full Deep Research Report",
@@ -189,6 +301,15 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
         "Buyer movement creates re-engagement scope.",
         "Executive movement creates governance scope.",
     ]
+    assert payload["move_summary"]["person_name"] == "Jennifer Brady"
+    assert payload["move_summary"]["from_company"] == "Capital One Financial Corporation"
+    assert payload["move_summary"]["to_company"] == "Federal National Mortgage Association (Fannie Mae)"
+    assert payload["move_summary"]["new_role"] == "Chief Information Officer"
+    assert payload["move_summary"]["lookback_days"] == 180
+    assert payload["move_summary"]["synthetic_scenario"] is True
+    assert payload["move_summary"]["warm_intro_path_available"] is True
+    assert payload["move_summary"]["source_worked_before"] is True
+    assert payload["move_summary"]["destination_worked_before"] is True
     assert len(payload["secondary_controls"]) == 3
     assert payload["secondary_controls"][0]["label"] == "View Full Deep Research Report"
     assert payload["movement_rows"][0]["signal"] == "BUYER"
@@ -239,7 +360,11 @@ def test_build_movement_brief_payload_keeps_only_top_ten_rows_and_three_actions(
         for index in range(5)
     ]
 
-    payload = build_movement_brief_payload(_brief(movement_rows, where_to_act))
+    payload = build_movement_brief_payload(
+        _brief(movement_rows, where_to_act),
+        request=_request(),
+        preflight=_preflight(),
+    )
 
     assert len(payload["movement_rows"]) == 10
     assert len(payload["row_details_by_id"]) == 10
