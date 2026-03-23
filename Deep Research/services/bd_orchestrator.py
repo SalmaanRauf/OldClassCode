@@ -13,7 +13,7 @@ import json
 import logging
 import re
 from datetime import datetime
-from typing import Optional, Callable, Dict, List, Any
+from typing import Optional, Callable, Dict, List, Any, TYPE_CHECKING
 from pathlib import Path
 
 from models.bd_schemas import (
@@ -31,13 +31,22 @@ from services.opportunity_digestor import OpportunityDigestor
 from services.fs_signal_evidence_digestor import FSSignalEvidenceDigestor
 from services.fs_opportunity_deriver import FSOpportunityDeriver
 from services.signal_registry_service import get_signal_registry_service
-from agents.final_analyst_agent import FinalAnalystAgent
 from services.credentials_lookup_runner import CredentialsLookupRunner
+
+if TYPE_CHECKING:
+    from agents.final_analyst_agent import FinalAnalystAgent
 
 logger = logging.getLogger(__name__)
 
 # Progress callback type
 ProgressCallback = Callable[[str], Any]
+
+
+def _create_default_final_analyst() -> "FinalAnalystAgent":
+    """Import lazily to avoid startup-order issues during app bootstrap."""
+    from agents.final_analyst_agent import FinalAnalystAgent
+
+    return FinalAnalystAgent()
 
 
 class BDOrchestrator:
@@ -62,7 +71,7 @@ class BDOrchestrator:
         fs_opportunity_deriver: Optional[FSOpportunityDeriver] = None,
         credentials_agent: Optional[Any] = None,
         credentials_lookup_runner: Optional[CredentialsLookupRunner] = None,
-        final_analyst: Optional[FinalAnalystAgent] = None,
+        final_analyst: Optional["FinalAnalystAgent"] = None,
         traces_dir: Optional[Path] = None,
         use_atlas_digestion: bool = False,
         credentials_lookup_mode: str = "serial_per_opportunity",
@@ -88,12 +97,12 @@ class BDOrchestrator:
             credentials_agent=credentials_agent,
             lookup_mode=credentials_lookup_mode,
         )
-        self.final_analyst = final_analyst or FinalAnalystAgent()
+        self.final_analyst = final_analyst or _create_default_final_analyst()
         self.traces_dir = traces_dir
         self.use_atlas_digestion = use_atlas_digestion
         self.signal_registry = get_signal_registry_service()
         self.credentials_lookup_mode = self.credentials_lookup_runner.lookup_mode
-    
+
     async def run(
         self,
         trigger: BDTrigger,
