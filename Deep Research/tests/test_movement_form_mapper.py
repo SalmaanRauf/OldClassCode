@@ -134,6 +134,24 @@ def test_build_movement_request_accepts_nested_output_payload() -> None:
     assert request.new_role == "Chief Information Officer"
 
 
+def test_build_movement_request_parses_string_false_synthetic_scenario() -> None:
+    request = build_movement_request_from_form_response(
+        {
+            "submitted": True,
+            "output": {
+                "person_name": "Jennifer Brady",
+                "from_company": "Capital One",
+                "to_company": "Fannie Mae",
+                "new_role": "Chief Information Officer",
+                "lookback_days": 180,
+                "synthetic_scenario": "false",
+            },
+        }
+    )
+
+    assert request.synthetic_scenario is False
+
+
 def test_build_movement_request_rejects_blank_required_fields() -> None:
     try:
         build_movement_request_from_form_response(
@@ -230,7 +248,7 @@ def test_build_movement_artifacts_exposes_full_report_signals_and_evidence():
     )
 
     artifacts = build_movement_artifacts(result)
-    actions = build_movement_artifact_actions()
+    actions = build_movement_artifact_actions(run_id="run-123")
 
     assert artifacts[MOVEMENT_REPORT_ARTIFACT_KEY].startswith("### Deep Research")
     assert "Executive Movement" in artifacts[MOVEMENT_SIGNALS_ARTIFACT_KEY]
@@ -238,6 +256,13 @@ def test_build_movement_artifacts_exposes_full_report_signals_and_evidence():
     assert "Sarah Chen" in artifacts[MOVEMENT_EVIDENCE_ARTIFACT_KEY]
     assert "ProConnect detail" in artifacts[MOVEMENT_EVIDENCE_ARTIFACT_KEY]
     assert len(actions) == 3
+
+
+def test_build_movement_artifact_actions_include_run_scope():
+    actions = build_movement_artifact_actions(run_id="run-123")
+
+    assert {action["payload"]["run_id"] for action in actions} == {"run-123"}
+    assert {action["payload"]["mode"] for action in actions} == {"movement"}
     assert actions[0]["payload"]["artifact_key"] == MOVEMENT_REPORT_ARTIFACT_KEY
 
 

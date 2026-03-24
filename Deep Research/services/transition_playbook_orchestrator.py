@@ -26,15 +26,17 @@ from services.deep_research_formatter import (
     build_structured_evidence_map,
     format_deep_research_response_as_markdown,
 )
+from services.proconnect_auth import resolve_runtime_bearer_token
 from services.proconnect_transition_service import ProConnectTransitionService
 from services.transition_prompt_builder import TransitionPromptBuilder, TransitionPromptPackage
+from services.workflow_state import WorkflowStage
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from proconnect_client import DEFAULT_BASE_URL, ProConnectClient, resolve_bearer_token  # noqa: E402
+from proconnect_client import DEFAULT_BASE_URL, ProConnectClient  # noqa: E402
 
 
 ProgressCallback = Callable[[Dict[str, Any]], Awaitable[None] | None]
@@ -57,6 +59,14 @@ class TransitionPlaybookRunResult:
     actioning_context: Dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ReviewedTransitionRunInput:
+    run_id: str
+    request: TransitionRequest
+    preflight: TransitionPreflight
+    prompt_package: TransitionPromptPackage
+
+
 class TransitionPlaybookOrchestrator:
     """Coordinates the transition workflow end to end."""
 
@@ -68,6 +78,7 @@ class TransitionPlaybookOrchestrator:
         bd_orchestrator: Optional[BDOrchestrator] = None,
     ) -> None:
         self.proconnect_service = proconnect_service
+        self._owns_proconnect_service = proconnect_service is None
         self.prompt_builder = prompt_builder
         self.deep_research_runner = deep_research_runner
         self.bd_orchestrator = bd_orchestrator
@@ -90,18 +101,29 @@ class TransitionPlaybookOrchestrator:
         request: TransitionRequest,
         progress_cb: Optional[ProgressCallback] = None,
         prompt_override: Optional[str] = None,
+        reviewed_preflight: Optional[TransitionPreflight] = None,
+        reviewed_prompt_package: Optional[TransitionPromptPackage] = None,
+        reviewed_run_id: Optional[str] = None,
     ) -> TransitionPlaybookRunResult:
         """Run the full transition workflow."""
-        transition_case, preflight, prompt_package = await self._prepare_transition_context(
-            request,
-            progress_cb=progress_cb,
-            include_prompt=True,
-            prompt_override=prompt_override,
-        )
+        transition_case: Optional[Dict[str, Any]]
+        preflight: TransitionPreflight
+        prompt_package: TransitionPromptPackage
+        if reviewed_preflight and reviewed_prompt_package:
+            transition_case = None
+            preflight = reviewed_preflight
+            prompt_package = reviewed_prompt_package
+        else:
+            transition_case, preflight, prompt_package = await self._prepare_transition_context(
+                request,
+                progress_cb=progress_cb,
+                include_prompt=True,
+                prompt_override=prompt_override,
+            )
 
         await self._emit(
             progress_cb,
-            stage="running_deep_research",
+            stage=WorkflowStage.RUNNING_DEEP_RESEARCH.value,
             message="Running Deep Research.",
             status="in_progress",
         )
@@ -111,7 +133,7 @@ class TransitionPlaybookOrchestrator:
         )
 
         bd = self._get_bd_orchestrator()
-        trigger = self._build_bd_trigger(request, prompt_package)
+        trigger = self._build_bd_trigger(request, prompt_package, preflight=preflight, reviewed_run_id=reviewed_run_id)
         dr_markdown = format_deep_research_response_as_markdown(deep_research_response)
         structured_source_urls = self._extract_structured_source_urls(deep_research_response)
         structured_evidence_map = build_structured_evidence_map(deep_research_response)
@@ -126,7 +148,7 @@ class TransitionPlaybookOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="validating_credentials",
+            stage=WorkflowStage.VALIDATING_CREDENTIALS.value,
             message="Credentials validation complete.",
             status="complete",
             **self._build_report_progress_metadata(report),
@@ -134,7 +156,7 @@ class TransitionPlaybookOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="mapping_warm_leads",
+            stage=WorkflowStage.MAPPING_WARM_LEADS.value,
             message="Mapping warm leads and outreach context.",
             status="in_progress",
         )
@@ -146,7 +168,7 @@ class TransitionPlaybookOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="mapping_warm_leads",
+            stage=WorkflowStage.MAPPING_WARM_LEADS.value,
             message="Warm leads and relationship routes mapped.",
             status="complete",
             **self._build_actioning_progress_metadata(actioning_context, preflight),
@@ -154,7 +176,7 @@ class TransitionPlaybookOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="assembling_brief",
+            stage=WorkflowStage.ASSEMBLING_BRIEF.value,
             message="Transition brief inputs assembled.",
             status="complete",
             opportunity_count=len(report.top_opportunities or []),
@@ -169,6 +191,29 @@ class TransitionPlaybookOrchestrator:
             actioning_context=actioning_context,
         )
 
+    async def run_transition_playbook_from_reviewed_context(
+        self,
+        *,
+        request: TransitionRequest,
+        preflight: TransitionPreflight,
+        prompt_package: TransitionPromptPackage,
+        run_id: str,
+        progress_cb: Optional[ProgressCallback] = None,
+    ) -> TransitionPlaybookRunResult:
+        reviewed = ReviewedTransitionRunInput(
+            run_id=run_id,
+            request=request,
+            preflight=preflight,
+            prompt_package=prompt_package,
+        )
+        return await self.run_transition_playbook(
+            reviewed.request,
+            progress_cb=progress_cb,
+            reviewed_preflight=reviewed.preflight,
+            reviewed_prompt_package=reviewed.prompt_package,
+            reviewed_run_id=reviewed.run_id,
+        )
+
     async def _prepare_transition_context(
         self,
         request: TransitionRequest,
@@ -179,7 +224,7 @@ class TransitionPlaybookOrchestrator:
     ) -> tuple[Optional[Dict[str, Any]], TransitionPreflight, TransitionPromptPackage]:
         await self._emit(
             progress_cb,
-            stage="resolving_transition",
+            stage=WorkflowStage.RESOLVING_TRANSITION.value,
             message="Resolving transition scenario.",
             status="in_progress",
         )
@@ -191,7 +236,7 @@ class TransitionPlaybookOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="building_relationship_context",
+            stage=WorkflowStage.BUILDING_RELATIONSHIP_CONTEXT.value,
             message="Building relationship context from ProConnect.",
             status="in_progress",
         )
@@ -203,7 +248,7 @@ class TransitionPlaybookOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="building_relationship_context",
+            stage=WorkflowStage.BUILDING_RELATIONSHIP_CONTEXT.value,
             message="Relationship context built from ProConnect.",
             status="complete",
             **self._build_preflight_progress_metadata(preflight),
@@ -230,7 +275,7 @@ class TransitionPlaybookOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="generating_research_plan",
+            stage=WorkflowStage.GENERATING_RESEARCH_PLAN.value,
             message="Generated research plan from validated transition context.",
             status="complete",
             industry_key=prompt_package.industry_key,
@@ -257,12 +302,21 @@ class TransitionPlaybookOrchestrator:
 
     def _get_proconnect_service(self) -> ProConnectTransitionService:
         if self.proconnect_service is None:
-            token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)
-            base_url = getattr(AppConfig, "PROCONNECT_BASE_URL", DEFAULT_BASE_URL)
-            token, _ = resolve_bearer_token(None, token_file)
-            client = ProConnectClient(base_url=base_url, bearer_token=token)
-            self.proconnect_service = ProConnectTransitionService(client=client)
+            return self._build_live_proconnect_service()
+        if self._owns_proconnect_service:
+            return self._build_live_proconnect_service()
         return self.proconnect_service
+
+    def _build_live_proconnect_service(self) -> ProConnectTransitionService:
+        token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)
+        base_url = getattr(AppConfig, "PROCONNECT_BASE_URL", DEFAULT_BASE_URL)
+        fallback_paths = [
+            Path.cwd() / "token.txt",
+            SCRIPT_DIR / "token.txt",
+        ]
+        token, _ = resolve_runtime_bearer_token(token_file=token_file, fallback_paths=fallback_paths)
+        client = ProConnectClient(base_url=base_url, bearer_token=token)
+        return ProConnectTransitionService(client=client)
 
     def _get_prompt_builder(self) -> TransitionPromptBuilder:
         if self.prompt_builder is None:
@@ -285,12 +339,28 @@ class TransitionPlaybookOrchestrator:
         self,
         request: TransitionRequest,
         prompt_package: TransitionPromptPackage,
+        *,
+        preflight: Optional[TransitionPreflight] = None,
+        reviewed_run_id: Optional[str] = None,
     ):
         session_params = {
-            "company": request.to_company,
+            "company": (preflight.to_account.company_name if preflight and preflight.to_account.company_name else request.to_company),
             "signals": "",
             "geography": request.geography or "",
             "other_context": request.additional_context or "",
+            "preflight_context": {
+                "run_id": reviewed_run_id,
+                "person_match_status": preflight.person_resolution.match_status if preflight else None,
+                "resolved_source_company": preflight.from_account.company_name if preflight else request.from_company,
+                "resolved_destination_company": preflight.to_account.company_name if preflight else request.to_company,
+                "source_account_id": preflight.from_account.account_id if preflight else None,
+                "destination_account_id": preflight.to_account.account_id if preflight else None,
+                "warm_intro_path_available": preflight.quick_indicators.warm_intro_path_available if preflight else None,
+                "opportunity_hypotheses": [
+                    hypothesis.model_dump() if hasattr(hypothesis, "model_dump") else hypothesis.dict()
+                    for hypothesis in (preflight.opportunity_hypotheses or [])
+                ] if preflight else [],
+            },
         }
         return build_trigger_for_bd_enrichment(
             sector=prompt_package.industry_key,
@@ -338,11 +408,11 @@ class TransitionPlaybookOrchestrator:
         async def _wrapped(message: str) -> None:
             lowered = (message or "").lower()
             if "credential" in lowered:
-                stage = "validating_credentials"
+                stage = WorkflowStage.VALIDATING_CREDENTIALS.value
             elif "synthes" in lowered or "report" in lowered:
-                stage = "assembling_brief"
+                stage = WorkflowStage.ASSEMBLING_BRIEF.value
             else:
-                stage = "validating_credentials"
+                stage = WorkflowStage.VALIDATING_CREDENTIALS.value
 
             await self._emit(
                 progress_cb,

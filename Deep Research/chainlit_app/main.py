@@ -73,7 +73,6 @@ from services.transition_brief_formatter import (
     build_transition_brief,
 )
 from services.element_response_utils import extract_element_response_payload
-from services.transition_playbook_orchestrator import TransitionPlaybookOrchestrator
 from services.transition_presenter import (
     ACTION_ADJUST_TRANSITION,
     ACTION_EDIT_PROMPT,
@@ -85,7 +84,6 @@ from services.transition_presenter import (
     build_transition_progress_content,
 )
 from services.transition_prompt_builder import TransitionPromptPackage
-from services.movement_brief_orchestrator import MovementBriefOrchestrator
 from services.movement_prompt_builder import MovementPromptBuilder, MovementPromptPackage
 from services.movement_presenter import (
     ACTION_ADJUST_MOVEMENT,
@@ -98,7 +96,6 @@ from services.movement_presenter import (
 )
 
 # BD Analysis enrichment (auto-runs after Deep Research)
-from services.bd_orchestrator import BDOrchestrator
 from services.bd_report_formatter import format_bd_report_as_section
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
 from services.deep_research_formatter import (
@@ -106,6 +103,17 @@ from services.deep_research_formatter import (
     format_deep_research_response_as_markdown,
 )
 from models.bd_schemas import MDReport, MDReportOpportunity
+from services.workflow_state import (
+    WorkflowRunContext,
+    WorkflowRunStatus,
+    create_workflow_run,
+    get_active_run_id,
+    load_workflow_run,
+    persist_workflow_run,
+    resolve_run_context,
+    set_active_run_id,
+    update_workflow_run,
+)
 
 setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -275,6 +283,8 @@ async def enrich_with_bd_analysis(
         except Exception as trace_err:
             logger.warning(f"Could not prepare BD traces directory '{BD_TRACES_DIR}': {trace_err}")
 
+        from services.bd_orchestrator import BDOrchestrator
+
         orchestrator = BDOrchestrator(
             traces_dir=BD_TRACES_DIR,
             use_atlas_digestion=AppConfig.ENABLE_BD_ATLAS_DIGESTION
@@ -425,17 +435,176 @@ def _persist_movement_prompt_package(prompt_package: MovementPromptPackage) -> D
     return payload
 
 
-def _get_transition_orchestrator() -> TransitionPlaybookOrchestrator:
+WORKFLOW_EDIT_PENDING_RUN_ID_BY_MODE_SESSION_KEY = "workflow_edit_pending_run_ids"
+
+
+def _set_pending_edit_run_id(mode: str, run_id: Optional[str]) -> Dict[str, str]:
+    payload = dict(cl.user_session.get(WORKFLOW_EDIT_PENDING_RUN_ID_BY_MODE_SESSION_KEY) or {})
+    if run_id:
+        payload[mode] = str(run_id)
+    else:
+        payload.pop(mode, None)
+    cl.user_session.set(WORKFLOW_EDIT_PENDING_RUN_ID_BY_MODE_SESSION_KEY, payload)
+    return payload
+
+
+def _get_pending_edit_run_id(mode: str) -> Optional[str]:
+    payload = dict(cl.user_session.get(WORKFLOW_EDIT_PENDING_RUN_ID_BY_MODE_SESSION_KEY) or {})
+    value = payload.get(mode)
+    return str(value) if value else None
+
+
+def _clear_mode_runtime_state(mode: str) -> None:
+    _set_pending_edit_run_id(mode, None)
+    if mode == TRANSITION_MODE:
+        cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
+        cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, None)
+        cl.user_session.set(TRANSITION_ARTIFACTS_SESSION_KEY, {})
+    elif mode == MOVEMENT_MODE:
+        cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
+        cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, None)
+        cl.user_session.set(MOVEMENT_ARTIFACTS_SESSION_KEY, {})
+        cl.user_session.set(MOVEMENT_PROGRESS_SESSION_KEY, [])
+
+
+def _get_active_run(mode: str) -> Optional[WorkflowRunContext]:
+    run = resolve_run_context(cl.user_session, mode=mode)
+    return run
+
+
+def _create_mode_run(mode: str, request: Any) -> WorkflowRunContext:
+    run = create_workflow_run(mode=mode, request=_dump_model(request))
+    persist_workflow_run(cl.user_session, run)
+    set_active_run_id(cl.user_session, mode, run.run_id)
+    return run
+
+
+def _store_reviewed_run(
+    *,
+    run_id: str,
+    preflight: Any,
+    prompt_package: Any,
+) -> WorkflowRunContext:
+    updated = update_workflow_run(
+        cl.user_session,
+        run_id,
+        preflight=_dump_model(preflight),
+        prompt_package=_dump_model(prompt_package),
+        prompt_override=None,
+        progress=[],
+        artifacts={},
+        status=WorkflowRunStatus.REVIEW_READY,
+    )
+    if updated is None:  # pragma: no cover - defensive safeguard
+        raise RuntimeError(f"Run '{run_id}' is no longer available.")
+    return updated
+
+
+def _store_completed_run(
+    *,
+    run_id: str,
+    preflight: Any,
+    prompt_package: Any,
+    artifacts: Dict[str, str],
+    progress: List[Dict[str, Any]],
+) -> WorkflowRunContext:
+    updated = update_workflow_run(
+        cl.user_session,
+        run_id,
+        preflight=_dump_model(preflight),
+        prompt_package=_dump_model(prompt_package),
+        artifacts=dict(artifacts or {}),
+        progress=[dict(event) for event in progress],
+        status=WorkflowRunStatus.COMPLETE,
+    )
+    if updated is None:  # pragma: no cover
+        raise RuntimeError(f"Run '{run_id}' is no longer available.")
+    return updated
+
+
+def _store_failed_run(run_id: str, mode: str, progress: List[Dict[str, Any]]) -> None:
+    update_workflow_run(
+        cl.user_session,
+        run_id,
+        progress=[dict(event) for event in progress],
+        status=WorkflowRunStatus.FAILED,
+    )
+    _clear_mode_runtime_state(mode)
+
+
+def _load_transition_request_from_run(run: WorkflowRunContext):
+    payload = run.request or {}
+    request = build_transition_request_from_form_response(payload)
+    persist_transition_request_session(cl.user_session, request)
+    return request
+
+
+def _load_movement_request_from_run(run: WorkflowRunContext):
+    payload = run.request or {}
+    request = build_movement_request_from_form_response(payload)
+    persist_movement_request_session(cl.user_session, request)
+    return request
+
+
+def _load_transition_preflight_from_run(run: WorkflowRunContext):
+    if not run.preflight:
+        return None
+    from models.transition_schemas import TransitionPreflight
+
+    payload = run.preflight
+    if hasattr(TransitionPreflight, "model_validate"):
+        return TransitionPreflight.model_validate(payload)
+    return TransitionPreflight.parse_obj(payload)
+
+
+def _load_movement_preflight_from_run(run: WorkflowRunContext):
+    if not run.preflight:
+        return None
+    from models.transition_schemas import TransitionPreflight
+
+    payload = run.preflight
+    if hasattr(TransitionPreflight, "model_validate"):
+        return TransitionPreflight.model_validate(payload)
+    return TransitionPreflight.parse_obj(payload)
+
+
+def _load_transition_prompt_from_run(run: WorkflowRunContext) -> Optional[TransitionPromptPackage]:
+    payload = run.prompt_package or {}
+    if not payload:
+        return None
+    return TransitionPromptPackage(
+        industry_key=str(payload.get("industry_key") or DEFAULT_INDUSTRY),
+        system_prompt=str(payload.get("system_prompt") or ""),
+        user_prompt=str(payload.get("user_prompt") or ""),
+    )
+
+
+def _load_movement_prompt_from_run(run: WorkflowRunContext) -> Optional[MovementPromptPackage]:
+    payload = run.prompt_package or {}
+    if not payload:
+        return None
+    return MovementPromptPackage(
+        industry_key=str(payload.get("industry_key") or DEFAULT_INDUSTRY),
+        system_prompt=str(payload.get("system_prompt") or ""),
+        user_prompt=str(payload.get("user_prompt") or ""),
+    )
+
+
+def _get_transition_orchestrator():
     orchestrator = cl.user_session.get("transition_playbook_orchestrator")
     if orchestrator is None:
+        from services.transition_playbook_orchestrator import TransitionPlaybookOrchestrator
+
         orchestrator = TransitionPlaybookOrchestrator()
         cl.user_session.set("transition_playbook_orchestrator", orchestrator)
     return orchestrator
 
 
-def _get_movement_orchestrator() -> MovementBriefOrchestrator:
+def _get_movement_orchestrator():
     orchestrator = cl.user_session.get("movement_brief_orchestrator")
     if orchestrator is None:
+        from services.movement_brief_orchestrator import MovementBriefOrchestrator
+
         orchestrator = MovementBriefOrchestrator()
         cl.user_session.set("movement_brief_orchestrator", orchestrator)
     return orchestrator
@@ -471,7 +640,12 @@ def _build_movement_progress_callback(progress_msg: cl.Message, request_payload:
     return events, _progress_callback
 
 
-async def _run_transition_preflight_flow(request) -> None:
+async def _run_transition_preflight_flow(run_id: str) -> None:
+    run = load_workflow_run(cl.user_session, run_id)
+    if run is None:
+        await cl.Message("That transition run is no longer available. Please reopen the form.").send()
+        return
+    request = _load_transition_request_from_run(run)
     progress_msg = cl.Message(content="**Transition Playbook**\n\nInitializing validation...")
     await progress_msg.send()
 
@@ -480,25 +654,25 @@ async def _run_transition_preflight_flow(request) -> None:
     try:
         orchestrator = _get_transition_orchestrator()
         preflight = await orchestrator.build_preflight(request, progress_cb=progress_cb)
-        prompt_package = _load_transition_prompt_package()
+        prompt_package = _load_transition_prompt_from_run(run)
         if not prompt_package:
             from services.transition_prompt_builder import TransitionPromptBuilder
 
             prompt_package = TransitionPromptBuilder().build(preflight)
 
+        _store_reviewed_run(run_id=run_id, preflight=preflight, prompt_package=prompt_package)
         cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, _dump_model(preflight))
         _persist_transition_prompt_package(prompt_package)
-        cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
-        cl.user_session.set(TRANSITION_ARTIFACTS_SESSION_KEY, {})
-        cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, None)
+        _clear_mode_runtime_state(TRANSITION_MODE)
 
         if events:
             progress_msg.content = build_transition_progress_content(request_payload, events)
             await progress_msg.update()
 
-        await present_transition_preflight_review(preflight, prompt_package)
+        await present_transition_preflight_review(preflight, prompt_package, run_id=run_id)
     except Exception as exc:
         logger.exception("Transition preflight failed: %s", exc)
+        _store_failed_run(run_id, TRANSITION_MODE, events)
         progress_msg.content = "**Transition Playbook**\n\nValidation failed."
         await progress_msg.update()
         await cl.Message(
@@ -506,7 +680,12 @@ async def _run_transition_preflight_flow(request) -> None:
         ).send()
 
 
-async def _run_movement_preflight_flow(request) -> None:
+async def _run_movement_preflight_flow(run_id: str) -> None:
+    run = load_workflow_run(cl.user_session, run_id)
+    if run is None:
+        await cl.Message("That people movement run is no longer available. Please reopen the form.").send()
+        return
+    request = _load_movement_request_from_run(run)
     progress_msg = cl.Message(content="**People Movement Brief**\n\nInitializing named-move validation...")
     await progress_msg.send()
 
@@ -515,20 +694,29 @@ async def _run_movement_preflight_flow(request) -> None:
     try:
         orchestrator = _get_movement_orchestrator()
         preflight_result = await orchestrator.build_preflight(request, progress_cb=progress_cb)
+        _store_reviewed_run(
+            run_id=run_id,
+            preflight=preflight_result.preflight,
+            prompt_package=preflight_result.prompt_package,
+        )
         cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, _dump_model(preflight_result.preflight))
         _persist_movement_prompt_package(preflight_result.prompt_package)
-        cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
-        cl.user_session.set(MOVEMENT_ARTIFACTS_SESSION_KEY, {})
-        cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, None)
+        _clear_mode_runtime_state(MOVEMENT_MODE)
         cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, None)
 
         if events:
             progress_msg.content = build_movement_progress_content(request_payload, events)
             await progress_msg.update()
 
-        await present_movement_preflight_review(request, preflight_result.preflight, preflight_result.prompt_package)
+        await present_movement_preflight_review(
+            request,
+            preflight_result.preflight,
+            preflight_result.prompt_package,
+            run_id=run_id,
+        )
     except Exception as exc:
         logger.exception("Movement preflight failed: %s", exc)
+        _store_failed_run(run_id, MOVEMENT_MODE, events)
         progress_msg.content = "**People Movement Brief**\n\nMove validation failed."
         await progress_msg.update()
         await cl.Message(
@@ -536,9 +724,15 @@ async def _run_movement_preflight_flow(request) -> None:
         ).send()
 
 
-async def _run_movement_research_flow() -> None:
-    request = load_movement_request_session(cl.user_session)
-    if not request:
+async def _run_movement_research_flow(run_id: str) -> None:
+    run = load_workflow_run(cl.user_session, run_id)
+    if run is None:
+        await cl.Message("That people movement run is no longer available. Re-open the movement form first.").send()
+        return
+    request = _load_movement_request_from_run(run)
+    preflight = _load_movement_preflight_from_run(run)
+    prompt_package = _load_movement_prompt_from_run(run)
+    if not request or not preflight or not prompt_package:
         await cl.Message("No people movement scenario is loaded. Re-open the movement form first.").send()
         return
 
@@ -547,17 +741,27 @@ async def _run_movement_research_flow() -> None:
 
     request_payload = _dump_model(request)
     events, progress_cb = _build_movement_progress_callback(progress_msg, request_payload)
-    prompt_override = cl.user_session.get(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY)
+    prompt_override = run.prompt_override
     try:
+        update_workflow_run(cl.user_session, run_id, status=WorkflowRunStatus.RUNNING, progress=[])
         orchestrator = _get_movement_orchestrator()
-        result = await orchestrator.run(
-            request,
-            progress_cb=progress_cb,
-            prompt_override=prompt_override,
-        )
+        if hasattr(orchestrator, "run_from_reviewed_context"):
+            result = await orchestrator.run_from_reviewed_context(
+                request=request,
+                preflight=preflight,
+                prompt_package=prompt_package,
+                run_id=run_id,
+                progress_cb=progress_cb,
+            )
+        else:
+            result = await orchestrator.run(
+                request,
+                reviewed_preflight=preflight,
+                reviewed_prompt_package=prompt_package,
+                progress_cb=progress_cb,
+                prompt_override=prompt_override,
+            )
 
-        cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, _dump_model(result.preflight))
-        _persist_movement_prompt_package(result.prompt_package)
         artifacts = build_movement_artifacts(result)
         persist_movement_artifacts_session(cl.user_session, artifacts)
         cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, _dump_model(result.movement_brief))
@@ -573,9 +777,19 @@ async def _run_movement_research_flow() -> None:
         progress_msg.content = build_movement_progress_content(request_payload, events)
         await progress_msg.update()
 
-        await present_movement_brief(result)
+        _store_completed_run(
+            run_id=run_id,
+            preflight=result.preflight,
+            prompt_package=result.prompt_package,
+            artifacts=artifacts,
+            progress=events,
+        )
+        cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, _dump_model(result.preflight))
+        _persist_movement_prompt_package(result.prompt_package)
+        await present_movement_brief(result, run_id=run_id)
     except Exception as exc:
         logger.exception("Movement research flow failed: %s", exc)
+        _store_failed_run(run_id, MOVEMENT_MODE, events)
         progress_msg.content = "**People Movement Brief**\n\nMovement research failed."
         await progress_msg.update()
         await cl.Message(
@@ -583,9 +797,15 @@ async def _run_movement_research_flow() -> None:
         ).send()
 
 
-async def _run_transition_research_flow() -> None:
-    request = load_transition_request_session(cl.user_session)
-    if not request:
+async def _run_transition_research_flow(run_id: str) -> None:
+    run = load_workflow_run(cl.user_session, run_id)
+    if run is None:
+        await cl.Message("That transition run is no longer available. Re-open the transition form first.").send()
+        return
+    request = _load_transition_request_from_run(run)
+    preflight = _load_transition_preflight_from_run(run)
+    prompt_package = _load_transition_prompt_from_run(run)
+    if not request or not preflight or not prompt_package:
         await cl.Message("No transition scenario is loaded. Re-open the transition form first.").send()
         return
 
@@ -594,17 +814,28 @@ async def _run_transition_research_flow() -> None:
 
     request_payload = _dump_model(request)
     events, progress_cb = _build_transition_progress_callback(progress_msg, request_payload)
-    prompt_override = cl.user_session.get(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY)
+    prompt_override = run.prompt_override
 
     try:
+        update_workflow_run(cl.user_session, run_id, status=WorkflowRunStatus.RUNNING, progress=[])
         orchestrator = _get_transition_orchestrator()
-        result = await orchestrator.run_transition_playbook(
-            request,
-            progress_cb=progress_cb,
-            prompt_override=prompt_override,
-        )
-        cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, _dump_model(result.preflight))
-        _persist_transition_prompt_package(result.prompt_package)
+        if hasattr(orchestrator, "run_transition_playbook_from_reviewed_context"):
+            result = await orchestrator.run_transition_playbook_from_reviewed_context(
+                request=request,
+                preflight=preflight,
+                prompt_package=prompt_package,
+                run_id=run_id,
+                progress_cb=progress_cb,
+            )
+        else:
+            result = await orchestrator.run_transition_playbook(
+                request,
+                reviewed_preflight=preflight,
+                reviewed_prompt_package=prompt_package,
+                reviewed_run_id=run_id,
+                progress_cb=progress_cb,
+                prompt_override=prompt_override,
+            )
 
         brief = build_transition_brief(result)
         artifacts = build_transition_artifacts(result)
@@ -614,9 +845,19 @@ async def _run_transition_research_flow() -> None:
             progress_msg.content = build_transition_progress_content(request_payload, events)
             await progress_msg.update()
 
-        await present_transition_brief(brief)
+        _store_completed_run(
+            run_id=run_id,
+            preflight=result.preflight,
+            prompt_package=result.prompt_package,
+            artifacts=artifacts,
+            progress=events,
+        )
+        cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, _dump_model(result.preflight))
+        _persist_transition_prompt_package(result.prompt_package)
+        await present_transition_brief(brief, run_id=run_id)
     except Exception as exc:
         logger.exception("Transition research flow failed: %s", exc)
+        _store_failed_run(run_id, TRANSITION_MODE, events)
         progress_msg.content = "**Transition Playbook**\n\nResearch run failed."
         await progress_msg.update()
         await cl.Message(
@@ -1300,7 +1541,8 @@ async def show_transition_form():
         for key, meta in industries.items()
     ]
 
-    request = load_transition_request_session(cl.user_session)
+    active_run = _get_active_run(TRANSITION_MODE)
+    request = _load_transition_request_from_run(active_run) if active_run else load_transition_request_session(cl.user_session)
     props = build_transition_form_props(industry_options=industry_options)
     if request:
         props.update(_dump_model(request))
@@ -1329,13 +1571,13 @@ async def show_transition_form():
             await show_transition_form()
             return
         persist_transition_request_session(cl.user_session, request)
+        run = _create_mode_run(TRANSITION_MODE, request)
         cl.user_session.set(TRANSITION_PREFLIGHT_SESSION_KEY, None)
         cl.user_session.set(TRANSITION_PROMPT_SESSION_KEY, None)
-        cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, None)
-        cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
-        cl.user_session.set(TRANSITION_ARTIFACTS_SESSION_KEY, {})
-        await _run_transition_preflight_flow(request)
+        _clear_mode_runtime_state(TRANSITION_MODE)
+        await _run_transition_preflight_flow(run.run_id)
     else:
+        _clear_mode_runtime_state(TRANSITION_MODE)
         await cl.Message("Transition form cancelled or timed out.").send()
 
 
@@ -1350,7 +1592,8 @@ async def show_movement_form():
         for key, meta in industries.items()
     ]
 
-    request = load_movement_request_session(cl.user_session)
+    active_run = _get_active_run(MOVEMENT_MODE)
+    request = _load_movement_request_from_run(active_run) if active_run else load_movement_request_session(cl.user_session)
     props = build_movement_form_props(
         industry_options=industry_options,
         industry_override=getattr(request, "industry_override", None) or "financial_services",
@@ -1382,21 +1625,20 @@ async def show_movement_form():
             await show_movement_form()
             return
         persist_movement_request_session(cl.user_session, request)
-        cl.user_session.set(MOVEMENT_PROGRESS_SESSION_KEY, [])
-        cl.user_session.set(MOVEMENT_ARTIFACTS_SESSION_KEY, {})
+        run = _create_mode_run(MOVEMENT_MODE, request)
         cl.user_session.set(MOVEMENT_BRIEF_SESSION_KEY, None)
         cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, None)
         cl.user_session.set(MOVEMENT_PROMPT_SESSION_KEY, None)
-        cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, None)
-        cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
-        await _run_movement_preflight_flow(request)
+        _clear_mode_runtime_state(MOVEMENT_MODE)
+        await _run_movement_preflight_flow(run.run_id)
     else:
+        _clear_mode_runtime_state(MOVEMENT_MODE)
         await cl.Message("Movement form cancelled or timed out.").send()
 
 
-async def present_transition_preflight_review(preflight, prompt_package):
+async def present_transition_preflight_review(preflight, prompt_package, *, run_id: str):
     """Render the compact transition validation review surface."""
-    payload = build_transition_preflight_review(preflight, prompt_package)
+    payload = build_transition_preflight_review(preflight, prompt_package, run_id=run_id)
     actions = [
         cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
         for action in payload.get("actions", [])
@@ -1414,9 +1656,9 @@ async def present_transition_preflight_review(preflight, prompt_package):
     await cl.Message(content=payload["content"], actions=actions).send()
 
 
-async def present_movement_preflight_review(request, preflight, prompt_package):
+async def present_movement_preflight_review(request, preflight, prompt_package, *, run_id: str):
     """Render the named-move review surface before movement research launches."""
-    payload = build_movement_preflight_review(request, preflight, prompt_package)
+    payload = build_movement_preflight_review(request, preflight, prompt_package, run_id=run_id)
     actions = [
         cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
         for action in payload.get("actions", [])
@@ -1433,9 +1675,9 @@ async def present_movement_preflight_review(request, preflight, prompt_package):
     await cl.Message(content=payload["content"], actions=actions).send()
 
 
-async def present_transition_brief(brief):
+async def present_transition_brief(brief, *, run_id: str):
     """Render the compact transition brief surface."""
-    payload = build_transition_brief_payload(brief)
+    payload = build_transition_brief_payload(brief, run_id=run_id)
     actions = [
         cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
         for action in payload.get("actions", [])
@@ -1443,7 +1685,7 @@ async def present_transition_brief(brief):
     await cl.Message(content=payload["content"], actions=actions).send()
 
 
-async def present_movement_brief(result) -> None:
+async def present_movement_brief(result, *, run_id: str) -> None:
     """Render the compact movement brief surface."""
     payload = build_movement_brief_payload(
         result.movement_brief,
@@ -1466,11 +1708,11 @@ async def present_movement_brief(result) -> None:
         cl.Action(
             name=ACTION_START_NEW_MOVEMENT_SCAN,
             label="Start New Scan",
-            payload={},
+            payload={"mode": "movement"},
         )
     ] + [
         cl.Action(name=item["name"], label=item["label"], payload=item.get("payload", {}))
-        for item in build_movement_artifact_actions()
+        for item in build_movement_artifact_actions(run_id=run_id)
     ]
     await cl.Message(
         content="Open the supporting movement artifacts or launch another movement scan:",
@@ -1526,7 +1768,12 @@ async def generate_research_prompt(params_dict: dict):
 
 @cl.action_callback(ACTION_VIEW_PROMPT)
 async def transition_view_prompt(action: cl.Action):
-    prompt_package = _load_transition_prompt_package()
+    run = resolve_run_context(
+        cl.user_session,
+        mode="transition",
+        run_id=str((action.payload or {}).get("run_id") or ""),
+    )
+    prompt_package = _load_transition_prompt_from_run(run) if run else _load_transition_prompt_package()
     if not prompt_package:
         await cl.Message("No generated prompt is available yet.").send()
         return
@@ -1537,8 +1784,11 @@ async def transition_view_prompt(action: cl.Action):
 
 @cl.action_callback(ACTION_EDIT_PROMPT)
 async def transition_edit_prompt(action: cl.Action):
-    prompt_package = _load_transition_prompt_package()
+    run_id = str((action.payload or {}).get("run_id") or "") or get_active_run_id(cl.user_session, TRANSITION_MODE)
+    run = resolve_run_context(cl.user_session, mode="transition", run_id=run_id)
+    prompt_package = _load_transition_prompt_from_run(run) if run else _load_transition_prompt_package()
     cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, True)
+    _set_pending_edit_run_id(TRANSITION_MODE, run_id)
     if prompt_package:
         await cl.Message(
             "Send your edited transition research prompt as the next message. "
@@ -1558,12 +1808,18 @@ async def transition_adjust_transition(action: cl.Action):
 
 @cl.action_callback(ACTION_RUN_RESEARCH)
 async def transition_run_research(action: cl.Action):
-    await _run_transition_research_flow()
+    run_id = str((action.payload or {}).get("run_id") or "") or get_active_run_id(cl.user_session, TRANSITION_MODE)
+    await _run_transition_research_flow(run_id)
 
 
 @cl.action_callback(ACTION_VIEW_MOVEMENT_PROMPT)
 async def movement_view_prompt(action: cl.Action):
-    prompt_package = _load_movement_prompt_package()
+    run = resolve_run_context(
+        cl.user_session,
+        mode="movement",
+        run_id=str((action.payload or {}).get("run_id") or ""),
+    )
+    prompt_package = _load_movement_prompt_from_run(run) if run else _load_movement_prompt_package()
     if not prompt_package:
         await cl.Message("No generated prompt is available yet.").send()
         return
@@ -1574,8 +1830,11 @@ async def movement_view_prompt(action: cl.Action):
 
 @cl.action_callback(ACTION_EDIT_MOVEMENT_PROMPT)
 async def movement_edit_prompt(action: cl.Action):
-    prompt_package = _load_movement_prompt_package()
+    run_id = str((action.payload or {}).get("run_id") or "") or get_active_run_id(cl.user_session, MOVEMENT_MODE)
+    run = resolve_run_context(cl.user_session, mode="movement", run_id=run_id)
+    prompt_package = _load_movement_prompt_from_run(run) if run else _load_movement_prompt_package()
     cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, True)
+    _set_pending_edit_run_id(MOVEMENT_MODE, run_id)
     if prompt_package:
         await cl.Message(
             "Send your edited people movement research prompt as the next message. "
@@ -1595,7 +1854,8 @@ async def movement_adjust_move(action: cl.Action):
 
 @cl.action_callback(ACTION_RUN_MOVEMENT_RESEARCH)
 async def movement_run_research(action: cl.Action):
-    await _run_movement_research_flow()
+    run_id = str((action.payload or {}).get("run_id") or "") or get_active_run_id(cl.user_session, MOVEMENT_MODE)
+    await _run_movement_research_flow(run_id)
 
 
 @cl.action_callback(ACTION_VIEW_ARTIFACT)
@@ -1603,17 +1863,13 @@ async def transition_view_artifact(action: cl.Action):
     payload = action.payload or {}
     artifact_key = str(payload.get("artifact_key") or "").strip()
     artifact_type = str(payload.get("artifact_type") or artifact_key).strip()
-    current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
-    artifacts: Dict[str, str] = {}
-    if current_mode == MOVEMENT_MODE:
-        artifacts = load_movement_artifacts_session(cl.user_session)
-    elif current_mode == TRANSITION_MODE:
-        artifacts = cl.user_session.get(TRANSITION_ARTIFACTS_SESSION_KEY) or {}
-    else:
-        artifacts = load_movement_artifacts_session(cl.user_session) or cl.user_session.get(TRANSITION_ARTIFACTS_SESSION_KEY) or {}
+    run_id = str(payload.get("run_id") or "").strip()
+    mode = str(payload.get("mode") or "").strip() or cl.user_session.get(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
+    run = resolve_run_context(cl.user_session, mode=mode or None, run_id=run_id or None)
+    artifacts: Dict[str, str] = dict((run.artifacts if run else {}) or {})
     content = str(artifacts.get(artifact_key) or "").strip()
     if not content:
-        await cl.Message("That artifact is not available for this run yet.").send()
+        await cl.Message("That artifact is no longer available for this run.").send()
         return
     title = artifact_type.replace("_", " ").title()
     await cl.Message(f"**{title}**\n\n{content}").send()
@@ -1649,53 +1905,71 @@ async def on_message(message: cl.Message):
         current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
 
         if current_mode == TRANSITION_MODE:
-            if cl.user_session.get(TRANSITION_EDIT_PENDING_SESSION_KEY):
+            pending_run_id = _get_pending_edit_run_id(TRANSITION_MODE)
+            if pending_run_id:
                 cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
-                cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, user_text)
-
-                prompt_package = _load_transition_prompt_package()
-                preflight = _load_transition_preflight()
-                if prompt_package and preflight:
+                _set_pending_edit_run_id(TRANSITION_MODE, None)
+                run = resolve_run_context(cl.user_session, mode="transition", run_id=pending_run_id)
+                prompt_package = _load_transition_prompt_from_run(run) if run else None
+                preflight = _load_transition_preflight_from_run(run) if run else None
+                if prompt_package and preflight and run:
                     updated_prompt = TransitionPromptPackage(
                         industry_key=prompt_package.industry_key,
                         system_prompt=prompt_package.system_prompt,
                         user_prompt=user_text,
                     )
+                    update_workflow_run(
+                        cl.user_session,
+                        pending_run_id,
+                        prompt_package=_dump_model(updated_prompt),
+                        prompt_override=user_text,
+                    )
                     _persist_transition_prompt_package(updated_prompt)
+                    cl.user_session.set(TRANSITION_PROMPT_OVERRIDE_SESSION_KEY, user_text)
                     await cl.Message("Updated prompt captured for this transition run.").send()
-                    await present_transition_preflight_review(preflight, updated_prompt)
+                    await present_transition_preflight_review(preflight, updated_prompt, run_id=pending_run_id)
                 else:
                     await cl.Message("Updated prompt captured for the next transition run.").send()
                 return
 
-            if load_transition_request_session(cl.user_session):
+            if _get_active_run(TRANSITION_MODE):
                 await cl.Message(
                     "Transition mode is active. Use the review actions to run research, view the prompt, or adjust the scenario."
                 ).send()
                 return
+            await show_transition_form()
+            return
 
         if current_mode == MOVEMENT_MODE:
-            if cl.user_session.get(MOVEMENT_EDIT_PENDING_SESSION_KEY):
+            pending_run_id = _get_pending_edit_run_id(MOVEMENT_MODE)
+            if pending_run_id:
                 cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
-                cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, user_text)
-
-                prompt_package = _load_movement_prompt_package()
-                preflight = _load_movement_preflight()
-                request = load_movement_request_session(cl.user_session)
-                if prompt_package and preflight and request:
+                _set_pending_edit_run_id(MOVEMENT_MODE, None)
+                run = resolve_run_context(cl.user_session, mode="movement", run_id=pending_run_id)
+                prompt_package = _load_movement_prompt_from_run(run) if run else None
+                preflight = _load_movement_preflight_from_run(run) if run else None
+                request = _load_movement_request_from_run(run) if run else None
+                if prompt_package and preflight and request and run:
                     updated_prompt = MovementPromptPackage(
                         industry_key=prompt_package.industry_key,
                         system_prompt=prompt_package.system_prompt,
                         user_prompt=user_text,
                     )
+                    update_workflow_run(
+                        cl.user_session,
+                        pending_run_id,
+                        prompt_package=_dump_model(updated_prompt),
+                        prompt_override=user_text,
+                    )
                     _persist_movement_prompt_package(updated_prompt)
+                    cl.user_session.set(MOVEMENT_PROMPT_OVERRIDE_SESSION_KEY, user_text)
                     await cl.Message("Updated prompt captured for this people movement run.").send()
-                    await present_movement_preflight_review(request, preflight, updated_prompt)
+                    await present_movement_preflight_review(request, preflight, updated_prompt, run_id=pending_run_id)
                 else:
                     await cl.Message("Updated prompt captured for the next people movement run.").send()
                 return
 
-            if load_movement_request_session(cl.user_session):
+            if _get_active_run(MOVEMENT_MODE):
                 await cl.Message(
                     "People Movement Brief mode is active. Use the review actions to run research, view the prompt, or adjust the scenario."
                 ).send()

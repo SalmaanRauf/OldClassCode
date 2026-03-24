@@ -27,21 +27,8 @@ export default function MovementBrief() {
     const rows = safeList(data.movement_rows);
     const detailsById = data.row_details_by_id || {};
     const actions = safeList(data.where_to_act);
-    const controls = safeList(data.secondary_controls);
     const stats = data.stats || {};
     const moveSummary = data.move_summary || {};
-
-    const onSecondaryControl = (control) => {
-        if (typeof submitElement !== "function") {
-            return;
-        }
-        submitElement({
-            action: "secondary_control",
-            artifact_key: control.artifact_key,
-            artifact_type: control.artifact_type,
-            label: control.label,
-        });
-    };
 
     const toggleExpanded = (rowId) => {
         setExpandedRowId((current) => (current === rowId ? null : rowId));
@@ -284,23 +271,6 @@ export default function MovementBrief() {
                     <SectionCard title="Takeaway">
                         <p className="text-sm leading-7 text-slate-700">{data.takeaway || "No takeaway available."}</p>
                     </SectionCard>
-
-                    {controls.length ? (
-                        <SectionCard title="Secondary Controls">
-                            <div className="flex flex-wrap gap-3">
-                                {controls.map((control) => (
-                                    <button
-                                        key={control.artifact_key}
-                                        type="button"
-                                        className="min-h-11 rounded-full border border-[#cab89f] bg-white px-4 py-2 text-sm font-medium text-slate-700 transition hover:bg-[#f5efe4] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#8d6f44] focus-visible:ring-offset-2"
-                                        onClick={() => onSecondaryControl(control)}
-                                    >
-                                        {control.label}
-                                    </button>
-                                ))}
-                            </div>
-                        </SectionCard>
-                    ) : null}
                 </main>
             </div>
         </section>

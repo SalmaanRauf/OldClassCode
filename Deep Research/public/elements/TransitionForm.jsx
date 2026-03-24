@@ -26,7 +26,15 @@ export default function TransitionForm() {
         setValues((current) => ({ ...current, [id]: value }));
     };
 
+    const handleSubmit = () => submitElement(values);
+
     return (
+        <form
+            onSubmit={(event) => {
+                event.preventDefault();
+                handleSubmit();
+            }}
+        >
         <Card className="w-full max-w-2xl mt-4">
             <CardHeader>
                 <CardTitle>Build a Transition Playbook</CardTitle>
@@ -166,10 +174,11 @@ export default function TransitionForm() {
                 <Button variant="outline" onClick={() => cancelElement()}>
                     Cancel
                 </Button>
-                <Button onClick={() => submitElement(values)}>
+                <Button type="submit">
                     Build Research Plan
                 </Button>
             </CardFooter>
         </Card>
+        </form>
     );
 }

@@ -3,9 +3,9 @@ Compact formatting helpers for the Transition Playbook workflow.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List
 
-from models.bd_schemas import CredentialMatch, MDReportOpportunity
+from models.bd_schemas import MDReportOpportunity
 from models.transition_schemas import (
     HiddenArtifactRef,
     RecommendedAction,
@@ -14,7 +14,8 @@ from models.transition_schemas import (
     TransitionProofCard,
 )
 from services.deep_research_formatter import format_deep_research_response_as_markdown
-from services.transition_playbook_orchestrator import TransitionPlaybookRunResult
+if TYPE_CHECKING:
+    from services.transition_playbook_orchestrator import TransitionPlaybookRunResult
 
 
 def _as_dict(value: Any) -> Dict[str, Any]:
@@ -25,7 +26,7 @@ def _as_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
 
 
-def build_transition_brief(result: TransitionPlaybookRunResult) -> TransitionBrief:
+def build_transition_brief(result: "TransitionPlaybookRunResult") -> TransitionBrief:
     """Convert the full transition workflow result into a compact brief."""
     preflight = result.preflight
     report = result.bd_report
@@ -93,50 +94,7 @@ def build_transition_brief(result: TransitionPlaybookRunResult) -> TransitionBri
         hidden_artifacts=hidden_artifacts,
     )
 
-
-def format_transition_brief_markdown(brief: TransitionBrief) -> str:
-    """Render the compact transition brief as concise markdown for Chainlit."""
-    lines: List[str] = [
-        "# Transition Playbook",
-        "",
-        brief.transition_summary.strip(),
-        "",
-    ]
-
-    if brief.top_opportunities:
-        lines.extend(["## Top Opportunities", ""])
-        for index, opportunity in enumerate(brief.top_opportunities, 1):
-            lines.append(f"**{index}. {opportunity.title}**")
-            lines.append(f"- Why now: {opportunity.why_now}")
-            lines.append(f"- Role fit: {opportunity.role_fit}")
-            lines.append(f"- Confidence: {opportunity.confidence}")
-            lines.append("")
-
-    if brief.proof_and_warm_paths:
-        lines.extend(["## Proof + Warm Paths", ""])
-        for proof in brief.proof_and_warm_paths:
-            lines.append(f"**{proof.opportunity_title}**")
-            lines.append(f"- Credential proof: {proof.credential_summary}")
-            lines.append(f"- Warm path: {proof.warm_path_summary}")
-            if proof.internal_sponsors:
-                lines.append(f"- Internal sponsors: {', '.join(proof.internal_sponsors)}")
-            lines.append("")
-
-    if brief.recommended_actions:
-        lines.extend(["## Recommended Next Actions", ""])
-        for index, action in enumerate(brief.recommended_actions, 1):
-            owner_text = f" ({action.owner_hint})" if action.owner_hint else ""
-            lines.append(f"{index}. {action.title}{owner_text}")
-        lines.append("")
-
-    if brief.hidden_artifacts:
-        labels = ", ".join(artifact.label for artifact in brief.hidden_artifacts)
-        lines.append(f"_Additional detail available via secondary actions: {labels}._")
-
-    return "\n".join(lines).strip()
-
-
-def build_transition_artifacts(result: TransitionPlaybookRunResult) -> Dict[str, str]:
+def build_transition_artifacts(result: "TransitionPlaybookRunResult") -> Dict[str, str]:
     """Build the secondary artifact payloads shown behind buttons."""
     artifacts = {
         "deep_research_report": format_deep_research_response_as_markdown(result.deep_research_response),
@@ -148,13 +106,15 @@ def build_transition_artifacts(result: TransitionPlaybookRunResult) -> Dict[str,
     return artifacts
 
 
-def _build_transition_summary(result: TransitionPlaybookRunResult) -> str:
+def _build_transition_summary(result: "TransitionPlaybookRunResult") -> str:
     request = result.preflight.request
+    resolved_from_company = result.preflight.from_account.company_name or request.from_company
+    resolved_to_company = result.preflight.to_account.company_name or request.to_company
     indicators = result.preflight.quick_indicators
     scenario_type = "Synthetic" if request.synthetic_scenario else "Live"
     return (
         f"{request.person_name} is modeled as a {scenario_type} transition from "
-        f"{request.from_company} to {request.to_company} into the {request.new_role} role. "
+        f"{resolved_from_company} to {resolved_to_company} into the {request.new_role} role. "
         f"Person match status is {result.preflight.person_resolution.match_status}. "
         f"Warm path available: {'yes' if indicators.warm_intro_path_available else 'no'}. "
         f"Prior work exists at the source account: {'yes' if indicators.source_worked_before else 'no'}; "
@@ -238,15 +198,17 @@ def _extract_internal_sponsors(actioning_context: Dict[str, Any]) -> List[str]:
     return names
 
 
-def _format_proconnect_dossier(result: TransitionPlaybookRunResult) -> str:
+def _format_proconnect_dossier(result: "TransitionPlaybookRunResult") -> str:
     preflight = result.preflight
     actioning = result.actioning_context or {}
+    resolved_from_company = preflight.from_account.company_name or preflight.request.from_company
+    resolved_to_company = preflight.to_account.company_name or preflight.request.to_company
     lines = [
         "# ProConnect Dossier",
         "",
         "## Transition Validation",
         f"- Person: {preflight.request.person_name}",
-        f"- Move: {preflight.request.from_company} -> {preflight.request.to_company}",
+        f"- Move: {resolved_from_company} -> {resolved_to_company}",
         f"- Target role: {preflight.request.new_role}",
         f"- Person match status: {preflight.person_resolution.match_status}",
         f"- Warm path available: {'Yes' if preflight.quick_indicators.warm_intro_path_available else 'No'}",

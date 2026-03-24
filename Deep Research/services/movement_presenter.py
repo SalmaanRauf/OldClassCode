@@ -77,6 +77,8 @@ def build_movement_preflight_review(
     request: MovementBriefRequest,
     preflight: TransitionPreflight,
     prompt_package: MovementPromptPackage,
+    *,
+    run_id: str,
 ) -> Dict[str, Any]:
     """Build the named-move review surface shown before research starts."""
     indicators = preflight.quick_indicators
@@ -111,14 +113,26 @@ def build_movement_preflight_review(
     return {
         "content": "\n".join(content_lines).strip(),
         "actions": [
-            {"name": ACTION_RUN_MOVEMENT_RESEARCH, "label": "Run Research", "payload": {}},
-            {"name": ACTION_EDIT_MOVEMENT_PROMPT, "label": "Edit Prompt", "payload": {}},
-            {"name": ACTION_ADJUST_MOVEMENT, "label": "Adjust Movement", "payload": {}},
+            {
+                "name": ACTION_RUN_MOVEMENT_RESEARCH,
+                "label": "Run Research",
+                "payload": {"run_id": run_id, "mode": "movement"},
+            },
+            {
+                "name": ACTION_EDIT_MOVEMENT_PROMPT,
+                "label": "Edit Prompt",
+                "payload": {"run_id": run_id, "mode": "movement"},
+            },
+            {
+                "name": ACTION_ADJUST_MOVEMENT,
+                "label": "Adjust Movement",
+                "payload": {"run_id": run_id, "mode": "movement"},
+            },
         ],
         "view_prompt_action": {
             "name": ACTION_VIEW_MOVEMENT_PROMPT,
             "label": "View Generated Prompt",
-            "payload": {},
+            "payload": {"run_id": run_id, "mode": "movement"},
         },
     }
 
@@ -128,7 +142,6 @@ def build_movement_brief_payload(
     *,
     request: Optional[MovementBriefRequest] = None,
     preflight: Optional[TransitionPreflight] = None,
-    secondary_controls: Optional[List[Dict[str, Any]]] = None,
     person_details_by_name: Optional[Dict[str, Dict[str, Any]]] = None,
     row_action_context_by_row_id: Optional[Dict[str, Dict[str, Any]]] = None,
     row_action_context_by_person_name: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -173,7 +186,6 @@ def build_movement_brief_payload(
         "row_details_by_id": row_details_by_id,
         "where_to_act": [_build_action_payload(action) for action in visible_actions],
         "takeaway": brief.takeaway,
-        "secondary_controls": _normalize_secondary_controls(secondary_controls or []),
         "section_order": [
             "move_summary",
             "signal_summary",
@@ -330,18 +342,19 @@ def _build_move_summary(
 
 def _normalize_secondary_controls(controls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     normalized: List[Dict[str, Any]] = []
-    for control in controls[:3]:
-        label = str(control.get("label") or "").strip()
-        artifact_key = str(control.get("artifact_key") or "").strip()
-        artifact_type = str(control.get("artifact_type") or "").strip()
-        if not label or not artifact_key or not artifact_type:
+    for control in controls:
+        if not isinstance(control, dict):
+            continue
+        artifact_key = _normalize_text(control.get("artifact_key") or "")
+        label = _normalize_text(control.get("label") or "")
+        if not artifact_key or not label:
             continue
         normalized.append(
             {
                 "label": label,
                 "artifact_key": artifact_key,
-                "artifact_type": artifact_type,
-                "description": str(control.get("description") or "").strip(),
+                "artifact_type": _normalize_text(control.get("artifact_type") or "") or "artifact",
+                "description": _normalize_text(control.get("description") or ""),
             }
         )
     return normalized

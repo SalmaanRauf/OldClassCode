@@ -44,6 +44,7 @@ class FSMovementDigestor:
         trigger: BDTrigger,
         deep_research_markdown: str,
         max_rows: int = 25,
+        target_company_aliases: Optional[List[str]] = None,
     ) -> Tuple[List[MovementRecord], Dict[str, Any]]:
         start = perf_counter()
         diagnostics: Dict[str, Any] = {
@@ -84,6 +85,7 @@ class FSMovementDigestor:
                 payload.get("movement_records", []),
                 trigger=trigger,
                 max_rows=max_rows,
+                target_company_aliases=target_company_aliases,
             )
             diagnostics["movements_returned"] = len(movements)
             diagnostics["status"] = "Succeeded"
@@ -130,18 +132,20 @@ class FSMovementDigestor:
         *,
         trigger: BDTrigger,
         max_rows: int,
+        target_company_aliases: Optional[List[str]] = None,
     ) -> List[MovementRecord]:
         if not isinstance(raw_items, list):
             return []
 
-        company_focus = self._normalize_company(trigger.company_focus)
+        company_aliases = self._company_aliases(target_company_aliases or [trigger.company_focus])
         rows: List[MovementRecord] = []
         for entry in raw_items:
             if not isinstance(entry, dict):
                 continue
 
             target_company = str(entry.get("target_company") or "").strip()
-            if company_focus and self._normalize_company(target_company) != company_focus:
+            normalized_target_aliases = self._company_aliases([target_company])
+            if company_aliases and company_aliases.isdisjoint(normalized_target_aliases):
                 continue
 
             person_name = str(entry.get("person_name") or "").strip()
@@ -207,6 +211,42 @@ class FSMovementDigestor:
     def _normalize_company(value: Optional[str]) -> str:
         normalized = re.sub(r"[\s,.-]+", " ", (value or "").strip().lower())
         return normalized.strip()
+
+    @classmethod
+    def _company_aliases(cls, values: List[Optional[str]]) -> set[str]:
+        aliases: set[str] = set()
+        corporate_suffixes = (
+            " corporation",
+            " corp",
+            " incorporated",
+            " inc",
+            " company",
+            " co",
+            " ltd",
+            " llc",
+            " plc",
+            " holdings",
+            " group",
+        )
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            variants = {
+                text,
+                re.sub(r"\([^)]*\)", "", text).strip(),
+            }
+            variants.update(re.findall(r"\(([^)]*)\)", text))
+            for variant in variants:
+                normalized = cls._normalize_company(variant)
+                if normalized:
+                    aliases.add(normalized)
+                    for suffix in corporate_suffixes:
+                        if normalized.endswith(suffix):
+                            stripped = normalized[: -len(suffix)].strip()
+                            if stripped:
+                                aliases.add(stripped)
+        return aliases
 
     def _fallback_prompt(self) -> str:
         return (

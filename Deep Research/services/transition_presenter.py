@@ -5,8 +5,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from models.transition_schemas import HiddenArtifactRef, TransitionBrief
-from models.transition_schemas import TransitionPreflight
+from models.transition_schemas import TransitionBrief, TransitionPreflight
 from services.transition_prompt_builder import TransitionPromptPackage
 
 
@@ -20,6 +19,8 @@ ACTION_VIEW_ARTIFACT = "transition_view_artifact"
 def build_transition_preflight_review(
     preflight: TransitionPreflight,
     prompt_package: TransitionPromptPackage,
+    *,
+    run_id: str,
 ) -> Dict[str, Any]:
     """Build a compact review payload for the transition validation screen."""
     indicators = preflight.quick_indicators
@@ -33,6 +34,16 @@ def build_transition_preflight_review(
         f"Target role: {request.new_role}",
         f"Scenario type: {'Synthetic' if request.synthetic_scenario else 'Live'}",
         f"Person match: {preflight.person_resolution.match_status.title()}",
+        (
+            "Source account: "
+            f"{'Resolved' if preflight.from_account.resolved else 'Unresolved'}"
+            f" ({preflight.from_account.company_name or request.from_company})"
+        ),
+        (
+            "Destination account: "
+            f"{'Resolved' if preflight.to_account.resolved else 'Unresolved'}"
+            f" ({preflight.to_account.company_name or request.to_company})"
+        ),
         f"Warm path available: {'Yes' if indicators.warm_intro_path_available else 'No'}",
         f"Prior work: Source {'Yes' if indicators.source_worked_before else 'No'} | Destination {'Yes' if indicators.destination_worked_before else 'No'}",
         f"Industry context: {_format_industry_label(prompt_package.industry_key)}",
@@ -44,9 +55,9 @@ def build_transition_preflight_review(
             content_lines.append(f"- {hypothesis.title} ({hypothesis.confidence})")
 
     actions = [
-        {"name": ACTION_RUN_RESEARCH, "label": "Run Research", "payload": {}},
-        {"name": ACTION_EDIT_PROMPT, "label": "Edit Prompt", "payload": {}},
-        {"name": ACTION_ADJUST_TRANSITION, "label": "Adjust Transition", "payload": {}},
+        {"name": ACTION_RUN_RESEARCH, "label": "Run Research", "payload": {"run_id": run_id, "mode": "transition"}},
+        {"name": ACTION_EDIT_PROMPT, "label": "Edit Prompt", "payload": {"run_id": run_id, "mode": "transition"}},
+        {"name": ACTION_ADJUST_TRANSITION, "label": "Adjust Transition", "payload": {"run_id": run_id, "mode": "transition"}},
     ]
 
     return {
@@ -55,13 +66,12 @@ def build_transition_preflight_review(
         "view_prompt_action": {
             "name": ACTION_VIEW_PROMPT,
             "label": "View Generated Prompt",
-            "payload": {},
+            "payload": {"run_id": run_id, "mode": "transition"},
         },
-        "prompt_content": prompt_package.user_prompt or preflight.suggested_research_prompt,
     }
 
 
-def build_transition_brief_payload(brief: TransitionBrief) -> Dict[str, Any]:
+def build_transition_brief_payload(brief: TransitionBrief, *, run_id: str) -> Dict[str, Any]:
     """Build message content and actions for the compact transition brief."""
     content_lines: List[str] = ["**Transition Playbook**", "", brief.transition_summary, ""]
 
@@ -71,6 +81,18 @@ def build_transition_brief_payload(brief: TransitionBrief) -> Dict[str, Any]:
             content_lines.append(f"- {card.title} ({card.confidence})")
             content_lines.append(f"  Why now: {card.why_now}")
             content_lines.append(f"  Role fit: {card.role_fit}")
+        content_lines.append("")
+
+    if brief.proof_and_warm_paths:
+        content_lines.extend(["**Proof + warm paths:**"])
+        for proof in brief.proof_and_warm_paths[:3]:
+            sponsors = ""
+            if proof.internal_sponsors:
+                sponsors = f" Sponsors: {', '.join(proof.internal_sponsors[:3])}."
+            content_lines.append(
+                f"- {proof.opportunity_title}: {proof.credential_summary} "
+                f"{proof.warm_path_summary}{sponsors}".strip()
+            )
         content_lines.append("")
 
     if brief.recommended_actions:
@@ -83,7 +105,12 @@ def build_transition_brief_payload(brief: TransitionBrief) -> Dict[str, Any]:
         {
             "name": ACTION_VIEW_ARTIFACT,
             "label": artifact.label,
-            "payload": {"artifact_key": artifact.artifact_key, "artifact_type": artifact.artifact_type},
+            "payload": {
+                "artifact_key": artifact.artifact_key,
+                "artifact_type": artifact.artifact_type,
+                "run_id": run_id,
+                "mode": "transition",
+            },
         }
         for artifact in brief.hidden_artifacts
     ]

@@ -115,3 +115,17 @@ def test_synthetic_scenario_flag_persists_in_session() -> None:
     stored = session.get(TRANSITION_REQUEST_SESSION_KEY)
     assert stored["synthetic_scenario"] is True
     assert stored["department_hint"] == "C-Suite"
+
+
+def test_string_false_synthetic_scenario_parses_as_false() -> None:
+    request = build_transition_request_from_form_response(
+        {
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "synthetic_scenario": "false",
+        }
+    )
+
+    assert request.synthetic_scenario is False

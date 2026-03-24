@@ -61,6 +61,8 @@ class TransitionPromptBuilder:
 
     def _build_user_prompt(self, preflight: TransitionPreflight) -> str:
         request = preflight.request
+        resolved_from_company = str(preflight.from_account.company_name or "").strip() or request.from_company
+        resolved_to_company = str(preflight.to_account.company_name or "").strip() or request.to_company
         lines: List[str] = []
 
         if request.synthetic_scenario:
@@ -71,9 +73,11 @@ class TransitionPromptBuilder:
         lines.extend(
             [
                 f"Person: {request.person_name}",
-                f"Transition: {request.from_company} -> {request.to_company}",
+                f"Transition: {resolved_from_company} -> {resolved_to_company}",
                 f"Target role: {request.new_role}",
                 f"Person match status: {preflight.person_resolution.match_status}",
+                f"Resolved source account ID: {preflight.from_account.account_id or 'unresolved'}",
+                f"Resolved destination account ID: {preflight.to_account.account_id or 'unresolved'}",
                 f"Warm intro path available: {'yes' if preflight.quick_indicators.warm_intro_path_available else 'no'}",
                 f"Prior work at source account: {'yes' if preflight.quick_indicators.source_worked_before else 'no'}",
                 f"Prior work at destination account: {'yes' if preflight.quick_indicators.destination_worked_before else 'no'}",

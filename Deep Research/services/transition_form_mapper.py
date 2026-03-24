@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from models.transition_schemas import TransitionRequest
-from services.element_response_utils import extract_element_response_payload
+from services.element_response_utils import extract_element_response_payload, parse_boolean_flag
 
 
 TRANSITION_REQUEST_SESSION_KEY = "transition_request"
@@ -38,7 +38,7 @@ def build_transition_request_from_form_response(response: Dict[str, Any]) -> Tra
         from_company=str(payload.get("from_company") or "").strip(),
         to_company=str(payload.get("to_company") or "").strip(),
         new_role=str(payload.get("new_role") or "").strip(),
-        synthetic_scenario=bool(payload.get("synthetic_scenario")),
+        synthetic_scenario=parse_boolean_flag(payload.get("synthetic_scenario"), default=True),
         department_hint=_optional_text(payload.get("department_hint")),
         geography=_optional_text(payload.get("geography")),
         industry_override=_optional_text(payload.get("industry_override")),

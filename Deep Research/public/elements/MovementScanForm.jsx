@@ -43,6 +43,12 @@ export default function MovementScanForm() {
     };
 
     return (
+        <form
+            onSubmit={(event) => {
+                event.preventDefault();
+                handleSubmit();
+            }}
+        >
         <Card className="w-full max-w-3xl border-[#dccfbf] bg-white/95 shadow-[0_18px_55px_rgba(48,36,18,0.08)]">
                 <CardHeader className="space-y-3">
                     <div className="space-y-1">
@@ -206,10 +212,11 @@ export default function MovementScanForm() {
                     <Button type="button" variant="outline" onClick={handleCancel} className="min-h-11">
                         {data.secondary_cta_label || "Cancel"}
                     </Button>
-                    <Button type="button" className="min-h-11" onClick={handleSubmit}>
+                    <Button type="submit" className="min-h-11">
                         {data.primary_cta_label || "Generate Research Plan"}
                     </Button>
                 </CardFooter>
         </Card>
+        </form>
     );
 }

@@ -9,7 +9,8 @@ from models.bd_schemas import BDTrigger
 from models.movement_schemas import MovementBriefRequest
 from models.transition_schemas import TransitionRequest
 from services.bd_trigger_context import build_trigger_for_bd_enrichment
-from services.element_response_utils import extract_element_response_payload
+from services.element_response_utils import extract_element_response_payload, parse_boolean_flag
+from services.workflow_state import WorkflowStage
 
 
 DEFAULT_MOVEMENT_INDUSTRY = "financial_services"
@@ -95,7 +96,7 @@ def build_movement_request_from_form_response(
         to_company=_normalize_text(payload.get("to_company")),
         new_role=_normalize_text(payload.get("new_role")),
         lookback_days=max(30, min(365, lookback_days)),
-        synthetic_scenario=bool(payload.get("synthetic_scenario", True)),
+        synthetic_scenario=parse_boolean_flag(payload.get("synthetic_scenario"), default=True),
         geography=_optional_text(payload.get("geography")),
         industry_override=_optional_text(industry_override),
         additional_context=_optional_text(payload.get("additional_context")),
@@ -193,7 +194,7 @@ def build_movement_artifacts(result: Any) -> Dict[str, str]:
     }
 
 
-def build_movement_artifact_actions() -> List[Dict[str, Any]]:
+def build_movement_artifact_actions(*, run_id: str) -> List[Dict[str, Any]]:
     """Build the message actions used to open movement artifacts."""
     return [
         {
@@ -202,6 +203,8 @@ def build_movement_artifact_actions() -> List[Dict[str, Any]]:
             "payload": {
                 "artifact_key": MOVEMENT_REPORT_ARTIFACT_KEY,
                 "artifact_type": "report",
+                "run_id": run_id,
+                "mode": "movement",
             },
         },
         {
@@ -210,6 +213,8 @@ def build_movement_artifact_actions() -> List[Dict[str, Any]]:
             "payload": {
                 "artifact_key": MOVEMENT_SIGNALS_ARTIFACT_KEY,
                 "artifact_type": "signals",
+                "run_id": run_id,
+                "mode": "movement",
             },
         },
         {
@@ -218,6 +223,8 @@ def build_movement_artifact_actions() -> List[Dict[str, Any]]:
             "payload": {
                 "artifact_key": MOVEMENT_EVIDENCE_ARTIFACT_KEY,
                 "artifact_type": "evidence",
+                "run_id": run_id,
+                "mode": "movement",
             },
         },
     ]
@@ -376,20 +383,25 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             elif idx == index:
                 item[1] = "complete" if latest_status == "complete" else "in progress"
 
-        if stage_key == "movement_rows":
+        if stage_key == "executive_movement":
+            pipeline[4][1] = "complete" if latest_status == "complete" else "in progress"
+        elif stage_key == "buyer_movement":
+            pipeline[4][1] = "complete"
+            pipeline[5][1] = "complete" if latest_status == "complete" else "in progress"
+        elif stage_key == "movement_rows":
             movement_status = "complete" if latest_status == "complete" else "in progress"
             pipeline[4][1] = movement_status
             pipeline[5][1] = movement_status
-        elif stage_key == "proconnect":
+        elif stage_key in {"proconnect", "proconnect_enrichment"}:
             pipeline[4][1] = "complete"
             pipeline[5][1] = "complete"
             pipeline[6][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key == "credentials":
+        elif stage_key in {"credentials", "validating_credentials"}:
             pipeline[4][1] = "complete"
             pipeline[5][1] = "complete"
             pipeline[6][1] = "complete"
             pipeline[7][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key == "brief_assembly":
+        elif stage_key in {"brief_assembly", "assembling_brief"}:
             pipeline[4][1] = "complete"
             pipeline[5][1] = "complete"
             pipeline[6][1] = "complete"
@@ -407,13 +419,17 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         current_stage_label = "Relationship context"
     elif latest_stage == "generating_research_plan":
         current_stage_label = "Research plan"
+    elif latest_stage == "executive_movement":
+        current_stage_label = "Executive movement"
+    elif latest_stage == "buyer_movement":
+        current_stage_label = "Buyer movement"
     elif latest_stage == "movement_rows":
         current_stage_label = "Executive movement / buyer movement"
-    elif latest_stage == "proconnect":
+    elif latest_stage in {"proconnect", "proconnect_enrichment"}:
         current_stage_label = "ProConnect matching/enrichment"
-    elif latest_stage == "credentials":
+    elif latest_stage in {"credentials", "validating_credentials"}:
         current_stage_label = "Credentials"
-    elif latest_stage == "brief_assembly":
+    elif latest_stage in {"brief_assembly", "assembling_brief"}:
         current_stage_label = "Brief assembly"
     elif latest_stage == "account_signals":
         current_stage_label = "Account signals"
@@ -439,26 +455,38 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
 def _event_stage_key(event: Dict[str, Any]) -> str:
     stage = _normalize_text(event.get("stage") or "").lower()
     message = _normalize_text(event.get("message") or "").lower()
-    if stage == "running_deep_research":
+    if stage == WorkflowStage.RUNNING_DEEP_RESEARCH.value:
         return "deep_research_poll"
-    if "signal evidence" in message or "account signals" in message:
+    if stage == WorkflowStage.ACCOUNT_SIGNALS.value or "signal evidence" in message or "account signals" in message:
         return "account_signals"
-    if "named move" in message:
+    if stage == WorkflowStage.RESOLVING_NAMED_MOVE.value or "named move" in message:
         return "resolving_named_move"
-    if "relationship context" in message:
+    if stage == WorkflowStage.BUILDING_RELATIONSHIP_CONTEXT.value or "relationship context" in message:
         return "building_relationship_context"
-    if "research plan" in message:
+    if stage == WorkflowStage.GENERATING_RESEARCH_PLAN.value or "research plan" in message:
         return "generating_research_plan"
+    if stage in {WorkflowStage.EXECUTIVE_MOVEMENT.value, WorkflowStage.BUYER_MOVEMENT.value}:
+        return "movement_rows"
     if "extracting movement rows" in message:
         return "movement_rows"
-    if "matching movement leverage" in message or "deep-enriching top movement rows" in message:
+    if stage == WorkflowStage.PROCONNECT_ENRICHMENT.value or "matching movement leverage" in message or "deep-enriching top movement rows" in message:
         return "proconnect"
-    if "validating credentials" in message:
+    if stage == WorkflowStage.VALIDATING_CREDENTIALS.value or "validating credentials" in message:
         return "credentials"
-    if "assembling movement brief" in message:
+    if stage == WorkflowStage.ASSEMBLING_BRIEF.value or "assembling movement brief" in message:
         return "brief_assembly"
     if "movement rows" in stage:
         return "movement_rows"
+    if stage in {
+        "resolving_named_move",
+        "building_relationship_context",
+        "generating_research_plan",
+        "account_signals",
+        "proconnect",
+        "credentials",
+        "brief_assembly",
+    }:
+        return stage
     return stage or ""
 
 
@@ -468,10 +496,15 @@ def _stage_index(stage_key: str) -> int:
         "building_relationship_context": 1,
         "generating_research_plan": 2,
         "account_signals": 3,
+        "executive_movement": 4,
+        "buyer_movement": 5,
         "movement_rows": 4,
         "proconnect": 6,
+        "proconnect_enrichment": 6,
         "credentials": 7,
+        "validating_credentials": 7,
         "brief_assembly": 8,
+        "assembling_brief": 8,
     }
     return order.get(stage_key, -1)
 

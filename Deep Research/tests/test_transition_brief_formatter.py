@@ -20,7 +20,6 @@ from models.transition_schemas import (
 from services.transition_brief_formatter import (
     build_transition_artifacts,
     build_transition_brief,
-    format_transition_brief_markdown,
 )
 from services.transition_playbook_orchestrator import TransitionPlaybookRunResult
 from services.transition_prompt_builder import TransitionPromptPackage
@@ -166,17 +165,6 @@ def test_build_transition_brief_returns_compact_sections_and_hidden_artifacts() 
         "deep_research_report",
         "proconnect_dossier",
     }
-
-
-def test_format_transition_brief_markdown_keeps_visible_output_compact() -> None:
-    brief = build_transition_brief(_sample_result())
-
-    markdown = format_transition_brief_markdown(brief)
-
-    assert "AI governance program" in markdown
-    assert "Recommended Next Actions" in markdown
-    assert "Full research section body that should stay out of the default compact brief." not in markdown
-
 
 def test_build_transition_artifacts_contains_full_research_report_and_proconnect_dossier() -> None:
     artifacts = build_transition_artifacts(_sample_result())

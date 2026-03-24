@@ -61,8 +61,10 @@ class MovementPromptBuilder:
         request: MovementBriefRequest,
         preflight: TransitionPreflight,
     ) -> str:
+        resolved_from_company = str(preflight.from_account.company_name or "").strip() or request.from_company
+        resolved_to_company = str(preflight.to_account.company_name or "").strip() or request.to_company
         summary = (
-            f"{request.person_name} has moved from {request.from_company} to {request.to_company}, "
+            f"{request.person_name} has moved from {resolved_from_company} to {resolved_to_company}, "
             f"with a new role as {request.new_role}."
         )
         lines = [summary]
@@ -79,6 +81,8 @@ class MovementPromptBuilder:
         lines.extend(
             [
                 f"Named mover match status: {preflight.person_resolution.match_status}",
+                f"Resolved source account ID: {preflight.from_account.account_id or 'unresolved'}",
+                f"Resolved destination account ID: {preflight.to_account.account_id or 'unresolved'}",
                 f"Warm intro path available: {'yes' if preflight.quick_indicators.warm_intro_path_available else 'no'}",
                 f"Prior work at source account: {'yes' if preflight.quick_indicators.source_worked_before else 'no'}",
                 f"Prior work at destination account: {'yes' if preflight.quick_indicators.destination_worked_before else 'no'}",

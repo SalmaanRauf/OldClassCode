@@ -3,6 +3,7 @@ Orchestration for the named-move People Movement Brief workflow.
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import sys
 from dataclasses import dataclass
@@ -30,16 +31,18 @@ from services.movement_credentials_service import MovementCredentialsService
 from services.movement_form_mapper import build_movement_trigger, build_transition_request_for_movement
 from services.movement_opportunity_deriver import MovementOpportunityDeriver
 from services.movement_prompt_builder import MovementPromptBuilder, MovementPromptPackage
+from services.proconnect_auth import resolve_runtime_bearer_token
 from services.proconnect_movement_service import ProConnectMovementService
 from services.proconnect_transition_service import ProConnectTransitionService
 from services.signal_registry_service import get_signal_registry_service
+from services.workflow_state import WorkflowStage
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
-from proconnect_client import DEFAULT_BASE_URL, ProConnectClient, resolve_bearer_token  # noqa: E402
+from proconnect_client import DEFAULT_BASE_URL, ProConnectClient  # noqa: E402
 
 
 ProgressCallback = Callable[[Any], Any]
@@ -73,6 +76,14 @@ class MovementBriefRunResult:
     movement_diagnostics: Dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ReviewedMovementRunInput:
+    run_id: str
+    request: MovementBriefRequest
+    preflight: TransitionPreflight
+    prompt_package: MovementPromptPackage
+
+
 class MovementBriefOrchestrator:
     """Coordinates preflight, Deep Research, movement extraction, leverage, proof, and assembly."""
 
@@ -93,10 +104,12 @@ class MovementBriefOrchestrator:
     ) -> None:
         self.signal_registry = get_signal_registry_service()
         self.transition_service = transition_service
+        self._owns_transition_service = transition_service is None
         self.prompt_builder = prompt_builder or MovementPromptBuilder()
         self.fs_signal_evidence_digestor = fs_signal_evidence_digestor or FSSignalEvidenceDigestor()
         self.movement_digestor = movement_digestor or FSMovementDigestor()
         self.proconnect_service = proconnect_service
+        self._owns_proconnect_service = proconnect_service is None
         from services.movement_ranker import MovementRanker
 
         self.ranker = ranker or MovementRanker()
@@ -125,16 +138,27 @@ class MovementBriefOrchestrator:
         deep_research_response: Optional[Dict[str, Any]] = None,
         progress_cb: Optional[ProgressCallback] = None,
         prompt_override: Optional[str] = None,
+        reviewed_preflight: Optional[TransitionPreflight] = None,
+        reviewed_prompt_package: Optional[MovementPromptPackage] = None,
+        reviewed_run_id: Optional[str] = None,
     ) -> MovementBriefRunResult:
         """Run the full named-move movement-led pipeline."""
+        if reviewed_preflight and reviewed_prompt_package:
+            preflight = reviewed_preflight
+            prompt_package = reviewed_prompt_package
+        else:
+            _, preflight, prompt_package = await self._prepare_move_context(
+                request,
+                progress_cb=progress_cb,
+                prompt_override=prompt_override,
+            )
         trigger = build_movement_trigger(request)
-        _, preflight, prompt_package = await self._prepare_move_context(
-            request,
-            progress_cb=progress_cb,
-            prompt_override=prompt_override,
+        trigger.company_focus = (
+            str(preflight.to_account.company_name or "").strip()
+            or trigger.company_focus
+            or request.to_company
         )
 
-        await self._notify(progress_cb, "Running Deep Research...")
         structured_evidence_map: Dict[str, Any] = {}
         if deep_research_output is None:
             if deep_research_response is not None:
@@ -148,7 +172,13 @@ class MovementBriefOrchestrator:
         deep_research_markdown = deep_research_output or ""
         deep_research_summary = self._extract_summary(deep_research_response, deep_research_markdown)
 
-        await self._notify(progress_cb, "Normalizing financial-services signal evidence...")
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.ACCOUNT_SIGNALS.value,
+            message="Normalizing financial-services signal evidence.",
+            status="in_progress",
+            run_id=reviewed_run_id,
+        )
         requested_signal_codes = list(trigger.signals or [])
         if self.signal_registry.is_financial_services(trigger.sector) and not requested_signal_codes:
             requested_signal_codes = self.signal_registry.get_fs_signal_codes()
@@ -162,22 +192,74 @@ class MovementBriefOrchestrator:
             signal_source_candidates=structured_evidence_map.get("signal_source_candidates") or {},
         )
 
-        await self._notify(progress_cb, "Extracting movement rows...")
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.ACCOUNT_SIGNALS.value,
+            message="Financial-services signal evidence normalized.",
+            status="complete",
+            confirmed_signal_count=len([item for item in signal_evidence if item.status == "Confirmed"]),
+            run_id=reviewed_run_id,
+        )
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.EXECUTIVE_MOVEMENT.value,
+            message="Extracting executive and buyer movement rows.",
+            status="in_progress",
+            run_id=reviewed_run_id,
+        )
         movement_rows, movement_diagnostics = await self.movement_digestor.digest(
             trigger=trigger,
             deep_research_markdown=deep_research_markdown,
+            target_company_aliases=self._target_company_aliases(request, preflight),
+        )
+        executive_count = len([row for row in movement_rows if getattr(row, "category", "") == "EXEC"])
+        buyer_count = len([row for row in movement_rows if getattr(row, "category", "") == "BUYER"])
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.EXECUTIVE_MOVEMENT.value,
+            message="Executive movement extracted.",
+            status="complete",
+            movement_count=executive_count,
+            run_id=reviewed_run_id,
+        )
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.BUYER_MOVEMENT.value,
+            message="Buyer movement extracted.",
+            status="complete",
+            movement_count=buyer_count,
+            run_id=reviewed_run_id,
         )
 
-        await self._notify(progress_cb, "Matching movement leverage in ProConnect...")
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.PROCONNECT_ENRICHMENT.value,
+            message="Matching movement leverage in ProConnect.",
+            status="in_progress",
+            run_id=reviewed_run_id,
+        )
         proconnect_service = self._get_proconnect_service()
         light_enriched_rows = proconnect_service.light_enrich_movements(movement_rows)
         ranked_rows = self.ranker.rank(light_enriched_rows, max_rows=10)
 
-        await self._notify(progress_cb, "Deep-enriching top movement rows...")
         ranked_movements = [row["movement"] for row in ranked_rows]
         deep_enriched_rows = proconnect_service.deep_enrich_movements(ranked_movements, max_rows=10)
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.PROCONNECT_ENRICHMENT.value,
+            message="Movement leverage enriched in ProConnect.",
+            status="complete",
+            visible_row_count=len(ranked_rows[:10]),
+            run_id=reviewed_run_id,
+        )
 
-        await self._notify(progress_cb, "Validating credentials for prioritized movers...")
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.VALIDATING_CREDENTIALS.value,
+            message="Validating credentials for prioritized movers.",
+            status="in_progress",
+            run_id=reviewed_run_id,
+        )
         derived_opportunities = self.opportunity_deriver.derive(
             request=request,
             preflight=preflight,
@@ -185,6 +267,7 @@ class MovementBriefOrchestrator:
             ranked_rows=ranked_rows,
             max_opportunities=3,
         )
+        ranked_rows = self._attach_opportunity_ids(ranked_rows, derived_opportunities)
         credentials_lookup = await self.credentials_lookup_runner.run(
             [item.opportunity for item in derived_opportunities],
             sector=trigger.sector,
@@ -194,8 +277,24 @@ class MovementBriefOrchestrator:
             derived_opportunities,
             credentials_lookup.results,
         )
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.VALIDATING_CREDENTIALS.value,
+            message="Credentials validation complete.",
+            status="complete",
+            matched_count=sum(
+                1 for packet in credential_packets.values() if packet.lookup_status == "Matched"
+            ),
+            run_id=reviewed_run_id,
+        )
 
-        await self._notify(progress_cb, "Assembling movement brief...")
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.ASSEMBLING_BRIEF.value,
+            message="Assembling movement brief.",
+            status="in_progress",
+            run_id=reviewed_run_id,
+        )
         movement_brief = self.assembler.assemble(
             request=request,
             preflight=preflight,
@@ -208,6 +307,13 @@ class MovementBriefOrchestrator:
             deep_research_summary=deep_research_summary,
             derived_opportunities=derived_opportunities,
             credentials_lookup=credentials_lookup,
+        )
+        await self._emit(
+            progress_cb,
+            stage=WorkflowStage.ASSEMBLING_BRIEF.value,
+            message="Movement brief assembled.",
+            status="complete",
+            run_id=reviewed_run_id,
         )
 
         return MovementBriefRunResult(
@@ -228,6 +334,46 @@ class MovementBriefOrchestrator:
             movement_diagnostics=movement_diagnostics,
         )
 
+    async def run_from_reviewed_context(
+        self,
+        *,
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+        prompt_package: MovementPromptPackage,
+        run_id: str,
+        progress_cb: Optional[ProgressCallback] = None,
+    ) -> MovementBriefRunResult:
+        reviewed = ReviewedMovementRunInput(
+            run_id=run_id,
+            request=request,
+            preflight=preflight,
+            prompt_package=prompt_package,
+        )
+        return await self.run(
+            reviewed.request,
+            progress_cb=progress_cb,
+            reviewed_preflight=reviewed.preflight,
+            reviewed_prompt_package=reviewed.prompt_package,
+            reviewed_run_id=reviewed.run_id,
+        )
+
+    def _attach_opportunity_ids(
+        self,
+        ranked_rows: List[Dict[str, Any]],
+        derived_opportunities: List[Any],
+    ) -> List[Dict[str, Any]]:
+        normalized: List[Dict[str, Any]] = []
+        for index, row in enumerate(ranked_rows):
+            updated = dict(row)
+            if index < len(derived_opportunities):
+                derived = derived_opportunities[index]
+                opportunity_id = str(getattr(derived, "opportunity_id", "") or "").strip()
+                if opportunity_id:
+                    updated["opportunity_id"] = opportunity_id
+                    updated["opportunity_title"] = getattr(getattr(derived, "opportunity", None), "title", "")
+            normalized.append(updated)
+        return normalized
+
     async def _prepare_move_context(
         self,
         request: MovementBriefRequest,
@@ -237,7 +383,7 @@ class MovementBriefOrchestrator:
     ) -> tuple[Any, TransitionPreflight, MovementPromptPackage]:
         await self._emit(
             progress_cb,
-            stage="resolving_named_move",
+            stage=WorkflowStage.RESOLVING_NAMED_MOVE.value,
             message="Resolving named move context.",
             status="in_progress",
         )
@@ -246,14 +392,14 @@ class MovementBriefOrchestrator:
 
         await self._emit(
             progress_cb,
-            stage="building_relationship_context",
+            stage=WorkflowStage.BUILDING_RELATIONSHIP_CONTEXT.value,
             message="Building relationship context from ProConnect.",
             status="in_progress",
         )
-        preflight = service.build_preflight(transition_request)
+        preflight = await asyncio.to_thread(service.build_preflight, transition_request)
         await self._emit(
             progress_cb,
-            stage="building_relationship_context",
+            stage=WorkflowStage.BUILDING_RELATIONSHIP_CONTEXT.value,
             message="Relationship context built from ProConnect.",
             status="complete",
             person_match_status=preflight.person_resolution.match_status,
@@ -271,7 +417,7 @@ class MovementBriefOrchestrator:
             )
         await self._emit(
             progress_cb,
-            stage="generating_research_plan",
+            stage=WorkflowStage.GENERATING_RESEARCH_PLAN.value,
             message="Generated research plan from validated move context.",
             status="complete",
             industry_key=prompt_package.industry_key,
@@ -303,21 +449,39 @@ class MovementBriefOrchestrator:
 
     def _get_transition_service(self) -> ProConnectTransitionService:
         if self.transition_service is None:
-            token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)
-            base_url = getattr(AppConfig, "PROCONNECT_BASE_URL", DEFAULT_BASE_URL)
-            token, _ = resolve_bearer_token(None, token_file)
-            client = ProConnectClient(base_url=base_url, bearer_token=token)
-            self.transition_service = ProConnectTransitionService(client=client)
+            return self._build_live_transition_service()
+        if self._owns_transition_service:
+            return self._build_live_transition_service()
         return self.transition_service
 
     def _get_proconnect_service(self) -> ProConnectMovementService:
         if self.proconnect_service is None:
-            token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)
-            base_url = getattr(AppConfig, "PROCONNECT_BASE_URL", DEFAULT_BASE_URL)
-            token, _ = resolve_bearer_token(None, token_file)
-            client = ProConnectClient(base_url=base_url, bearer_token=token)
-            self.proconnect_service = ProConnectMovementService(client=client)
+            return self._build_live_movement_service()
+        if self._owns_proconnect_service:
+            return self._build_live_movement_service()
         return self.proconnect_service
+
+    def _build_live_transition_service(self) -> ProConnectTransitionService:
+        token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)
+        base_url = getattr(AppConfig, "PROCONNECT_BASE_URL", DEFAULT_BASE_URL)
+        fallback_paths = [
+            Path.cwd() / "token.txt",
+            SCRIPT_DIR / "token.txt",
+        ]
+        token, _ = resolve_runtime_bearer_token(token_file=token_file, fallback_paths=fallback_paths)
+        client = ProConnectClient(base_url=base_url, bearer_token=token)
+        return ProConnectTransitionService(client=client)
+
+    def _build_live_movement_service(self) -> ProConnectMovementService:
+        token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)
+        base_url = getattr(AppConfig, "PROCONNECT_BASE_URL", DEFAULT_BASE_URL)
+        fallback_paths = [
+            Path.cwd() / "token.txt",
+            SCRIPT_DIR / "token.txt",
+        ]
+        token, _ = resolve_runtime_bearer_token(token_file=token_file, fallback_paths=fallback_paths)
+        client = ProConnectClient(base_url=base_url, bearer_token=token)
+        return ProConnectMovementService(client=client)
 
     @staticmethod
     def _build_runner_kwargs(runner: DeepResearchRunner, **candidate_kwargs: Any) -> Dict[str, Any]:
@@ -339,7 +503,7 @@ class MovementBriefOrchestrator:
                 return
 
             event = {
-                "stage": "running_deep_research",
+                "stage": WorkflowStage.RUNNING_DEEP_RESEARCH.value,
                 "message": text or "Deep Research activity update.",
                 "status": str(metadata.get("status") or "in_progress"),
                 "citation_count": metadata.get("citation_count", 0),
@@ -382,3 +546,18 @@ class MovementBriefOrchestrator:
             if text:
                 return text
         return ""
+
+    @staticmethod
+    def _target_company_aliases(
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+    ) -> List[str]:
+        aliases: List[str] = []
+        for candidate in (
+            request.to_company,
+            preflight.to_account.company_name,
+        ):
+            text = str(candidate or "").strip()
+            if text and text not in aliases:
+                aliases.append(text)
+        return aliases

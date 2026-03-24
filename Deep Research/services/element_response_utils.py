@@ -41,3 +41,19 @@ def extract_element_response_payload(
             return candidate
 
     return {}
+
+
+def parse_boolean_flag(value: Any, *, default: bool = True) -> bool:
+    """Parse checkbox-style values from Chainlit element payloads."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off", ""}:
+        return False
+    return default

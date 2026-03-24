@@ -10,13 +10,21 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from models.transition_schemas import (  # type: ignore
     AccountResolution,
+    HiddenArtifactRef,
     OpportunityHypothesis,
     QuickRelationshipIndicators,
+    RecommendedAction,
+    TransitionBrief,
+    TransitionOpportunityCard,
     TransitionPersonResolution,
     TransitionPreflight,
+    TransitionProofCard,
     TransitionRequest,
 )
-from services.transition_presenter import build_transition_preflight_review  # type: ignore
+from services.transition_presenter import (  # type: ignore
+    build_transition_brief_payload,
+    build_transition_preflight_review,
+)
 from services.transition_prompt_builder import TransitionPromptPackage
 
 
@@ -76,6 +84,7 @@ def test_preflight_review_contains_compact_transition_summary() -> None:
             system_prompt="SYSTEM",
             user_prompt="Investigate CIO priorities and warm paths at Fannie Mae.",
         ),
+        run_id="run-456",
     )
 
     content = payload["content"]
@@ -83,6 +92,8 @@ def test_preflight_review_contains_compact_transition_summary() -> None:
     assert "Capital One -> Fannie Mae" in content
     assert "Warm path available: Yes" in content
     assert "Industry context: Financial Services" in content
+    assert "Source account: Resolved" in content
+    assert "Destination account: Resolved" in content
 
 
 def test_generated_prompt_is_hidden_behind_view_prompt_action() -> None:
@@ -94,11 +105,12 @@ def test_generated_prompt_is_hidden_behind_view_prompt_action() -> None:
             system_prompt="SYSTEM",
             user_prompt=prompt_text,
         ),
+        run_id="run-456",
     )
 
     assert prompt_text not in payload["content"]
     assert payload["view_prompt_action"]["label"] == "View Generated Prompt"
-    assert payload["prompt_content"] == prompt_text
+    assert payload["view_prompt_action"]["payload"] == {"run_id": "run-456", "mode": "transition"}
 
 
 def test_primary_actions_are_run_research_edit_prompt_and_adjust_transition() -> None:
@@ -109,7 +121,58 @@ def test_primary_actions_are_run_research_edit_prompt_and_adjust_transition() ->
             system_prompt="SYSTEM",
             user_prompt="Investigate CIO priorities and warm paths at Fannie Mae.",
         ),
+        run_id="run-456",
     )
 
     labels = [action["label"] for action in payload["actions"]]
     assert labels == ["Run Research", "Edit Prompt", "Adjust Transition"]
+    assert {action["payload"]["run_id"] for action in payload["actions"]} == {"run-456"}
+    assert {action["payload"]["mode"] for action in payload["actions"]} == {"transition"}
+
+
+def test_transition_brief_payload_includes_proof_and_warm_paths_section() -> None:
+    brief = TransitionBrief(
+        transition_summary="Jennifer Brady is modeled as a synthetic move.",
+        top_opportunities=[
+            TransitionOpportunityCard(
+                title="AI governance program",
+                why_now="Executive transition creates a near-term governance window.",
+                role_fit="Fits CIO remit.",
+                confidence="High",
+            )
+        ],
+        proof_and_warm_paths=[
+            TransitionProofCard(
+                opportunity_title="AI governance program",
+                credential_summary="Matched credentials: AI Governance Transformation.",
+                warm_path_summary="Warm intro available: yes. Destination alumni: 1.",
+                internal_sponsors=["Bernadette Norrington"],
+            )
+        ],
+        recommended_actions=[
+            RecommendedAction(
+                title="Reconnect Bernadette Norrington",
+                owner_hint="Bernadette Norrington",
+                rationale="Strong sponsor path.",
+            )
+        ],
+        hidden_artifacts=[
+            HiddenArtifactRef(
+                artifact_type="deep_research_report",
+                label="View Full Research Report",
+                artifact_key="deep_research_report",
+            )
+        ],
+    )
+
+    payload = build_transition_brief_payload(brief, run_id="run-456")
+
+    assert "Proof + warm paths" in payload["content"]
+    assert "Matched credentials: AI Governance Transformation." in payload["content"]
+    assert "Bernadette Norrington" in payload["content"]
+    assert payload["actions"][0]["payload"] == {
+        "artifact_key": "deep_research_report",
+        "artifact_type": "deep_research_report",
+        "run_id": "run-456",
+        "mode": "transition",
+    }

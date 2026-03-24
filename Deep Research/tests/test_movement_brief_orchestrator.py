@@ -231,15 +231,17 @@ async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary()
             call_order.append("derive_opportunities")
             return [
                 SimpleNamespace(
+                    opportunity_id=f"mov_{index}",
                     person_name=row["movement"].person_name,
                     opportunity=Opportunity(
+                        opportunity_id=f"mov_{index}",
                         title=f"{row['movement'].person_name} Play",
                         agency=request.to_company,
                         scope="Derived scope",
                         confidence="High",
                     ),
                 )
-                for row in ranked_rows[:max_opportunities]
+                for index, row in enumerate(ranked_rows[:max_opportunities], 1)
             ]
 
     class FakeCredentialsLookupRunner:
@@ -247,7 +249,8 @@ async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary()
             call_order.append("credentials_lookup")
             return SimpleNamespace(
                 results={
-                    opportunity.title: CredentialsResponse(
+                    (opportunity.opportunity_id or opportunity.title): CredentialsResponse(
+                        opportunity_id=opportunity.opportunity_id or opportunity.title,
                         opportunity_title=opportunity.title,
                         matches=[],
                         lookup_status="Matched" if opportunity.title.startswith("Person 0") else "No Match",
@@ -264,8 +267,8 @@ async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary()
         def build_proof_packets(self, derived_opportunities, lookup_results):
             call_order.append("proof_packets")
             return {
-                item.person_name: MovementCredentialsProof(
-                    lookup_status=lookup_results[item.opportunity.title].lookup_status,
+                item.opportunity_id: MovementCredentialsProof(
+                    lookup_status=lookup_results[item.opportunity_id].lookup_status,
                     summary=f"Proof for {item.person_name}",
                     matched_credentials=[],
                 )
@@ -333,6 +336,10 @@ async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary()
     assert result.credentials_lookup.status_counts["Matched"] == 1
     assert assembled["preflight"] is preflight
     assert assembled["derived_opportunities"][0].person_name == "Person 0"
+    assert assembled["derived_opportunities"][0].opportunity_id.startswith("mov_")
+    assert assembled["ranked_rows"][0]["opportunity_id"] == assembled["derived_opportunities"][0].opportunity_id
+    top_id = assembled["derived_opportunities"][0].opportunity_id
+    assert assembled["credential_packets"][top_id].lookup_status == assembled["credentials_lookup"].results[top_id].lookup_status
 
 
 @pytest.mark.asyncio
@@ -499,8 +506,8 @@ def test_orchestrator_builds_token_backed_transition_and_movement_proconnect_ser
         ),
     )
     monkeypatch.setattr(
-        "services.movement_brief_orchestrator.resolve_bearer_token",
-        lambda _cli, token_file: ("Bearer fake-token", f"file:{token_file}"),
+        "services.movement_brief_orchestrator.resolve_runtime_bearer_token",
+        lambda **kwargs: ("Bearer fake-token", f"file:{kwargs.get('token_file')}"),
     )
     monkeypatch.setattr("services.movement_brief_orchestrator.ProConnectClient", FakeClient)
 
@@ -526,3 +533,128 @@ def test_orchestrator_builds_token_backed_transition_and_movement_proconnect_ser
     ]
     assert transition_service.client is not None
     assert movement_service.client is not None
+
+
+def test_target_company_aliases_scope_to_destination_account_only():
+    aliases = MovementBriefOrchestrator._target_company_aliases(_request(), _preflight())
+
+    assert "Fannie Mae" in aliases
+    assert "Federal National Mortgage Association (Fannie Mae)" in aliases
+    assert "Capital One" not in aliases
+    assert "Capital One Financial Corporation" not in aliases
+
+
+@pytest.mark.asyncio
+async def test_reviewed_movement_context_is_executed_without_rebuilding_preflight():
+    call_order = []
+    preflight = _preflight()
+
+    class FakeTransitionService:
+        def build_preflight(self, request, *, transition_case=None):
+            call_order.append("preflight")
+            return preflight
+
+    class FakePromptBuilder:
+        def build(self, request, preflight_arg):
+            call_order.append("prompt_builder")
+            return MovementPromptPackage(
+                industry_key="financial_services",
+                system_prompt="REVIEWED SYSTEM PROMPT",
+                user_prompt="REVIEWED USER PROMPT",
+            )
+
+    class FakeFSSignalDigestor:
+        async def digest(self, **kwargs):
+            call_order.append("signal_digest")
+            return ([], {"status": "Succeeded"}, [])
+
+    class FakeMovementDigestor:
+        async def digest(self, **kwargs):
+            call_order.append("movement_digest")
+            return ([_movement(0)], {"status": "Succeeded"})
+
+    class FakeProConnectService:
+        def light_enrich_movements(self, movement_rows, **kwargs):
+            call_order.append("light_enrich")
+            return [{"movement": movement_rows[0], "known": True, "worked_with": True, "project_count": 1, "win_count": 1, "relationship_owner": "Ben L", "person_match_status": "matched"}]
+
+        def deep_enrich_movements(self, movement_rows, *, max_rows=10, **kwargs):
+            call_order.append("deep_enrich")
+            return [{"movement": movement_rows[0], "person_detail": {"name": movement_rows[0].person_name}}]
+
+    class FakeRanker:
+        def rank(self, enriched_rows, max_rows=10):
+            call_order.append("rank")
+            return [{**enriched_rows[0], "rank_score": 100, "action_posture": "Immediate Re-engagement"}]
+
+    class FakeOpportunityDeriver:
+        def derive(self, **kwargs):
+            call_order.append("derive_opportunities")
+            return []
+
+    class FakeCredentialsLookupRunner:
+        async def run(self, *args, **kwargs):
+            call_order.append("credentials_lookup")
+            return SimpleNamespace(results={}, diagnostics={}, batch_diagnostics=None, status_counts={}, lookups_executed_count=0)
+
+    class FakeMovementCredentialsService:
+        def build_proof_packets(self, derived_opportunities, lookup_results):
+            call_order.append("proof_packets")
+            return {}
+
+    class FakeAssembler:
+        def assemble(self, **kwargs):
+            call_order.append("assemble")
+            return MovementBrief(
+                executive_summary="Move summary text.",
+                signal_summary=[],
+                movement_rows=kwargs["movement_rows"][:1],
+                where_to_act=[],
+                takeaway="Sparse movement coverage.",
+            )
+
+    async def fake_deep_research_runner(query, **kwargs):
+        call_order.append("run_deep_research")
+        assert query == "REVIEWED USER PROMPT"
+        assert kwargs["instructions_override"] == "REVIEWED SYSTEM PROMPT"
+        return {"summary": "Deep research summary"}
+
+    orchestrator = MovementBriefOrchestrator(
+        transition_service=FakeTransitionService(),
+        prompt_builder=FakePromptBuilder(),
+        fs_signal_evidence_digestor=FakeFSSignalDigestor(),
+        movement_digestor=FakeMovementDigestor(),
+        proconnect_service=FakeProConnectService(),
+        ranker=FakeRanker(),
+        opportunity_deriver=FakeOpportunityDeriver(),
+        credentials_lookup_runner=FakeCredentialsLookupRunner(),
+        credentials_service=FakeMovementCredentialsService(),
+        assembler=FakeAssembler(),
+        deep_research_runner=fake_deep_research_runner,
+    )
+
+    result = await orchestrator.run_from_reviewed_context(
+        request=_request(),
+        preflight=preflight,
+        prompt_package=MovementPromptPackage(
+            industry_key="financial_services",
+            system_prompt="REVIEWED SYSTEM PROMPT",
+            user_prompt="REVIEWED USER PROMPT",
+        ),
+        run_id="run-123",
+    )
+
+    assert "preflight" not in call_order
+    assert call_order == [
+        "run_deep_research",
+        "signal_digest",
+        "movement_digest",
+        "light_enrich",
+        "rank",
+        "deep_enrich",
+        "derive_opportunities",
+        "credentials_lookup",
+        "proof_packets",
+        "assemble",
+    ]
+    assert result.preflight is preflight

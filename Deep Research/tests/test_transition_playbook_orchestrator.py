@@ -187,6 +187,57 @@ async def test_full_run_executes_preflight_research_bd_and_actioning_in_order() 
 
 
 @pytest.mark.asyncio
+async def test_reviewed_transition_context_is_executed_without_rebuilding_preflight() -> None:
+    call_order: list[str] = []
+    preflight = _sample_preflight()
+
+    class FakeProConnectService:
+        def load_transition_case(self, request, **kwargs):
+            call_order.append("load_transition_case")
+            return {"transition_payload": {"stub": True}}
+
+        def build_preflight(self, request, **kwargs):
+            call_order.append("build_preflight")
+            return preflight
+
+        def build_actioning_context(self, request, **kwargs):
+            call_order.append("build_actioning_context")
+            return {"warm_paths": ["Bernadette Norrington"]}
+
+    async def fake_deep_research_runner(query, industry="general", progress_callback=None, **kwargs):
+        call_order.append("run_deep_research")
+        assert query == "REVIEWED USER PROMPT"
+        assert kwargs["instructions_override"] == "REVIEWED SYSTEM PROMPT"
+        return {"type": "deep_research", "summary": "Deep research summary", "sections": [], "citations": [], "metadata": {}}
+
+    class FakeBDOrchestrator:
+        async def run(self, *args, **kwargs):
+            call_order.append("run_bd")
+            return MDReport(trigger_summary="Transition playbook", executive_summary="Compact summary", generated_at=datetime.now())
+
+    orchestrator = TransitionPlaybookOrchestrator(
+        proconnect_service=FakeProConnectService(),
+        prompt_builder=None,
+        deep_research_runner=fake_deep_research_runner,
+        bd_orchestrator=FakeBDOrchestrator(),
+    )
+
+    result = await orchestrator.run_transition_playbook_from_reviewed_context(
+        request=_sample_request(),
+        preflight=preflight,
+        prompt_package=TransitionPromptPackage(
+            industry_key="financial_services",
+            system_prompt="REVIEWED SYSTEM PROMPT",
+            user_prompt="REVIEWED USER PROMPT",
+        ),
+        run_id="run-123",
+    )
+
+    assert call_order == ["run_deep_research", "run_bd", "build_actioning_context"]
+    assert result.preflight is preflight
+
+
+@pytest.mark.asyncio
 async def test_progress_callback_emits_ordered_stage_events() -> None:
     preflight = _sample_preflight()
     events = []

@@ -207,6 +207,7 @@ def test_build_movement_preflight_review_shows_move_context_and_prompt_actions()
             system_prompt="FS prompt",
             user_prompt="Generated move prompt.",
         ),
+        run_id="run-123",
     )
 
     assert "People Movement Brief Review" in payload["content"]
@@ -216,11 +217,12 @@ def test_build_movement_preflight_review_shows_move_context_and_prompt_actions()
     assert "Synthetic" in payload["content"]
     assert "AI governance program" in payload["content"]
     assert payload["actions"] == [
-        {"name": ACTION_RUN_MOVEMENT_RESEARCH, "label": "Run Research", "payload": {}},
-        {"name": ACTION_EDIT_MOVEMENT_PROMPT, "label": "Edit Prompt", "payload": {}},
-        {"name": ACTION_ADJUST_MOVEMENT, "label": "Adjust Movement", "payload": {}},
+        {"name": ACTION_RUN_MOVEMENT_RESEARCH, "label": "Run Research", "payload": {"run_id": "run-123", "mode": "movement"}},
+        {"name": ACTION_EDIT_MOVEMENT_PROMPT, "label": "Edit Prompt", "payload": {"run_id": "run-123", "mode": "movement"}},
+        {"name": ACTION_ADJUST_MOVEMENT, "label": "Adjust Movement", "payload": {"run_id": "run-123", "mode": "movement"}},
     ]
     assert payload["view_prompt_action"]["name"] == ACTION_VIEW_MOVEMENT_PROMPT
+    assert payload["view_prompt_action"]["payload"] == {"run_id": "run-123", "mode": "movement"}
 
 
 def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_detail_content():
@@ -240,32 +242,6 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
         _brief(movement_rows, where_to_act),
         request=_request(),
         preflight=_preflight(),
-        secondary_controls=[
-            {
-                "label": "View Full Deep Research Report",
-                "artifact_key": "deep-research-report",
-                "artifact_type": "report",
-                "description": "Open the full report.",
-            },
-            {
-                "label": "View Additional Signals",
-                "artifact_key": "additional-signals",
-                "artifact_type": "appendix",
-                "description": "Open the signal appendix.",
-            },
-            {
-                "label": "View ProConnect Detail",
-                "artifact_key": "proconnect-detail",
-                "artifact_type": "dossier",
-                "description": "Open the relationship detail.",
-            },
-            {
-                "label": "Discard me",
-                "artifact_key": "",
-                "artifact_type": "ignored",
-                "description": "Should be dropped.",
-            },
-        ],
         person_details_by_name={
             "Person 1": {
                 "name": "Person 1",
@@ -310,8 +286,6 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
     assert payload["move_summary"]["warm_intro_path_available"] is True
     assert payload["move_summary"]["source_worked_before"] is True
     assert payload["move_summary"]["destination_worked_before"] is True
-    assert len(payload["secondary_controls"]) == 3
-    assert payload["secondary_controls"][0]["label"] == "View Full Deep Research Report"
     assert payload["movement_rows"][0]["signal"] == "BUYER"
     assert payload["movement_rows"][0]["has_credential_proof"] is True
     assert payload["movement_rows"][0]["has_person_detail"] is True
