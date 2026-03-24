@@ -3,19 +3,16 @@ Lightweight two-pass ProConnect enrichment for movement-led workflows.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from models.movement_schemas import MovementRecord
-
-SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from proconnect_client import ProConnectClient  # noqa: E402
-from proconnect_lookup_logic import exact_name_equals, full_person_name, resolve_company_and_account  # noqa: E402
-from proconnect_stakeholder_payload import (  # noqa: E402
+from scripts.proconnect_client import ProConnectClient
+from scripts.proconnect_lookup_logic import (
+    exact_name_equals,
+    full_person_name,
+    resolve_company_and_account,
+)
+from scripts.proconnect_stakeholder_payload import (
     extract_person_detail_candidate,
     extract_person_search_candidates,
     merge_person_candidates,

@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from models.bd_schemas import BDTrigger
 from models.movement_schemas import MovementEvidence, MovementRecord
+from services.semantic_kernel_compat import create_chat_history
 
 
 PROMPT_PATH = Path(__file__).parent.parent / "sk_functions" / "BD_FS_Movement_Digest_prompt.txt"
@@ -67,9 +68,7 @@ class FSMovementDigestor:
             await self._ensure_kernel()
             prompt = self._render_prompt(trigger, deep_research_markdown, max_rows=max_rows)
 
-            from semantic_kernel.contents.chat_history import ChatHistory
-
-            history = ChatHistory()
+            history = create_chat_history()
             history.add_user_message(prompt)
             chat = self._kernel.get_service("atlas")
             result = await chat.get_chat_message_content(

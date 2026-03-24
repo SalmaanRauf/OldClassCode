@@ -306,7 +306,7 @@ def build_movement_progress_content(request: MovementBriefRequest | Dict[str, An
 
     state = _derive_progress_state(events)
     lines = [
-        "**People Movement Brief In Progress**",
+        state["header_title"],
         "",
         f"Person: {movement_request.person_name}",
         f"Move: {movement_request.from_company} -> {movement_request.to_company}",
@@ -349,12 +349,12 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         ["Move validation", "pending"],
         ["Relationship context", "pending"],
         ["Research plan", "pending"],
-        ["Account signals", "pending"],
-        ["Executive movement", "pending"],
-        ["Buyer movement", "pending"],
-        ["ProConnect matching/enrichment", "pending"],
-        ["Credentials", "pending"],
-        ["Brief assembly", "pending"],
+        ["Account signals", "not started"],
+        ["Executive movement", "not started"],
+        ["Buyer movement", "not started"],
+        ["ProConnect matching/enrichment", "not started"],
+        ["Credentials", "not started"],
+        ["Brief assembly", "not started"],
     ]
 
     latest_stage = ""
@@ -438,13 +438,27 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     else:
         current_stage_label = "Initializing"
 
-    current_status = "In progress"
-    if latest_status == "complete":
-        current_status = "Complete"
-    elif latest_message:
-        current_status = latest_message
+    research_started = bool(deep_research_event) or last_index >= _stage_index("account_signals")
+    review_ready = (
+        latest_stage == "generating_research_plan"
+        and latest_status == "complete"
+        and not research_started
+    )
+
+    if review_ready:
+        header_title = "**People Movement Brief Ready for Review**"
+        current_stage_label = "Review ready"
+        current_status = "Awaiting Run Research"
+    else:
+        header_title = "**People Movement Brief In Progress**"
+        current_status = "In progress"
+        if latest_status == "complete":
+            current_status = "Complete"
+        elif latest_message:
+            current_status = latest_message
 
     return {
+        "header_title": header_title,
         "pipeline": pipeline,
         "current_stage_label": current_stage_label,
         "current_status": current_status,

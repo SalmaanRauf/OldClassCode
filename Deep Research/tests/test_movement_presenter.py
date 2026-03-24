@@ -211,6 +211,7 @@ def test_build_movement_preflight_review_shows_move_context_and_prompt_actions()
     )
 
     assert "People Movement Brief Review" in payload["content"]
+    assert "click `Run Research` to start Deep Research" in payload["content"]
     assert "Jennifer Brady" in payload["content"]
     assert "Capital One -> Fannie Mae" in payload["content"]
     assert "180 days" in payload["content"]

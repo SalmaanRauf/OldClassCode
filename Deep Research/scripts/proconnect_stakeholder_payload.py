@@ -8,16 +8,28 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from proconnect_client import ProConnectClient
-from proconnect_lookup_logic import (
-    DEPARTMENT_TO_SFDC_FUNCTIONS,
-    build_account_summary,
-    exact_name_equals,
-    full_person_name,
-    get_zoom_info_account_id,
-    resolve_company_and_account,
-    top_person_candidates,
-)
+try:  # pragma: no cover - import style depends on entrypoint
+    from .proconnect_client import ProConnectClient
+    from .proconnect_lookup_logic import (
+        DEPARTMENT_TO_SFDC_FUNCTIONS,
+        build_account_summary,
+        exact_name_equals,
+        full_person_name,
+        get_zoom_info_account_id,
+        resolve_company_and_account,
+        top_person_candidates,
+    )
+except ImportError:  # pragma: no cover
+    from proconnect_client import ProConnectClient
+    from proconnect_lookup_logic import (
+        DEPARTMENT_TO_SFDC_FUNCTIONS,
+        build_account_summary,
+        exact_name_equals,
+        full_person_name,
+        get_zoom_info_account_id,
+        resolve_company_and_account,
+        top_person_candidates,
+    )
 
 ACCOUNT_PROBE_ENDPOINTS = [
     "/api/Intent",

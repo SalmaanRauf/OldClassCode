@@ -73,6 +73,7 @@ from services.transition_brief_formatter import (
     build_transition_brief,
 )
 from services.element_response_utils import extract_element_response_payload
+from services.review_flow import run_review_action_loop
 from services.transition_presenter import (
     ACTION_ADJUST_TRANSITION,
     ACTION_EDIT_PROMPT,
@@ -630,6 +631,12 @@ def _build_movement_progress_callback(progress_msg: cl.Message, request_payload:
     async def _progress_callback(event: Any):
         try:
             normalized = _normalize_movement_progress_event(event)
+            logger.info(
+                "Movement progress event stage=%s status=%s message=%s",
+                normalized.get("stage"),
+                normalized.get("status"),
+                str(normalized.get("message") or "")[:200],
+            )
             events.append(normalized)
             persist_movement_progress_session(cl.user_session, events)
             progress_msg.content = build_movement_progress_content(request_payload, events)
@@ -707,6 +714,12 @@ async def _run_movement_preflight_flow(run_id: str) -> None:
         if events:
             progress_msg.content = build_movement_progress_content(request_payload, events)
             await progress_msg.update()
+        logger.info(
+            "Movement preflight ready run_id=%s person=%s destination=%s",
+            run_id,
+            request.person_name,
+            request.to_company,
+        )
 
         await present_movement_preflight_review(
             request,
@@ -736,6 +749,13 @@ async def _run_movement_research_flow(run_id: str) -> None:
         await cl.Message("No people movement scenario is loaded. Re-open the movement form first.").send()
         return
 
+    logger.info(
+        "Movement research requested run_id=%s person=%s source=%s destination=%s",
+        run_id,
+        request.person_name,
+        request.from_company,
+        request.to_company,
+    )
     progress_msg = cl.Message(content="**People Movement Brief**\n\nStarting research run...")
     await progress_msg.send()
 
@@ -761,6 +781,11 @@ async def _run_movement_research_flow(run_id: str) -> None:
                 progress_cb=progress_cb,
                 prompt_override=prompt_override,
             )
+        logger.info(
+            "Movement research completed run_id=%s visible_rows=%s",
+            run_id,
+            len(getattr(result.movement_brief, "movement_rows", []) or []),
+        )
 
         artifacts = build_movement_artifacts(result)
         persist_movement_artifacts_session(cl.user_session, artifacts)
@@ -1371,8 +1396,8 @@ async def start():
             loader = PromptLoader()
             cl.user_session.set("prompt_loader", loader)
             
-            # Chainlit 2.x: Attach actions to Message, not AskActionMessage
-            # Action only has: name, label, payload (no 'value' parameter)
+            # Keep the mode picker as a persistent Message with actions so the
+            # options remain visible until the user chooses a mode.
             actions = [
                 cl.Action(
                     name="set_mode",
@@ -1639,40 +1664,97 @@ async def show_movement_form():
 async def present_transition_preflight_review(preflight, prompt_package, *, run_id: str):
     """Render the compact transition validation review surface."""
     payload = build_transition_preflight_review(preflight, prompt_package, run_id=run_id)
-    actions = [
-        cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
-        for action in payload.get("actions", [])
-    ]
-    view_prompt_action = payload.get("view_prompt_action")
-    if view_prompt_action:
-        actions.append(
-            cl.Action(
-                name=view_prompt_action["name"],
-                label=view_prompt_action["label"],
-                payload=view_prompt_action.get("payload", {}),
-            )
-        )
+    actions = _build_review_actions(payload)
+    await cl.Message(content=payload["content"]).send()
 
-    await cl.Message(content=payload["content"], actions=actions).send()
+    async def _ask_next_action():
+        response = await cl.AskActionMessage(
+            content="Choose the next step for this transition run.",
+            actions=actions,
+            timeout=900,
+            raise_on_timeout=False,
+        ).send()
+        logger.info(
+            "Transition review selection run_id=%s action=%s",
+            run_id,
+            str((response or {}).get("name") or "timeout"),
+        )
+        return response
+
+    await run_review_action_loop(
+        ask_next_action=_ask_next_action,
+        view_action_name=ACTION_VIEW_PROMPT,
+        edit_action_name=ACTION_EDIT_PROMPT,
+        adjust_action_name=ACTION_ADJUST_TRANSITION,
+        run_action_name=ACTION_RUN_RESEARCH,
+        on_view_prompt=lambda: _show_generated_prompt_message(
+            title="Generated Transition Prompt",
+            prompt_text=prompt_package.user_prompt,
+        ),
+        on_edit_prompt=lambda: _enter_prompt_edit_mode(
+            mode=TRANSITION_MODE,
+            run_id=run_id,
+            prompt_text=prompt_package.user_prompt,
+            edit_pending_key=TRANSITION_EDIT_PENDING_SESSION_KEY,
+            descriptor="transition",
+        ),
+        on_adjust=show_transition_form,
+        on_run=lambda: _run_transition_research_flow(run_id),
+        on_timeout=lambda: cl.Message(
+            "Transition review timed out. Re-open the transition form if you want to continue."
+        ).send(),
+        on_unknown_action=lambda action_name: cl.Message(
+            f"Unknown transition review action: {action_name or 'missing action name'}."
+        ).send(),
+    )
 
 
 async def present_movement_preflight_review(request, preflight, prompt_package, *, run_id: str):
     """Render the named-move review surface before movement research launches."""
     payload = build_movement_preflight_review(request, preflight, prompt_package, run_id=run_id)
-    actions = [
-        cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
-        for action in payload.get("actions", [])
-    ]
-    view_prompt_action = payload.get("view_prompt_action")
-    if view_prompt_action:
-        actions.append(
-            cl.Action(
-                name=view_prompt_action["name"],
-                label=view_prompt_action["label"],
-                payload=view_prompt_action.get("payload", {}),
-            )
+    actions = _build_review_actions(payload)
+    await cl.Message(content=payload["content"]).send()
+
+    async def _ask_next_action():
+        response = await cl.AskActionMessage(
+            content="Choose the next step for this people movement run.",
+            actions=actions,
+            timeout=900,
+            raise_on_timeout=False,
+        ).send()
+        logger.info(
+            "Movement review selection run_id=%s action=%s",
+            run_id,
+            str((response or {}).get("name") or "timeout"),
         )
-    await cl.Message(content=payload["content"], actions=actions).send()
+        return response
+
+    await run_review_action_loop(
+        ask_next_action=_ask_next_action,
+        view_action_name=ACTION_VIEW_MOVEMENT_PROMPT,
+        edit_action_name=ACTION_EDIT_MOVEMENT_PROMPT,
+        adjust_action_name=ACTION_ADJUST_MOVEMENT,
+        run_action_name=ACTION_RUN_MOVEMENT_RESEARCH,
+        on_view_prompt=lambda: _show_generated_prompt_message(
+            title="Generated People Movement Prompt",
+            prompt_text=prompt_package.user_prompt,
+        ),
+        on_edit_prompt=lambda: _enter_prompt_edit_mode(
+            mode=MOVEMENT_MODE,
+            run_id=run_id,
+            prompt_text=prompt_package.user_prompt,
+            edit_pending_key=MOVEMENT_EDIT_PENDING_SESSION_KEY,
+            descriptor="people movement",
+        ),
+        on_adjust=show_movement_form,
+        on_run=lambda: _run_movement_research_flow(run_id),
+        on_timeout=lambda: cl.Message(
+            "People movement review timed out. Re-open the movement form if you want to continue."
+        ).send(),
+        on_unknown_action=lambda action_name: cl.Message(
+            f"Unknown people movement review action: {action_name or 'missing action name'}."
+        ).send(),
+    )
 
 
 async def present_transition_brief(brief, *, run_id: str):
@@ -1766,6 +1848,49 @@ async def generate_research_prompt(params_dict: dict):
         await cl.Message(f"❌ Error generating prompt: {str(e)}").send()
 
 
+def _build_review_actions(payload: Dict[str, Any]) -> List[cl.Action]:
+    actions = [
+        cl.Action(name=action["name"], label=action["label"], payload=action.get("payload", {}))
+        for action in payload.get("actions", [])
+    ]
+    view_prompt_action = payload.get("view_prompt_action")
+    if view_prompt_action:
+        actions.append(
+            cl.Action(
+                name=view_prompt_action["name"],
+                label=view_prompt_action["label"],
+                payload=view_prompt_action.get("payload", {}),
+            )
+        )
+    return actions
+
+
+async def _show_generated_prompt_message(*, title: str, prompt_text: str) -> None:
+    await cl.Message(f"**{title}**\n\n```text\n{prompt_text}\n```").send()
+
+
+async def _enter_prompt_edit_mode(
+    *,
+    mode: str,
+    run_id: str,
+    prompt_text: Optional[str],
+    edit_pending_key: str,
+    descriptor: str,
+) -> None:
+    cl.user_session.set(edit_pending_key, True)
+    _set_pending_edit_run_id(mode, run_id)
+    if prompt_text:
+        await cl.Message(
+            f"Send your edited {descriptor} research prompt as the next message. "
+            "That text will replace the generated prompt for the run.\n\n"
+            f"Current prompt:\n```text\n{prompt_text}\n```"
+        ).send()
+    else:
+        await cl.Message(
+            f"Send your edited {descriptor} research prompt as the next message."
+        ).send()
+
+
 @cl.action_callback(ACTION_VIEW_PROMPT)
 async def transition_view_prompt(action: cl.Action):
     run = resolve_run_context(
@@ -1777,9 +1902,10 @@ async def transition_view_prompt(action: cl.Action):
     if not prompt_package:
         await cl.Message("No generated prompt is available yet.").send()
         return
-    await cl.Message(
-        f"**Generated Transition Prompt**\n\n```text\n{prompt_package.user_prompt}\n```"
-    ).send()
+    await _show_generated_prompt_message(
+        title="Generated Transition Prompt",
+        prompt_text=prompt_package.user_prompt,
+    )
 
 
 @cl.action_callback(ACTION_EDIT_PROMPT)
@@ -1787,18 +1913,13 @@ async def transition_edit_prompt(action: cl.Action):
     run_id = str((action.payload or {}).get("run_id") or "") or get_active_run_id(cl.user_session, TRANSITION_MODE)
     run = resolve_run_context(cl.user_session, mode="transition", run_id=run_id)
     prompt_package = _load_transition_prompt_from_run(run) if run else _load_transition_prompt_package()
-    cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, True)
-    _set_pending_edit_run_id(TRANSITION_MODE, run_id)
-    if prompt_package:
-        await cl.Message(
-            "Send your edited transition research prompt as the next message. "
-            "That text will replace the generated prompt for the run.\n\n"
-            f"Current prompt:\n```text\n{prompt_package.user_prompt}\n```"
-        ).send()
-    else:
-        await cl.Message(
-            "Send your edited transition research prompt as the next message."
-        ).send()
+    await _enter_prompt_edit_mode(
+        mode=TRANSITION_MODE,
+        run_id=run_id,
+        prompt_text=prompt_package.user_prompt if prompt_package else None,
+        edit_pending_key=TRANSITION_EDIT_PENDING_SESSION_KEY,
+        descriptor="transition",
+    )
 
 
 @cl.action_callback(ACTION_ADJUST_TRANSITION)
@@ -1823,9 +1944,10 @@ async def movement_view_prompt(action: cl.Action):
     if not prompt_package:
         await cl.Message("No generated prompt is available yet.").send()
         return
-    await cl.Message(
-        f"**Generated People Movement Prompt**\n\n```text\n{prompt_package.user_prompt}\n```"
-    ).send()
+    await _show_generated_prompt_message(
+        title="Generated People Movement Prompt",
+        prompt_text=prompt_package.user_prompt,
+    )
 
 
 @cl.action_callback(ACTION_EDIT_MOVEMENT_PROMPT)
@@ -1833,18 +1955,13 @@ async def movement_edit_prompt(action: cl.Action):
     run_id = str((action.payload or {}).get("run_id") or "") or get_active_run_id(cl.user_session, MOVEMENT_MODE)
     run = resolve_run_context(cl.user_session, mode="movement", run_id=run_id)
     prompt_package = _load_movement_prompt_from_run(run) if run else _load_movement_prompt_package()
-    cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, True)
-    _set_pending_edit_run_id(MOVEMENT_MODE, run_id)
-    if prompt_package:
-        await cl.Message(
-            "Send your edited people movement research prompt as the next message. "
-            "That text will replace the generated prompt for the run.\n\n"
-            f"Current prompt:\n```text\n{prompt_package.user_prompt}\n```"
-        ).send()
-    else:
-        await cl.Message(
-            "Send your edited people movement research prompt as the next message."
-        ).send()
+    await _enter_prompt_edit_mode(
+        mode=MOVEMENT_MODE,
+        run_id=run_id,
+        prompt_text=prompt_package.user_prompt if prompt_package else None,
+        edit_pending_key=MOVEMENT_EDIT_PENDING_SESSION_KEY,
+        descriptor="people movement",
+    )
 
 
 @cl.action_callback(ACTION_ADJUST_MOVEMENT)
@@ -1855,6 +1972,7 @@ async def movement_adjust_move(action: cl.Action):
 @cl.action_callback(ACTION_RUN_MOVEMENT_RESEARCH)
 async def movement_run_research(action: cl.Action):
     run_id = str((action.payload or {}).get("run_id") or "") or get_active_run_id(cl.user_session, MOVEMENT_MODE)
+    logger.info("Movement Run Research action clicked run_id=%s payload=%s", run_id, action.payload)
     await _run_movement_research_flow(run_id)
 
 

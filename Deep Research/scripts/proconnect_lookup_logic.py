@@ -7,7 +7,10 @@ import re
 from difflib import SequenceMatcher
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from proconnect_client import ProConnectClient
+try:  # pragma: no cover - import style depends on entrypoint
+    from .proconnect_client import ProConnectClient
+except ImportError:  # pragma: no cover
+    from proconnect_client import ProConnectClient
 
 DEPARTMENT_TO_SFDC_FUNCTIONS: Dict[str, List[str]] = {
     "C-Suite": [

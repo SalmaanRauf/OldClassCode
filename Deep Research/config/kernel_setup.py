@@ -3,10 +3,10 @@ import asyncio
 from semantic_kernel import Kernel
 from semantic_kernel.connectors.ai.open_ai import AzureChatCompletion
 from semantic_kernel.connectors.ai.function_choice_behavior import FunctionChoiceBehavior
-from semantic_kernel.contents.chat_history import ChatHistory
 from semantic_kernel.connectors.ai.open_ai.prompt_execution_settings.azure_chat_prompt_execution_settings import AzureChatPromptExecutionSettings
 from dotenv import load_dotenv
 from openai import AsyncAzureOpenAI
+from services.semantic_kernel_compat import create_chat_history
 # ATLASClient class for Azure OpenAI/ATLAS
 class ATLASClient:
    def __init__(self, api_key, base_url, model, project_id, api_version):
@@ -95,7 +95,7 @@ async def get_kernel_async():
 # Test function
 async def test_kernel_connection():
    kernel, exec_settings = await initialize_kernel()
-   history = ChatHistory()
+   history = create_chat_history()
    userInput = "Hello, world. Are you connected? Please respond with 'Yes, I am connected and ready for analysis.'"
    history.add_user_message(userInput)
    chat = kernel.get_service("atlas")
@@ -105,4 +105,3 @@ async def test_kernel_connection():
    return True
 if __name__ == '__main__':
    asyncio.run(test_kernel_connection())
-

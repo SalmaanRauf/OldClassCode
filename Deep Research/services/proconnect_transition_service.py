@@ -6,8 +6,6 @@ stakeholder flow rather than re-implementing lookup logic in Chainlit code.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from models.transition_schemas import (
@@ -18,13 +16,7 @@ from models.transition_schemas import (
     TransitionPreflight,
     TransitionRequest,
 )
-
-
-SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from proconnect_stakeholder_payload import run_stakeholder_case  # noqa: E402
+from scripts.proconnect_stakeholder_payload import run_stakeholder_case
 
 
 def _as_list(value: Any) -> List[Any]:

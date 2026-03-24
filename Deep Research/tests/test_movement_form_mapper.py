@@ -199,6 +199,80 @@ def test_build_movement_trigger_reuses_financial_services_signal_mapping_and_loo
     assert "Fannie Mae" in (trigger.user_prompt_context or "")
 
 
+def test_build_movement_progress_content_marks_review_ready_after_preflight():
+    request = build_movement_request_from_form_response(
+        {
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "synthetic_scenario": True,
+        }
+    )
+
+    content = build_movement_progress_content(
+        request,
+        [
+            {
+                "stage": "resolving_named_move",
+                "message": "Resolving named move context.",
+                "status": "complete",
+            },
+            {
+                "stage": "building_relationship_context",
+                "message": "Relationship context built from ProConnect.",
+                "status": "complete",
+            },
+            {
+                "stage": "generating_research_plan",
+                "message": "Generated research plan from validated move context.",
+                "status": "complete",
+            },
+        ],
+    )
+
+    assert "**People Movement Brief Ready for Review**" in content
+    assert "Stage: Review ready" in content
+    assert "Status: Awaiting Run Research" in content
+    assert "- Account signals: not started" in content
+    assert "- Brief assembly: not started" in content
+
+
+def test_build_movement_progress_content_switches_to_live_run_once_research_starts():
+    request = build_movement_request_from_form_response(
+        {
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "synthetic_scenario": True,
+        }
+    )
+
+    content = build_movement_progress_content(
+        request,
+        [
+            {
+                "stage": "generating_research_plan",
+                "message": "Generated research plan from validated move context.",
+                "status": "complete",
+            },
+            {
+                "stage": "account_signals",
+                "message": "Normalizing financial-services signal evidence.",
+                "status": "in_progress",
+            },
+        ],
+    )
+
+    assert "**People Movement Brief In Progress**" in content
+    assert "Stage: Account signals" in content
+    assert "Status: Normalizing financial-services signal evidence." in content
+    assert "- Account signals: in progress" in content
+
+
 def test_build_transition_request_for_movement_reuses_named_move_transition_shape():
     request = build_movement_request_from_form_response(
         {

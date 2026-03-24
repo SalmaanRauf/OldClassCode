@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import sys
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -30,16 +30,12 @@ from services.proconnect_auth import resolve_runtime_bearer_token
 from services.proconnect_transition_service import ProConnectTransitionService
 from services.transition_prompt_builder import TransitionPromptBuilder, TransitionPromptPackage
 from services.workflow_state import WorkflowStage
-
-
-SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from proconnect_client import DEFAULT_BASE_URL, ProConnectClient  # noqa: E402
+from scripts.proconnect_client import DEFAULT_BASE_URL, ProConnectClient
 
 
 ProgressCallback = Callable[[Dict[str, Any]], Awaitable[None] | None]
+logger = logging.getLogger(__name__)
+SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 
 def _as_list(value: Any) -> List[Any]:
@@ -113,6 +109,12 @@ class TransitionPlaybookOrchestrator:
             transition_case = None
             preflight = reviewed_preflight
             prompt_package = reviewed_prompt_package
+            logger.info(
+                "Transition research using reviewed context run_id=%s person=%s destination=%s",
+                reviewed_run_id,
+                request.person_name,
+                request.to_company,
+            )
         else:
             transition_case, preflight, prompt_package = await self._prepare_transition_context(
                 request,
@@ -127,9 +129,20 @@ class TransitionPlaybookOrchestrator:
             message="Running Deep Research.",
             status="in_progress",
         )
+        logger.info(
+            "Transition Deep Research starting run_id=%s industry=%s prompt_chars=%s",
+            reviewed_run_id,
+            prompt_package.industry_key,
+            len(prompt_package.user_prompt),
+        )
         deep_research_response = await self._run_deep_research(
             prompt_package,
             progress_cb=progress_cb,
+        )
+        logger.info(
+            "Transition Deep Research finished run_id=%s industry=%s",
+            reviewed_run_id,
+            prompt_package.industry_key,
         )
 
         bd = self._get_bd_orchestrator()

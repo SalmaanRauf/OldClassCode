@@ -85,6 +85,8 @@ def build_movement_preflight_review(
     content_lines: List[str] = [
         "**People Movement Brief Review**",
         "",
+        "Review the validated move context below, then click `Run Research` to start Deep Research.",
+        "",
         f"Person: {request.person_name}",
         f"Move: {request.from_company} -> {request.to_company}",
         f"Target role: {request.new_role}",

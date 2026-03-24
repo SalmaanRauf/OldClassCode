@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import sys
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Dict, List, Optional
@@ -36,17 +36,13 @@ from services.proconnect_movement_service import ProConnectMovementService
 from services.proconnect_transition_service import ProConnectTransitionService
 from services.signal_registry_service import get_signal_registry_service
 from services.workflow_state import WorkflowStage
-
-
-SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
-if str(SCRIPT_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPT_DIR))
-
-from proconnect_client import DEFAULT_BASE_URL, ProConnectClient  # noqa: E402
+from scripts.proconnect_client import DEFAULT_BASE_URL, ProConnectClient
 
 
 ProgressCallback = Callable[[Any], Any]
 DeepResearchRunner = Callable[..., Awaitable[Dict[str, Any]]]
+logger = logging.getLogger(__name__)
+SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
 
 
 @dataclass(frozen=True)
@@ -146,11 +142,22 @@ class MovementBriefOrchestrator:
         if reviewed_preflight and reviewed_prompt_package:
             preflight = reviewed_preflight
             prompt_package = reviewed_prompt_package
+            logger.info(
+                "Movement research using reviewed context run_id=%s person=%s destination=%s",
+                reviewed_run_id,
+                request.person_name,
+                request.to_company,
+            )
         else:
             _, preflight, prompt_package = await self._prepare_move_context(
                 request,
                 progress_cb=progress_cb,
                 prompt_override=prompt_override,
+            )
+            logger.info(
+                "Movement research rebuilt context person=%s destination=%s",
+                request.person_name,
+                request.to_company,
             )
         trigger = build_movement_trigger(request)
         trigger.company_focus = (
@@ -165,7 +172,18 @@ class MovementBriefOrchestrator:
                 deep_research_output = format_deep_research_response_as_markdown(deep_research_response)
                 structured_evidence_map = build_structured_evidence_map(deep_research_response)
             else:
+                logger.info(
+                    "Movement Deep Research starting run_id=%s industry=%s prompt_chars=%s",
+                    reviewed_run_id,
+                    prompt_package.industry_key,
+                    len(prompt_package.user_prompt),
+                )
                 deep_research_response = await self._run_deep_research(prompt_package, progress_cb)
+                logger.info(
+                    "Movement Deep Research finished run_id=%s industry=%s",
+                    reviewed_run_id,
+                    prompt_package.industry_key,
+                )
                 deep_research_output = format_deep_research_response_as_markdown(deep_research_response)
                 structured_evidence_map = build_structured_evidence_map(deep_research_response)
 
@@ -397,6 +415,13 @@ class MovementBriefOrchestrator:
             status="in_progress",
         )
         preflight = await asyncio.to_thread(service.build_preflight, transition_request)
+        logger.info(
+            "Movement preflight resolved person=%s source_resolved=%s destination_resolved=%s match_status=%s",
+            request.person_name,
+            preflight.from_account.resolved,
+            preflight.to_account.resolved,
+            preflight.person_resolution.match_status,
+        )
         await self._emit(
             progress_cb,
             stage=WorkflowStage.BUILDING_RELATIONSHIP_CONTEXT.value,
@@ -415,6 +440,12 @@ class MovementBriefOrchestrator:
                 system_prompt=prompt_package.system_prompt,
                 user_prompt=prompt_override,
             )
+        logger.info(
+            "Movement prompt package ready industry=%s prompt_overridden=%s user_prompt_chars=%s",
+            prompt_package.industry_key,
+            bool(prompt_override),
+            len(prompt_package.user_prompt),
+        )
         await self._emit(
             progress_cb,
             stage=WorkflowStage.GENERATING_RESEARCH_PLAN.value,
@@ -436,6 +467,11 @@ class MovementBriefOrchestrator:
             industry=prompt_package.industry_key,
             progress_callback=self._make_deep_research_progress_wrapper(progress_cb),
             instructions_override=prompt_package.system_prompt,
+        )
+        logger.info(
+            "Dispatching Deep Research query industry=%s prompt_chars=%s",
+            prompt_package.industry_key,
+            len(prompt_package.user_prompt),
         )
         response = await runner(prompt_package.user_prompt, **kwargs)
         return response if isinstance(response, dict) else {"summary": str(response or "")}

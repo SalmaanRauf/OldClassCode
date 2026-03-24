@@ -10,6 +10,7 @@ from time import perf_counter
 from typing import Dict, Any, List, Tuple
 
 from models.bd_schemas import BDTrigger, Opportunity
+from services.semantic_kernel_compat import create_chat_history
 
 logger = logging.getLogger(__name__)
 
@@ -65,9 +66,7 @@ class OpportunityDigestor:
             await self._ensure_kernel()
             prompt = self._render_prompt(trigger, deep_research_markdown, max_opportunities)
 
-            from semantic_kernel.contents.chat_history import ChatHistory
-
-            history = ChatHistory()
+            history = create_chat_history()
             history.add_user_message(prompt)
             chat = self._kernel.get_service("atlas")
             result = await chat.get_chat_message_content(

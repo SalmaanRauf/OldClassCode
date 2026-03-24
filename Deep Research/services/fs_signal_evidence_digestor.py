@@ -12,6 +12,7 @@ from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 from models.bd_schemas import BDTrigger, SignalEvidence
+from services.semantic_kernel_compat import create_chat_history
 from services.signal_registry_service import get_signal_registry_service
 from services.source_guardrails import SourceGuardrails
 
@@ -121,9 +122,7 @@ class FSSignalEvidenceDigestor:
                 signal_source_candidates=signal_source_candidates or {},
             )
 
-            from semantic_kernel.contents.chat_history import ChatHistory
-
-            history = ChatHistory()
+            history = create_chat_history()
             history.add_user_message(prompt)
             chat = self._kernel.get_service("atlas")
             result = await chat.get_chat_message_content(

@@ -28,6 +28,7 @@ from models.bd_schemas import (
     PhaseOpportunity,
 )
 from services.runtime_policy import get_runtime_policy
+from services.semantic_kernel_compat import create_chat_history
 
 logger = logging.getLogger(__name__)
 
@@ -156,9 +157,7 @@ class FinalAnalystAgent:
                 prompt = prompt.replace("{{$" + key + "}}", value)
 
             # Call ATLAS via kernel
-            from semantic_kernel.contents.chat_history import ChatHistory
-            
-            history = ChatHistory()
+            history = create_chat_history()
             history.add_user_message(prompt)
             
             chat = self._kernel.get_service("atlas")
