@@ -170,6 +170,7 @@ def test_assemble_brief_caps_rows_and_actions_and_attaches_proof_packets():
     assert brief.where_to_act[0].relationship_owner == "Ben L"
     assert "Relationship owner: Ben L." in brief.where_to_act[0].why_now
     assert "Leverage: known relationship, delivery history." in brief.where_to_act[0].why_now
+    assert "Credential proof: Existing delivery with adjacent team." in brief.where_to_act[0].why_now
     assert brief.movement_rows[0].leverage is not None
     assert brief.movement_rows[0].credentials_proof is not None
     assert brief.movement_rows[0].credentials_proof.lookup_status == "Matched"
@@ -191,3 +192,55 @@ def test_assemble_brief_uses_fallback_actions_when_rows_are_sparse():
     assert len(brief.where_to_act) == 3
     assert all(action.person_name == "Capital One" for action in brief.where_to_act)
     assert "No confirmed signals" in brief.signal_summary[0]
+    assert "degraded" in brief.executive_summary.lower()
+
+
+def test_assemble_brief_uses_credential_proof_to_raise_action_priority():
+    assembler = MovementBriefAssembler()
+
+    ranked_rows = [
+        {
+            "movement": _movement(0),
+            "known": False,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+            "person_match_status": "matched",
+            "rank_score": 20,
+            "action_posture": "Expansion Opportunity",
+            "opportunity_id": "opp_without_proof",
+        },
+        {
+            "movement": _movement(1),
+            "known": False,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+            "person_match_status": "matched",
+            "rank_score": 10,
+            "action_posture": "Immediate Re-engagement",
+            "opportunity_id": "opp_with_proof",
+        },
+    ]
+
+    brief = assembler.assemble(
+        request=_request(),
+        preflight=_preflight(),
+        trigger=_trigger(),
+        deep_research_summary="Capital One is under governance pressure.",
+        signal_evidence=[],
+        ranked_rows=ranked_rows,
+        deep_enriched_rows=[],
+        credential_packets={
+            "opp_with_proof": MovementCredentialsProof(
+                lookup_status="Matched",
+                summary="Matched credentials: AI Governance Transformation.",
+                matched_credentials=[],
+            )
+        },
+    )
+
+    assert brief.where_to_act[0].person_name == "Person 1"
+    assert "Credential proof: Matched credentials: AI Governance Transformation." in brief.where_to_act[0].why_now

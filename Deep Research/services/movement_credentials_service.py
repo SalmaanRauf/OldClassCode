@@ -19,20 +19,26 @@ class MovementCredentialsService:
     ) -> Dict[str, MovementCredentialsProof]:
         packets: Dict[str, MovementCredentialsProof] = {}
         for item in derived_opportunities:
-            person_name = str(getattr(item, "person_name", "") or "").strip()
             opportunity = getattr(item, "opportunity", None)
+            opportunity_id = str(
+                getattr(item, "opportunity_id", "")
+                or getattr(opportunity, "opportunity_id", "")
+                or ""
+            ).strip()
+            person_name = str(getattr(item, "person_name", "") or "").strip()
             opportunity_title = str(getattr(opportunity, "title", "") or "").strip()
-            if not person_name or not opportunity_title:
+            if not opportunity_title:
                 continue
-            response = lookup_results.get(opportunity_title)
+            lookup_key = opportunity_id or opportunity_title
+            response = lookup_results.get(lookup_key) or lookup_results.get(opportunity_title)
             if response is None:
-                packets[person_name] = MovementCredentialsProof(
+                packets[lookup_key] = MovementCredentialsProof(
                     lookup_status="Lookup Failed",
                     summary="Credentials lookup did not return a result for this derived play.",
                     matched_credentials=[],
                 )
                 continue
-            packets[person_name] = self._coerce(response)
+            packets[lookup_key] = self._coerce(response)
         return packets
 
     def _coerce(self, response: CredentialsResponse) -> MovementCredentialsProof:

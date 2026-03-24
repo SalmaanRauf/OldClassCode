@@ -23,8 +23,9 @@ from services.credentials_lookup_runner import CredentialsLookupRunner  # noqa: 
 from services import credentials_lookup_runner as credentials_lookup_module  # noqa: E402
 
 
-def _opportunity(title: str) -> Opportunity:
+def _opportunity(title: str, opportunity_id: str | None = None) -> Opportunity:
     return Opportunity(
+        opportunity_id=opportunity_id,
         title=title,
         scope=f"{title} scope",
         confidence="High",
@@ -110,11 +111,11 @@ async def test_runner_serial_lookup_retries_timeout_failures_and_collects_diagno
     assert result.batch_diagnostics is None
     assert result.lookups_executed_count == 2
     assert result.status_counts == {"Matched": 1, "No Match": 1, "Lookup Failed": 0}
-    assert result.results["CMMC Program"].lookup_status == "Matched"
-    assert result.results["Model Risk"].lookup_status == "No Match"
-    assert result.diagnostics["CMMC Program"].lookup_status == "Matched"
-    assert result.diagnostics["CMMC Program"].match_count == 1
-    assert result.diagnostics["Model Risk"].lookup_status == "No Match"
+    assert result.results["opp_1"].lookup_status == "Matched"
+    assert result.results["opp_2"].lookup_status == "No Match"
+    assert result.diagnostics["opp_1"].lookup_status == "Matched"
+    assert result.diagnostics["opp_1"].match_count == 1
+    assert result.diagnostics["opp_2"].lookup_status == "No Match"
 
 
 @pytest.mark.asyncio
@@ -154,9 +155,9 @@ async def test_runner_batched_lookup_uses_batch_mode_and_backfills_missing_diagn
     assert result.batch_diagnostics.invoked is True
     assert result.lookups_executed_count == 2
     assert result.status_counts == {"Matched": 1, "No Match": 1, "Lookup Failed": 0}
-    assert result.diagnostics["AI Governance"].parse_outcome == "diagnostics_missing"
-    assert result.diagnostics["AI Governance"].match_count == 1
-    assert result.diagnostics["Controls Uplift"].lookup_status == "No Match"
+    assert result.diagnostics["opp_1"].parse_outcome == "diagnostics_missing"
+    assert result.diagnostics["opp_1"].match_count == 1
+    assert result.diagnostics["opp_2"].lookup_status == "No Match"
 
 
 @pytest.mark.asyncio
@@ -196,4 +197,69 @@ async def test_runner_lazy_loads_credentials_agent_via_factory(monkeypatch):
 
     assert created["count"] == 1
     assert agent.find_credentials.await_count == 1
-    assert result.results["AI Governance"].lookup_status == "Matched"
+    assert result.results["opp_1"].lookup_status == "Matched"
+
+
+@pytest.mark.asyncio
+async def test_runner_keeps_duplicate_titles_separate_when_ids_are_present():
+    agent = MagicMock(spec=CredentialsAgent)
+    agent.find_credentials = AsyncMock()
+    agent.find_credentials_batch = AsyncMock(
+        return_value=(
+            {
+                "opp_a": _matched_response("Shared Title", diagnostics=False),
+                "opp_b": _no_match_response("Shared Title", diagnostics=False),
+            },
+            CredentialsBatchDiagnostics(
+                invoked=True,
+                lookup_count_requested=2,
+                lookup_count_returned=2,
+                duration_ms=22.0,
+                query_text="batch query",
+                raw_response_text='{"results":[...]}' ,
+                parse_outcome="batch_json_parsed",
+            ),
+        )
+    )
+
+    runner = CredentialsLookupRunner(
+        credentials_agent=agent,
+        lookup_mode="batched_single_call",
+    )
+    result = await runner.run(
+        [
+            _opportunity("Shared Title", "opp_a"),
+            _opportunity("Shared Title", "opp_b"),
+        ],
+        sector="Financial Services",
+    )
+
+    assert set(result.results.keys()) == {"opp_a", "opp_b"}
+    assert result.results["opp_a"].lookup_status == "Matched"
+    assert result.results["opp_b"].lookup_status == "No Match"
+
+
+@pytest.mark.asyncio
+async def test_runner_uses_stable_opportunity_ids_for_serial_lookups():
+    agent = MagicMock(spec=CredentialsAgent)
+    agent.find_credentials = AsyncMock(
+        side_effect=[
+            _matched_response("Shared Title", diagnostics=False),
+            _no_match_response("Shared Title", diagnostics=False),
+        ]
+    )
+    agent.find_credentials_batch = AsyncMock()
+
+    runner = CredentialsLookupRunner(credentials_agent=agent)
+    result = await runner.run(
+        [
+            _opportunity("Shared Title", "opp_a"),
+            _opportunity("Shared Title", "opp_b"),
+        ],
+        sector="Financial Services",
+    )
+
+    assert result.results["opp_a"].opportunity_id == "opp_a"
+    assert result.results["opp_b"].opportunity_id == "opp_b"
+    assert result.diagnostics["opp_a"].opportunity_id == "opp_a"
+    assert result.diagnostics["opp_b"].opportunity_id == "opp_b"

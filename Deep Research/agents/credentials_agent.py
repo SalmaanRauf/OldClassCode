@@ -206,6 +206,7 @@ class CredentialsAgent:
             return self._parse_response(
                 raw_response,
                 opportunity.title,
+                opportunity_id=self._opportunity_identity(opportunity),
                 sector=sector,
                 query_text=query,
                 duration_ms=duration_ms
@@ -215,6 +216,7 @@ class CredentialsAgent:
             logger.error(f"Credentials lookup failed for '{opportunity.title}': {e}")
             return self._build_failure_response(
                 opportunity_title=opportunity.title,
+                opportunity_id=self._opportunity_identity(opportunity),
                 sector=sector,
                 query_text=query,
                 error=e,
@@ -224,6 +226,7 @@ class CredentialsAgent:
             logger.exception(f"Unexpected error in credentials lookup: {e}")
             return self._build_failure_response(
                 opportunity_title=opportunity.title,
+                opportunity_id=self._opportunity_identity(opportunity),
                 sector=sector,
                 query_text=query,
                 error=e,
@@ -307,11 +310,14 @@ class CredentialsAgent:
                         "Batch credentials lookup timed out after retry; executing serial fallback."
                     )
                     response_map: Dict[str, CredentialsResponse] = {}
-                    for opportunity in requested:
-                        response_map[opportunity.title] = await self.find_credentials(
+                    for idx, opportunity in enumerate(requested, 1):
+                        key = self._opportunity_identity(opportunity, idx)
+                        response = await self.find_credentials(
                             opportunity,
                             sector=sector,
                         )
+                        response.opportunity_id = key
+                        response_map[key] = response
 
                     diagnostics = CredentialsBatchDiagnostics(
                         invoked=True,
@@ -369,7 +375,7 @@ class CredentialsAgent:
         """Build a single batch query for up to three opportunities."""
         lines = []
         for idx, opportunity in enumerate(opportunities, 1):
-            opp_id = f"opp_{idx}"
+            opp_id = self._opportunity_identity(opportunity, idx)
             requirements = self._extract_requirements(opportunity)
             truncated_scope = self._truncate_scope_for_batch(opportunity.scope)
             lines.extend(
@@ -485,7 +491,7 @@ class CredentialsAgent:
         duration_ms: float,
         max_matches_per_opportunity: int
     ) -> Tuple[Dict[str, CredentialsResponse], CredentialsBatchDiagnostics]:
-        id_to_opp = {f"opp_{idx}": opp for idx, opp in enumerate(opportunities, 1)}
+        id_to_opp = {self._opportunity_identity(opp, idx): opp for idx, opp in enumerate(opportunities, 1)}
         if not raw_response or not raw_response.strip():
             diagnostics = CredentialsBatchDiagnostics(
                 invoked=True,
@@ -503,6 +509,7 @@ class CredentialsAgent:
                 "Batch credentials response was empty.",
                 "batch_empty_response",
                 duration_ms,
+                raw_response=raw_response or "",
             ), diagnostics
 
         try:
@@ -516,7 +523,7 @@ class CredentialsAgent:
             for entry in results:
                 if not isinstance(entry, dict):
                     continue
-                opp_id = entry.get("opportunity_id")
+                opp_id = str(entry.get("opportunity_id", "") or "").strip()
                 opp = id_to_opp.get(opp_id)
                 if opp is None:
                     continue
@@ -536,6 +543,7 @@ class CredentialsAgent:
                 else:
                     parse_outcome = "batch_json_parsed_no_match"
                 diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_id=opp_id,
                     opportunity_title=opp.title,
                     sector=sector,
                     query_text=query_text,
@@ -550,7 +558,8 @@ class CredentialsAgent:
                     duration_ms=duration_ms,
                     match_count=len(matches),
                 )
-                response_map[opp.title] = CredentialsResponse(
+                response_map[opp_id] = CredentialsResponse(
+                    opportunity_id=opp_id,
                     opportunity_title=opp.title,
                     matches=matches,
                     no_matches_found=entry.get("no_matches_found", not has_matches),
@@ -558,10 +567,12 @@ class CredentialsAgent:
                     diagnostics=diagnostics,
                 )
 
-            for opp in opportunities:
-                if opp.title in response_map:
+            for idx, opp in enumerate(opportunities, 1):
+                opp_id = self._opportunity_identity(opp, idx)
+                if opp_id in response_map:
                     continue
                 diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_id=opp_id,
                     opportunity_title=opp.title,
                     sector=sector,
                     query_text=query_text,
@@ -572,7 +583,8 @@ class CredentialsAgent:
                     duration_ms=duration_ms,
                     match_count=0,
                 )
-                response_map[opp.title] = CredentialsResponse(
+                response_map[opp_id] = CredentialsResponse(
+                    opportunity_id=opp_id,
                     opportunity_title=opp.title,
                     matches=[],
                     no_matches_found=True,
@@ -599,9 +611,9 @@ class CredentialsAgent:
                     len(recovered_results),
                 )
                 response_map: Dict[str, CredentialsResponse] = {}
-                id_to_opp = {f"opp_{idx}": opp for idx, opp in enumerate(opportunities, 1)}
+                recovered_ids = {str(entry.get("opportunity_id", "") or "").strip() for entry in recovered_results}
                 for entry in recovered_results:
-                    opp_id = entry.get("opportunity_id")
+                    opp_id = str(entry.get("opportunity_id", "") or "").strip()
                     opp = id_to_opp.get(opp_id)
                     if opp is None:
                         continue
@@ -620,6 +632,7 @@ class CredentialsAgent:
                     else:
                         parse_outcome = "batch_partial_recovery"
                     diagnostics = CredentialsLookupDiagnostics(
+                        opportunity_id=opp_id,
                         opportunity_title=opp.title,
                         sector=sector,
                         query_text=query_text,
@@ -634,7 +647,8 @@ class CredentialsAgent:
                         duration_ms=duration_ms,
                         match_count=len(matches),
                     )
-                    response_map[opp.title] = CredentialsResponse(
+                    response_map[opp_id] = CredentialsResponse(
+                        opportunity_id=opp_id,
                         opportunity_title=opp.title,
                         matches=matches,
                         no_matches_found=entry.get("no_matches_found", not has_matches),
@@ -642,10 +656,12 @@ class CredentialsAgent:
                         diagnostics=diagnostics,
                     )
 
-                for opp in opportunities:
-                    if opp.title in response_map:
+                for idx, opp in enumerate(opportunities, 1):
+                    opp_id = self._opportunity_identity(opp, idx)
+                    if opp_id in recovered_ids or opp_id in response_map:
                         continue
                     diagnostics = CredentialsLookupDiagnostics(
+                        opportunity_id=opp_id,
                         opportunity_title=opp.title,
                         sector=sector,
                         query_text=query_text,
@@ -656,7 +672,8 @@ class CredentialsAgent:
                         duration_ms=duration_ms,
                         match_count=0,
                     )
-                    response_map[opp.title] = CredentialsResponse(
+                    response_map[opp_id] = CredentialsResponse(
+                        opportunity_id=opp_id,
                         opportunity_title=opp.title,
                         matches=[],
                         no_matches_found=True,
@@ -807,8 +824,10 @@ class CredentialsAgent:
         raw_response: str = "",
     ) -> Dict[str, CredentialsResponse]:
         results: Dict[str, CredentialsResponse] = {}
-        for opp in opportunities:
+        for idx, opp in enumerate(opportunities, 1):
+            opp_id = self._opportunity_identity(opp, idx)
             diagnostics = CredentialsLookupDiagnostics(
+                opportunity_id=opp_id,
                 opportunity_title=opp.title,
                 sector=sector,
                 query_text=query_text,
@@ -819,7 +838,8 @@ class CredentialsAgent:
                 duration_ms=duration_ms,
                 match_count=0,
             )
-            results[opp.title] = CredentialsResponse(
+            results[opp_id] = CredentialsResponse(
+                opportunity_id=opp_id,
                 opportunity_title=opp.title,
                 matches=[],
                 no_matches_found=True,
@@ -833,6 +853,7 @@ class CredentialsAgent:
         self,
         raw: str,
         opportunity_title: str,
+        opportunity_id: Optional[str] = None,
         sector: str = "General",
         query_text: str = "",
         duration_ms: float = 0.0
@@ -843,6 +864,7 @@ class CredentialsAgent:
         """
         if not raw or not raw.strip():
             diagnostics = CredentialsLookupDiagnostics(
+                opportunity_id=opportunity_id,
                 opportunity_title=opportunity_title,
                 sector=sector,
                 query_text=query_text,
@@ -853,6 +875,7 @@ class CredentialsAgent:
                 match_count=0
             )
             return CredentialsResponse(
+                opportunity_id=opportunity_id,
                 opportunity_title=opportunity_title,
                 matches=[],
                 no_matches_found=True,
@@ -883,6 +906,7 @@ class CredentialsAgent:
                 parse_outcome = "json_explicit_no_match"
 
             diagnostics = CredentialsLookupDiagnostics(
+                opportunity_id=opportunity_id,
                 opportunity_title=opportunity_title,
                 sector=sector,
                 query_text=query_text,
@@ -899,6 +923,7 @@ class CredentialsAgent:
             )
 
             return CredentialsResponse(
+                opportunity_id=opportunity_id,
                 opportunity_title=opportunity_title,
                 matches=matches,
                 no_matches_found=data.get("no_matches_found", len(matches) == 0),
@@ -911,6 +936,7 @@ class CredentialsAgent:
             raw_lower = raw.lower()
             if "no matching" in raw_lower or "no relevant" in raw_lower or "could not find" in raw_lower:
                 diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_id=opportunity_id,
                     opportunity_title=opportunity_title,
                     sector=sector,
                     query_text=query_text,
@@ -921,6 +947,7 @@ class CredentialsAgent:
                     match_count=0
                 )
                 return CredentialsResponse(
+                    opportunity_id=opportunity_id,
                     opportunity_title=opportunity_title,
                     matches=[],
                     no_matches_found=True,
@@ -931,6 +958,7 @@ class CredentialsAgent:
             # Can't parse - log and return empty
             logger.warning(f"Could not parse credentials response: {raw[:200]}...")
             diagnostics = CredentialsLookupDiagnostics(
+                opportunity_id=opportunity_id,
                 opportunity_title=opportunity_title,
                 sector=sector,
                 query_text=query_text,
@@ -943,6 +971,7 @@ class CredentialsAgent:
                 match_count=0
             )
             return CredentialsResponse(
+                opportunity_id=opportunity_id,
                 opportunity_title=opportunity_title,
                 matches=[],
                 no_matches_found=True,
@@ -974,6 +1003,7 @@ class CredentialsAgent:
     def _build_failure_response(
         self,
         opportunity_title: str,
+        opportunity_id: Optional[str],
         sector: str,
         query_text: str,
         error: Exception,
@@ -981,6 +1011,7 @@ class CredentialsAgent:
     ) -> CredentialsResponse:
         """Build a deterministic lookup failure response with diagnostics."""
         diagnostics = CredentialsLookupDiagnostics(
+            opportunity_id=opportunity_id,
             opportunity_title=opportunity_title,
             sector=sector,
             query_text=query_text,
@@ -993,6 +1024,7 @@ class CredentialsAgent:
             match_count=0
         )
         return CredentialsResponse(
+            opportunity_id=opportunity_id,
             opportunity_title=opportunity_title,
             matches=[],
             no_matches_found=True,
@@ -1000,6 +1032,14 @@ class CredentialsAgent:
             failure_reason=str(error),
             diagnostics=diagnostics
         )
+
+    def _opportunity_identity(self, opportunity: Opportunity, index: Optional[int] = None) -> str:
+        candidate = str(getattr(opportunity, "opportunity_id", "") or "").strip()
+        if candidate:
+            return candidate
+        if index is not None:
+            return f"opp_{index}"
+        return opportunity.title
     
     def _extract_json(self, text: str) -> str:
         """Extract JSON from text, handling markdown code blocks."""

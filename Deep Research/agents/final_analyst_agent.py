@@ -90,6 +90,7 @@ class FinalAnalystAgent:
         confirmed_signal_evidence: Optional[List[SignalEvidence]] = None,
         phase3_candidates: Optional[List[PhaseOpportunity]] = None,
         allowed_sources: Optional[List[str]] = None,
+        preflight_context: Optional[Dict[str, Any]] = None,
     ) -> MDReport:
         """Synthesize research and credentials into MD report.
         
@@ -101,16 +102,37 @@ class FinalAnalystAgent:
         Returns:
             MDReport with synthesized findings
         """
-        await self._ensure_kernel()
-        
-        if credentials_status_counts is None:
-            credentials_status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
-            for response in credentials.values():
-                status = response.lookup_status if response.lookup_status in credentials_status_counts else "Lookup Failed"
-                credentials_status_counts[status] += 1
+        try:
+            await self._ensure_kernel()
 
-        if opportunity_extraction_status != "Parsed" and lookups_executed_count == 0:
-            return self._fallback_report(
+            if credentials_status_counts is None:
+                credentials_status_counts = {"Matched": 0, "No Match": 0, "Lookup Failed": 0}
+                for response in credentials.values():
+                    status = response.lookup_status if response.lookup_status in credentials_status_counts else "Lookup Failed"
+                    credentials_status_counts[status] += 1
+
+            if opportunity_extraction_status != "Parsed" and lookups_executed_count == 0:
+                return self._fallback_report(
+                    trigger,
+                    research,
+                    credentials,
+                    opportunity_extraction_status=opportunity_extraction_status,
+                    opportunity_extraction_reason=opportunity_extraction_reason,
+                    opportunities_extracted_count=opportunities_extracted_count,
+                    lookups_executed_count=lookups_executed_count,
+                    lookups_skipped_reason=lookups_skipped_reason,
+                    credentials_status_counts=credentials_status_counts,
+                    credentials_lookup_mode=credentials_lookup_mode,
+                    credentials_batch_diagnostics=credentials_batch_diagnostics,
+                    confirmed_signal_evidence=confirmed_signal_evidence,
+                    phase3_candidates=phase3_candidates,
+                    allowed_sources=allowed_sources,
+                    preflight_context=preflight_context,
+                    fallback_reason="extraction_skip",
+                )
+
+            # Build prompt variables
+            prompt_vars = self._build_prompt_variables(
                 trigger,
                 research,
                 credentials,
@@ -125,33 +147,14 @@ class FinalAnalystAgent:
                 confirmed_signal_evidence=confirmed_signal_evidence,
                 phase3_candidates=phase3_candidates,
                 allowed_sources=allowed_sources,
-                fallback_reason="extraction_skip",
+                preflight_context=preflight_context,
             )
 
-        # Build prompt variables
-        prompt_vars = self._build_prompt_variables(
-            trigger,
-            research,
-            credentials,
-            opportunity_extraction_status=opportunity_extraction_status,
-            opportunity_extraction_reason=opportunity_extraction_reason,
-            opportunities_extracted_count=opportunities_extracted_count,
-            lookups_executed_count=lookups_executed_count,
-            lookups_skipped_reason=lookups_skipped_reason,
-            credentials_status_counts=credentials_status_counts,
-            credentials_lookup_mode=credentials_lookup_mode,
-            credentials_batch_diagnostics=credentials_batch_diagnostics,
-            confirmed_signal_evidence=confirmed_signal_evidence,
-            phase3_candidates=phase3_candidates,
-            allowed_sources=allowed_sources,
-        )
-        
-        # Fill template
-        prompt = self._load_prompt()
-        for key, value in prompt_vars.items():
-            prompt = prompt.replace("{{$" + key + "}}", value)
-        
-        try:
+            # Fill template
+            prompt = self._load_prompt()
+            for key, value in prompt_vars.items():
+                prompt = prompt.replace("{{$" + key + "}}", value)
+
             # Call ATLAS via kernel
             from semantic_kernel.contents.chat_history import ChatHistory
             
@@ -183,6 +186,7 @@ class FinalAnalystAgent:
                 confirmed_signal_evidence=confirmed_signal_evidence,
                 phase3_candidates=phase3_candidates,
                 allowed_sources=allowed_sources,
+                preflight_context=preflight_context,
             )
             
         except Exception as e:
@@ -203,6 +207,7 @@ class FinalAnalystAgent:
                 confirmed_signal_evidence=confirmed_signal_evidence,
                 phase3_candidates=phase3_candidates,
                 allowed_sources=allowed_sources,
+                preflight_context=preflight_context,
                 fallback_reason="synthesis_error",
                 fallback_error_message=str(e),
             )
@@ -223,6 +228,7 @@ class FinalAnalystAgent:
         confirmed_signal_evidence: Optional[List[SignalEvidence]],
         phase3_candidates: Optional[List[PhaseOpportunity]],
         allowed_sources: Optional[List[str]],
+        preflight_context: Optional[Dict[str, Any]],
     ) -> Dict[str, str]:
         """Build variables for prompt template."""
         # Trigger summary
@@ -244,6 +250,7 @@ class FinalAnalystAgent:
         opps_data = []
         for opp in research.opportunities[:3]:
             opps_data.append({
+                "opportunity_id": opp.opportunity_id,
                 "title": opp.title,
                 "agency": opp.agency,
                 "scope": opp.scope[:200] if opp.scope else "",
@@ -255,8 +262,11 @@ class FinalAnalystAgent:
         
         # Credentials JSON
         creds_data = {}
-        for title, resp in credentials.items():
-            creds_data[title] = {
+        for key, resp in credentials.items():
+            response_key = str(resp.opportunity_id or key).strip() or key
+            creds_data[response_key] = {
+                "opportunity_id": resp.opportunity_id or response_key,
+                "opportunity_title": resp.opportunity_title,
                 "matches": [
                     {"title": m.title, "value_provided": m.value_provided, "url": m.url}
                     for m in resp.matches[:3]
@@ -271,6 +281,7 @@ class FinalAnalystAgent:
             "research_summary": research_summary,
             "opportunities_json": json.dumps(opps_data, indent=2),
             "credentials_json": json.dumps(creds_data, indent=2),
+            "preflight_context_json": json.dumps(preflight_context or {}, indent=2),
             "user_prompt_context": self._sanitize_prompt_context(trigger.user_prompt_context, max_chars=600),
             "current_date_iso": datetime.now().date().isoformat(),
             "extraction_diagnostics_json": json.dumps(
@@ -339,6 +350,7 @@ class FinalAnalystAgent:
         confirmed_signal_evidence: Optional[List[SignalEvidence]] = None,
         phase3_candidates: Optional[List[PhaseOpportunity]] = None,
         allowed_sources: Optional[List[str]] = None,
+        preflight_context: Optional[Dict[str, Any]] = None,
     ) -> MDReport:
         """Parse LLM response into MDReport."""
         try:
@@ -346,20 +358,24 @@ class FinalAnalystAgent:
             # Extract JSON from response
             json_str = self._extract_json(response_text)
             data = json.loads(json_str)
+            canonical_opportunities = self._canonical_opportunities(research, preflight_context)
             
             # Build top opportunities
             top_opps = []
             for index, opp_data in enumerate(data.get("top_opportunities", [])[:3]):
+                reported_opportunity_id = str(opp_data.get("opportunity_id", "") or "").strip() or None
                 # Find matching original opportunity
                 original_opp = self._find_opportunity(
+                    reported_opportunity_id,
                     opp_data.get("title", ""),
-                    research.opportunities
+                    canonical_opportunities,
                 )
-                if original_opp is None and index < len(research.opportunities):
+                if original_opp is None and not reported_opportunity_id and index < len(canonical_opportunities):
                     # Deterministic fallback for aggressively rewritten titles:
                     # keep canonical opportunity ordering from source extraction.
-                    original_opp = research.opportunities[index]
+                    original_opp = canonical_opportunities[index]
                 source_response = self._resolve_credentials_response(
+                    opp_id=reported_opportunity_id,
                     opp_title=str(opp_data.get("title", "")),
                     original_opp=original_opp,
                     credentials=credentials,
@@ -385,7 +401,9 @@ class FinalAnalystAgent:
                     validation_status = "No Internal Data"
                 
                 top_opps.append(MDReportOpportunity(
+                    opportunity_id=reported_opportunity_id or getattr(original_opp, "opportunity_id", None),
                     opportunity=original_opp or Opportunity(
+                        opportunity_id=reported_opportunity_id,
                         title=opp_data.get("title", "Unknown"),
                         scope=opp_data.get("scope", ""),
                         agency=opp_data.get("agency"),
@@ -480,12 +498,17 @@ class FinalAnalystAgent:
                 confirmed_signal_evidence=confirmed_signal_evidence,
                 phase3_candidates=phase3_candidates,
                 allowed_sources=allowed_sources,
+                preflight_context=preflight_context,
                 fallback_reason="parse_error",
                 fallback_error_message=str(e),
             )
     
-    def _find_opportunity(self, title: str, opportunities: list) -> Optional[Opportunity]:
-        """Find original opportunity by title (fuzzy match)."""
+    def _find_opportunity(self, opportunity_id: Optional[str], title: str, opportunities: list) -> Optional[Opportunity]:
+        """Find original opportunity by stable id first, then by title."""
+        if opportunity_id:
+            for opp in opportunities:
+                if getattr(opp, "opportunity_id", None) == opportunity_id:
+                    return opp
         title_lower = title.lower()
         for opp in opportunities:
             if opp.title.lower() in title_lower or title_lower in opp.title.lower():
@@ -494,12 +517,18 @@ class FinalAnalystAgent:
 
     def _resolve_credentials_response(
         self,
+        opp_id: Optional[str],
         opp_title: str,
         original_opp: Optional[Opportunity],
         credentials: Dict[str, CredentialsResponse],
     ) -> Optional[CredentialsResponse]:
         """Resolve canonical credentials response even when synthesis rewrites/truncates titles."""
-        candidates = [opp_title, original_opp.title if original_opp else ""]
+        candidates = [
+            opp_id or "",
+            opp_title,
+            original_opp.opportunity_id if original_opp else "",
+            original_opp.title if original_opp else "",
+        ]
         for candidate in candidates:
             if candidate and candidate in credentials:
                 return credentials[candidate]
@@ -514,6 +543,8 @@ class FinalAnalystAgent:
                 (title, response)
                 for title, response in credentials.items()
                 if self._extract_signal_code(title) == signal_code
+                or self._extract_signal_code(response.opportunity_title) == signal_code
+                or self._extract_signal_code(response.opportunity_id or "") == signal_code
             ]
             if len(scoped) == 1:
                 return scoped[0][1]
@@ -602,6 +633,7 @@ class FinalAnalystAgent:
         confirmed_signal_evidence: Optional[List[SignalEvidence]] = None,
         phase3_candidates: Optional[List[PhaseOpportunity]] = None,
         allowed_sources: Optional[List[str]] = None,
+        preflight_context: Optional[Dict[str, Any]] = None,
         fallback_reason: str = "synthesis_error",
         fallback_error_message: Optional[str] = None,
     ) -> MDReport:
@@ -614,9 +646,15 @@ class FinalAnalystAgent:
             fallback_reason = "extraction_skip"
 
         # Build opportunities from research
+        canonical_opportunities = self._canonical_opportunities(research, preflight_context)
         top_opps = []
-        for opp in research.opportunities[:3]:
-            cred_resp = credentials.get(opp.title)
+        for opp in canonical_opportunities[:3]:
+            cred_resp = self._resolve_credentials_response(
+                opp_id=getattr(opp, "opportunity_id", None),
+                opp_title=opp.title,
+                original_opp=opp,
+                credentials=credentials,
+            )
             validation = "No Internal Data"
             cred_matches = []
             lookup_status = "No Match"
@@ -628,6 +666,7 @@ class FinalAnalystAgent:
                     cred_matches = cred_resp.matches[:2]
             
             top_opps.append(MDReportOpportunity(
+                opportunity_id=getattr(opp, "opportunity_id", None),
                 opportunity=opp,
                 credentials=cred_matches,
                 validation_status=validation,
@@ -684,6 +723,70 @@ class FinalAnalystAgent:
             layout_version="fs_evidence_locked_v1" if confirmed_signal_evidence or phase3_candidates else None,
         )
 
+    def _canonical_opportunities(
+        self,
+        research: DeepResearchOutput,
+        preflight_context: Optional[Dict[str, Any]],
+    ) -> List[Opportunity]:
+        preflight_items = list((preflight_context or {}).get("opportunities") or [])
+        if research.opportunities:
+            if not preflight_items:
+                return list(research.opportunities)
+
+            preflight_by_id = {
+                str(item.get("opportunity_id") or "").strip(): item
+                for item in preflight_items
+                if isinstance(item, dict) and str(item.get("opportunity_id") or "").strip()
+            }
+            preflight_by_title = {
+                self._normalize_lookup_key(str(item.get("title") or ""))
+                or f"idx_{index}": item
+                for index, item in enumerate(preflight_items)
+                if isinstance(item, dict)
+            }
+
+            canonical: List[Opportunity] = []
+            for opportunity in research.opportunities:
+                opportunity_id = str(getattr(opportunity, "opportunity_id", "") or "").strip()
+                matched = preflight_by_id.get(opportunity_id) if opportunity_id else None
+                if matched is None:
+                    matched = preflight_by_title.get(self._normalize_lookup_key(opportunity.title))
+                if matched is None:
+                    canonical.append(opportunity)
+                    continue
+
+                merged_id = opportunity_id or str(matched.get("opportunity_id") or "").strip() or None
+                if merged_id == getattr(opportunity, "opportunity_id", None):
+                    canonical.append(opportunity)
+                    continue
+                if hasattr(opportunity, "model_copy"):
+                    canonical.append(opportunity.model_copy(update={"opportunity_id": merged_id}))
+                else:  # pragma: no cover
+                    canonical.append(opportunity.copy(update={"opportunity_id": merged_id}))
+            return canonical
+
+        if not preflight_context:
+            return []
+        opportunities = []
+        for item in preflight_items:
+            if not isinstance(item, dict):
+                continue
+            opportunities.append(
+                Opportunity(
+                    opportunity_id=str(item.get("opportunity_id") or "").strip() or None,
+                    title=str(item.get("title") or "Unknown"),
+                    agency=item.get("agency"),
+                    scope=str(item.get("scope") or ""),
+                    estimated_value=item.get("estimated_value"),
+                    timeline=item.get("timeline"),
+                    incumbent=item.get("incumbent"),
+                    cmmc_level=item.get("cmmc_level"),
+                    confidence=item.get("confidence") if item.get("confidence") in {"High", "Medium", "Low"} else "Medium",
+                    citations=[],
+                )
+            )
+        return opportunities
+
     def _fallback_confidence_note(self, fallback_reason: str) -> str:
         if fallback_reason == "extraction_skip":
             return "Report generated with fallback logic after extraction gating."
@@ -729,7 +832,7 @@ class FinalAnalystAgent:
                 credentials_lines.append(f"- Lookup failures: {counts['Lookup Failed']}")
                 if counts["Lookup Failed"] > 0:
                     failed_titles = [
-                        title
+                        response.opportunity_title or title
                         for title, response in credentials.items()
                         if response.lookup_status == "Lookup Failed"
                     ]
@@ -1025,13 +1128,14 @@ class FinalAnalystAgent:
         credentials: Dict[str, CredentialsResponse],
     ) -> str:
         chunks: List[str] = []
-        for title, response in credentials.items():
+        for key, response in credentials.items():
             if response.lookup_status != "Matched" or not response.matches:
                 continue
             match_titles = [match.title for match in response.matches[:2] if match.title]
             if not match_titles:
                 continue
-            chunks.append(f"{title} -> {', '.join(match_titles)}")
+            opportunity_label = response.opportunity_title or key
+            chunks.append(f"{opportunity_label} -> {', '.join(match_titles)}")
         return "; ".join(chunks)
 
     def _fallback_phase2_headline(

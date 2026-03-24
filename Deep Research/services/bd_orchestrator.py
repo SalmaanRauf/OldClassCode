@@ -9,6 +9,7 @@ Orchestrates the sequence:
 5. Synthesize final MD Report via Final Analyst
 """
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -145,6 +146,10 @@ class BDOrchestrator:
             # Step 2: Extract opportunities
             await self._notify(progress_cb, "Extracting opportunities...")
             ctx.parsed_research = self.extractor.extract(ctx.deep_research_raw or "")
+            ctx.parsed_research.opportunities = self._ensure_opportunity_ids(
+                ctx.parsed_research.opportunities,
+                prefix="bd",
+            )
             ctx.parsed_research.structured_citations = self._merge_source_urls(
                 list(ctx.parsed_research.structured_citations or []) + ctx.structured_source_urls
             )
@@ -164,6 +169,10 @@ class BDOrchestrator:
                 )
                 ctx.opportunity_digest_diagnostics = digest_details
                 if digested_opportunities:
+                    digested_opportunities = self._ensure_opportunity_ids(
+                        digested_opportunities,
+                        prefix="bd",
+                    )
                     candidate_signals = 0
                     if ctx.parsed_research.extraction_diagnostics:
                         candidate_signals = ctx.parsed_research.extraction_diagnostics.candidate_signal_count
@@ -310,6 +319,7 @@ class BDOrchestrator:
             
             # Step 4: Synthesize final report
             await self._notify(progress_cb, "Synthesizing MD Report...")
+            preflight_context = self._build_preflight_context(ctx)
             ctx.final_report = await self.final_analyst.synthesize(
                 trigger,
                 ctx.parsed_research,
@@ -325,6 +335,7 @@ class BDOrchestrator:
                 confirmed_signal_evidence=ctx.fs_signal_evidence,
                 phase3_candidates=ctx.fs_phase3_candidates,
                 allowed_sources=ctx.fs_allowed_sources,
+                preflight_context=preflight_context,
             )
             self._attach_credentials_evidence(ctx.final_report, ctx.credentials_results, ctx.credentials_diagnostics)
             self._attach_pipeline_diagnostics(ctx.final_report, ctx)
@@ -435,9 +446,13 @@ class BDOrchestrator:
     ) -> None:
         """Attach explicit credentials evidence and lookup statuses to the final report."""
         report.credentials_evidence = list(diagnostics.values())
-        for opp_report in report.top_opportunities:
-            title = opp_report.opportunity.title
-            cred_resp = self._resolve_credentials_response_for_title(title, credentials_results)
+        for index, opp_report in enumerate(report.top_opportunities):
+            cred_resp = self._resolve_credentials_response_for_opportunity(
+                getattr(opp_report.opportunity, "opportunity_id", None),
+                opp_report.opportunity.title,
+                credentials_results,
+                fallback_index=index,
+            )
             if not cred_resp:
                 continue
 
@@ -473,11 +488,15 @@ class BDOrchestrator:
                 else:
                     phase_opp.credentials_summary = "No materially aligned credentials identified."
 
-    def _resolve_credentials_response_for_title(
+    def _resolve_credentials_response_for_opportunity(
         self,
+        opportunity_id: Optional[str],
         title: str,
         credentials_results: Dict[str, CredentialsResponse],
+        fallback_index: Optional[int] = None,
     ) -> Optional[CredentialsResponse]:
+        if opportunity_id and opportunity_id in credentials_results:
+            return credentials_results[opportunity_id]
         if title in credentials_results:
             return credentials_results[title]
 
@@ -504,6 +523,9 @@ class BDOrchestrator:
         if fuzzy_hits:
             fuzzy_hits.sort(key=lambda item: len(item[0]), reverse=True)
             return fuzzy_hits[0][1]
+
+        if fallback_index is not None and 0 <= fallback_index < len(credentials_results):
+            return list(credentials_results.values())[fallback_index]
         return None
 
     def _resolve_credentials_response_for_signal(
@@ -521,6 +543,8 @@ class BDOrchestrator:
             (key, response)
             for key, response in credentials_results.items()
             if self._extract_signal_code(key) == normalized_code
+            or self._extract_signal_code(response.opportunity_title) == normalized_code
+            or self._extract_signal_code(response.opportunity_id or "") == normalized_code
         ]
         if len(scoped) == 1:
             return scoped[0][1]
@@ -562,9 +586,14 @@ class BDOrchestrator:
     def _phase_candidates_to_opportunities(self, ctx: BDContext) -> List[Opportunity]:
         """Convert deterministic phase candidates into opportunities for credential validation."""
         opportunities: List[Opportunity] = []
-        for candidate in ctx.fs_phase3_candidates[:3]:
+        for index, candidate in enumerate(ctx.fs_phase3_candidates[:3], 1):
+            opportunity_id = self._build_opportunity_id(
+                prefix="phase3",
+                parts=[candidate.derived_from_signal, candidate.overview, candidate.technical_explanation],
+            )
             opportunities.append(
                 Opportunity(
+                    opportunity_id=opportunity_id,
                     title=f"{candidate.derived_from_signal}: {candidate.overview[:90]}",
                     agency=None,
                     scope=(candidate.technical_explanation or candidate.overview or "").strip(),
@@ -577,6 +606,51 @@ class BDOrchestrator:
                 )
             )
         return opportunities
+
+    def _ensure_opportunity_ids(self, opportunities: List[Opportunity], *, prefix: str) -> List[Opportunity]:
+        normalized: List[Opportunity] = []
+        for index, opportunity in enumerate(opportunities, 1):
+            if getattr(opportunity, "opportunity_id", None):
+                normalized.append(opportunity)
+                continue
+            normalized.append(
+                opportunity.model_copy(
+                    update={"opportunity_id": self._build_opportunity_id(prefix=prefix, parts=[opportunity.title, opportunity.scope, getattr(opportunity, "agency", "") or "", ",".join(opportunity.citations or [])])}
+                )
+            )
+        return normalized
+
+    def _build_preflight_context(self, ctx: BDContext) -> Dict[str, Any]:
+        opportunities = [
+            {
+                "opportunity_id": opp.opportunity_id,
+                "title": opp.title,
+                "agency": opp.agency,
+                "scope": opp.scope,
+                "estimated_value": opp.estimated_value,
+                "timeline": opp.timeline,
+                "incumbent": opp.incumbent,
+                "cmmc_level": opp.cmmc_level,
+                "confidence": opp.confidence,
+            }
+            for opp in (ctx.parsed_research.opportunities if ctx.parsed_research else [])
+        ]
+        return {
+            "sector": ctx.trigger.sector,
+            "signals": list(ctx.trigger.signals),
+            "company_focus": ctx.trigger.company_focus,
+            "geography": ctx.trigger.geography,
+            "time_window_days": ctx.trigger.time_window_days,
+            "min_value_usd": ctx.trigger.min_value_usd,
+            "opportunities": opportunities,
+            "opportunities_source": ctx.opportunities_source,
+            "structured_source_urls": list(ctx.structured_source_urls),
+        }
+
+    def _build_opportunity_id(self, *, prefix: str, parts: List[str]) -> str:
+        seed = "|".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+        digest = hashlib.sha1(f"{prefix}|{seed}".encode("utf-8")).hexdigest()[:12]
+        return f"{prefix}_{digest}"
     
     def _save_trace(self, ctx: BDContext, duration: float):
         """Save execution trace to file."""

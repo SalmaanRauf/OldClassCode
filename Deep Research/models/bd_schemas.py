@@ -64,6 +64,7 @@ class Opportunity(BaseModel):
     - CMMC/compliance requirements
     - Confidence level based on citation quality
     """
+    opportunity_id: Optional[str] = Field(None, description="Stable opportunity identifier")
     title: str = Field(..., description="Opportunity title")
     agency: Optional[str] = Field(None, description="Government agency or organization")
     scope: str = Field(..., description="Scope of work description")
@@ -175,6 +176,7 @@ class CredentialsResponse(BaseModel):
     
     Contains matching credentials or explicitly flags when none found.
     """
+    opportunity_id: Optional[str] = Field(None, description="Stable opportunity identifier")
     opportunity_title: str = Field(..., description="The opportunity being validated")
     matches: List[CredentialMatch] = Field(default_factory=list, description="Matching credentials")
     no_matches_found: bool = Field(False, description="True if no relevant credentials exist")
@@ -227,6 +229,7 @@ class CredentialsResponse(BaseModel):
 class CredentialsLookupDiagnostics(BaseModel):
     """Per-opportunity diagnostics for Credentials Agent telemetry."""
 
+    opportunity_id: Optional[str] = Field(None, description="Stable opportunity identifier")
     opportunity_title: str = Field(..., description="Opportunity title sent to credentials agent")
     sector: str = Field("", description="Sector context passed to credentials agent")
     query_text: str = Field("", description="Full rendered prompt/query sent to credentials agent")
@@ -268,6 +271,7 @@ class MDReportOpportunity(BaseModel):
     
     Combines Deep Research opportunity with Credentials Agent results.
     """
+    opportunity_id: Optional[str] = Field(None, description="Stable opportunity identifier")
     opportunity: Opportunity = Field(..., description="The opportunity from Deep Research")
     credentials: List[CredentialMatch] = Field(default_factory=list, description="Supporting credentials")
     validation_status: Literal["Validated", "Partial", "No Internal Data"] = Field(

@@ -81,11 +81,12 @@ class CredentialsLookupRunner:
         assert self.credentials_agent is not None
 
         if self.lookup_mode == "batched_single_call":
-            results, batch_diagnostics = await self.credentials_agent.find_credentials_batch(
+            raw_results, batch_diagnostics = await self.credentials_agent.find_credentials_batch(
                 requested,
                 sector,
                 max_matches_per_opportunity=3,
             )
+            results = self._normalize_results_by_identity(requested, raw_results)
             diagnostics = self._collect_credentials_diagnostics(requested, sector, results)
             status_counts = self._count_lookup_statuses(results)
             return CredentialsLookupRunResult(
@@ -97,8 +98,10 @@ class CredentialsLookupRunner:
             )
 
         results: Dict[str, CredentialsResponse] = {}
-        for opportunity in requested:
-            results[opportunity.title] = await self._lookup_single_with_retry(opportunity, sector)
+        for index, opportunity in enumerate(requested, 1):
+            key = self._opportunity_key(opportunity, index)
+            response = await self._lookup_single_with_retry(opportunity, sector)
+            results[key] = self._normalize_single_response_identity(response, opportunity, key)
 
         diagnostics = self._collect_credentials_diagnostics(requested, sector, results)
         status_counts = self._count_lookup_statuses(results)
@@ -176,13 +179,15 @@ class CredentialsLookupRunner:
         results: Dict[str, CredentialsResponse],
     ) -> Dict[str, CredentialsLookupDiagnostics]:
         diagnostics: Dict[str, CredentialsLookupDiagnostics] = {}
-        for opportunity in opportunities:
-            response = results.get(opportunity.title)
+        for index, opportunity in enumerate(opportunities, 1):
+            key = self._opportunity_key(opportunity, index)
+            response = results.get(key) or results.get(opportunity.title)
             if response and response.diagnostics:
-                diagnostics[opportunity.title] = response.diagnostics
+                diagnostics[key] = self._normalize_diagnostics_identity(response.diagnostics, opportunity, key)
                 continue
             lookup_status = response.lookup_status if response else "Lookup Failed"
-            diagnostics[opportunity.title] = CredentialsLookupDiagnostics(
+            diagnostics[key] = CredentialsLookupDiagnostics(
+                opportunity_id=key,
                 opportunity_title=opportunity.title,
                 sector=sector,
                 query_text="",
@@ -194,3 +199,57 @@ class CredentialsLookupRunner:
                 match_count=len(response.matches) if response else 0,
             )
         return diagnostics
+
+    def _normalize_results_by_identity(
+        self,
+        opportunities: List[Opportunity],
+        results: Dict[str, CredentialsResponse],
+    ) -> Dict[str, CredentialsResponse]:
+        normalized: Dict[str, CredentialsResponse] = {}
+        for index, opportunity in enumerate(opportunities, 1):
+            key = self._opportunity_key(opportunity, index)
+            response = results.get(key) or results.get(opportunity.title)
+            if response is None:
+                normalized[key] = CredentialsResponse(
+                    opportunity_id=key,
+                    opportunity_title=opportunity.title,
+                    matches=[],
+                    no_matches_found=True,
+                    lookup_status="Lookup Failed",
+                    failure_reason="Missing credentials response in batch result set.",
+                )
+                continue
+            normalized[key] = self._normalize_single_response_identity(response, opportunity, key)
+        return normalized
+
+    def _normalize_single_response_identity(
+        self,
+        response: CredentialsResponse,
+        opportunity: Opportunity,
+        key: str,
+    ) -> CredentialsResponse:
+        if response.opportunity_id != key:
+            response.opportunity_id = key
+        if response.opportunity_title != opportunity.title:
+            response.opportunity_title = opportunity.title
+        if response.diagnostics:
+            response.diagnostics = self._normalize_diagnostics_identity(response.diagnostics, opportunity, key)
+        return response
+
+    def _normalize_diagnostics_identity(
+        self,
+        diagnostics: CredentialsLookupDiagnostics,
+        opportunity: Opportunity,
+        key: str,
+    ) -> CredentialsLookupDiagnostics:
+        if diagnostics.opportunity_id != key:
+            diagnostics.opportunity_id = key
+        if diagnostics.opportunity_title != opportunity.title:
+            diagnostics.opportunity_title = opportunity.title
+        return diagnostics
+
+    def _opportunity_key(self, opportunity: Opportunity, index: int) -> str:
+        candidate = str(getattr(opportunity, "opportunity_id", "") or "").strip()
+        if candidate:
+            return candidate
+        return f"opp_{index}"

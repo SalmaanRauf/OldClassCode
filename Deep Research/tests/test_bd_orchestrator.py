@@ -234,6 +234,20 @@ class TestFullWorkflow:
         assert report.lookups_executed_count == 1
         assert report.credentials_batch_diagnostics is None
         assert report.credentials_lookup_mode == "serial_per_opportunity"
+
+    @pytest.mark.asyncio
+    async def test_assigns_stable_opportunity_ids_before_lookup_and_synthesis(
+        self, orchestrator, sample_trigger, mock_extractor, mock_credentials_agent, mock_final_analyst
+    ):
+        await orchestrator.run(
+            sample_trigger,
+            deep_research_output=SAMPLE_DEEP_RESEARCH,
+        )
+
+        opportunity_arg = mock_credentials_agent.find_credentials.call_args.args[0]
+        assert opportunity_arg.opportunity_id is not None
+        preflight_context = mock_final_analyst.synthesize.call_args.kwargs["preflight_context"]
+        assert preflight_context["opportunities"][0]["opportunity_id"] is not None
     
     @pytest.mark.asyncio
     async def test_progress_callback_receives_updates(

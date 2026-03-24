@@ -55,7 +55,7 @@ class MovementBriefAssembler:
             for item in ordered_rows[:10]
         ]
         signal_summary = self._build_signal_summary(trigger, signal_evidence, deep_research_summary)
-        where_to_act = self._build_actions(trigger, ordered_rows)
+        where_to_act = self._build_actions(trigger, ordered_rows, credential_packets)
         executive_summary = self._build_executive_summary(
             request=request,
             preflight=preflight,
@@ -92,6 +92,7 @@ class MovementBriefAssembler:
         credential_packets: Dict[str, MovementCredentialsProof],
     ) -> MovementRecord:
         movement = row["movement"]
+        opportunity_id = str(row.get("opportunity_id") or getattr(movement, "opportunity_id", "") or "").strip()
         leverage = MovementLeverageSummary(
             known=bool(row.get("known")),
             worked_with=bool(row.get("worked_with")),
@@ -100,7 +101,11 @@ class MovementBriefAssembler:
             relationship_owner=row.get("relationship_owner"),
             person_match_status=row.get("person_match_status"),
         )
-        proof = credential_packets.get(movement.person_name)
+        proof = (
+            credential_packets.get(opportunity_id)
+            or credential_packets.get(movement.person_name)
+            or credential_packets.get(str(getattr(movement, "title", "") or "").strip())
+        )
         updates = {
             "leverage": leverage,
             "credentials_proof": proof,
@@ -133,10 +138,16 @@ class MovementBriefAssembler:
         self,
         trigger: BDTrigger,
         ranked_rows: List[Dict[str, Any]],
+        credential_packets: Dict[str, MovementCredentialsProof],
     ) -> List[MovementAction]:
         actions: List[MovementAction] = []
-        for item in ranked_rows[:3]:
-            actions.append(self._build_action_from_row(item))
+        action_rows = sorted(
+            ranked_rows,
+            key=lambda item: self._action_rank_score(item, credential_packets),
+            reverse=True,
+        )
+        for item in action_rows[:3]:
+            actions.append(self._build_action_from_row(item, credential_packets))
 
         while len(actions) < 3:
             actions.append(
@@ -151,7 +162,11 @@ class MovementBriefAssembler:
 
         return actions[:3]
 
-    def _build_action_from_row(self, row: Dict[str, Any]) -> MovementAction:
+    def _build_action_from_row(
+        self,
+        row: Dict[str, Any],
+        credential_packets: Dict[str, MovementCredentialsProof],
+    ) -> MovementAction:
         movement: MovementRecord = row["movement"]
         posture = str(row.get("action_posture") or "Monitor")
         if posture not in {"Immediate Re-engagement", "Expansion Opportunity", "Monitor"}:
@@ -162,6 +177,7 @@ class MovementBriefAssembler:
         win_count = int(row.get("win_count") or 0)
         known = bool(row.get("known"))
         worked_with = bool(row.get("worked_with"))
+        proof = self._lookup_proof_packet(row, credential_packets)
 
         project_bits = []
         if project_count or win_count:
@@ -184,6 +200,10 @@ class MovementBriefAssembler:
             if worked_with:
                 leverage_suffix.append("delivery history")
             why_now = f"{why_now} Leverage: {', '.join(leverage_suffix)}."
+        if proof and proof.lookup_status == "Matched" and proof.summary:
+            why_now = f"{why_now} Credential proof: {proof.summary}"
+        elif proof and proof.lookup_status == "Lookup Failed" and proof.summary:
+            why_now = f"{why_now} Credential lookup warning: {proof.summary}"
 
         return MovementAction(
             action_posture=posture,  # type: ignore[arg-type]
@@ -216,6 +236,12 @@ class MovementBriefAssembler:
         matched_count = len([packet for packet in credential_packets.values() if packet.lookup_status == "Matched"])
         summary = deep_research_summary.strip() or f"Broader signals reinforce the move context at {to_company}."
         action_hint = where_to_act[0].likely_play if where_to_act else "prioritize the strongest movement-led advisory opening"
+        if not visible_rows:
+            return (
+                f"{request.person_name if request else lead} moved from {from_company} to {to_company} as {new_role}. "
+                f"{summary} Movement extraction returned no visible rows for the cover brief, so treat this run as degraded "
+                f"and review the full research report and movement evidence artifacts before acting."
+            )
         return (
             f"{request.person_name if request else lead} moved from {from_company} to {to_company} as {new_role}. "
             f"{summary} The brief retained {len(visible_rows)} visible movement rows, confirmed {len(confirmed)} supporting signals, "
@@ -241,6 +267,39 @@ class MovementBriefAssembler:
         if signal_summary:
             return signal_summary[0]
         return f"{trigger.company_focus or trigger.sector} movement coverage is currently sparse."
+
+    def _action_rank_score(
+        self,
+        row: Dict[str, Any],
+        credential_packets: Dict[str, MovementCredentialsProof],
+    ) -> float:
+        score = float(row.get("rank_score") or 0.0)
+        score += float(row.get("project_count") or 0) * 0.5
+        score += float(row.get("win_count") or 0) * 1.5
+        if row.get("known"):
+            score += 3.0
+        if row.get("worked_with"):
+            score += 4.0
+        proof = self._lookup_proof_packet(row, credential_packets)
+        if proof:
+            if proof.lookup_status == "Matched":
+                score += 15.0 + (len(proof.matched_credentials or []) * 2.0)
+            elif proof.lookup_status == "Lookup Failed":
+                score -= 2.0
+        return score
+
+    def _lookup_proof_packet(
+        self,
+        row: Dict[str, Any],
+        credential_packets: Dict[str, MovementCredentialsProof],
+    ) -> Optional[MovementCredentialsProof]:
+        movement: MovementRecord = row["movement"]
+        opportunity_id = str(row.get("opportunity_id") or getattr(movement, "opportunity_id", "") or "").strip()
+        return (
+            credential_packets.get(opportunity_id)
+            or credential_packets.get(movement.person_name)
+            or credential_packets.get(str(getattr(movement, "title", "") or "").strip())
+        )
 
     @staticmethod
     def _copy_model(model: MovementRecord, **updates: Any) -> MovementRecord:

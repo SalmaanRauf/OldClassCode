@@ -6,6 +6,7 @@ from datetime import date
 
 import sys
 import os
+import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.final_analyst_agent import FinalAnalystAgent
@@ -619,6 +620,179 @@ def test_parse_report_uses_index_fallback_for_canonical_opportunity_titles():
     assert report.top_opportunities[1].credentials[0].title == "Credential B"
 
 
+def test_parse_report_prefers_stable_opportunity_ids_over_rewritten_titles():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(
+                opportunity_id="opp_a",
+                title="Canonical First",
+                scope="Scope A",
+                confidence="High",
+            ),
+            Opportunity(
+                opportunity_id="opp_b",
+                title="Canonical Second",
+                scope="Scope B",
+                confidence="High",
+            ),
+        ]
+    )
+    credentials = {
+        "opp_a": CredentialsResponse(
+            opportunity_id="opp_a",
+            opportunity_title="Canonical First",
+            matches=[
+                CredentialMatch(
+                    title="Credential A",
+                    client_challenge="Challenge A",
+                    approach="Approach A",
+                    value_provided="Value A",
+                    url="https://ishare.protiviti.com/cred/a",
+                )
+            ],
+            lookup_status="Matched",
+        ),
+        "opp_b": CredentialsResponse(
+            opportunity_id="opp_b",
+            opportunity_title="Canonical Second",
+            matches=[
+                CredentialMatch(
+                    title="Credential B",
+                    client_challenge="Challenge B",
+                    approach="Approach B",
+                    value_provided="Value B",
+                    url="https://ishare.protiviti.com/cred/b",
+                )
+            ],
+            lookup_status="Matched",
+        ),
+    }
+    response_text = json.dumps(
+        {
+            "trigger_summary": "FS run",
+            "executive_summary": "Deep Research Findings\nSummary.\n\nCredentials Agent Findings\nNarrative.\n\nCombined Report & Action Items\n- Action.",
+            "top_opportunities": [
+                {
+                    "opportunity_id": "opp_b",
+                    "title": "Rewritten Opportunity Beta",
+                    "scope": "Scope B",
+                    "validation_status": "No Internal Data",
+                    "credentials": [],
+                },
+                {
+                    "opportunity_id": "opp_a",
+                    "title": "Rewritten Opportunity Alpha",
+                    "scope": "Scope A",
+                    "validation_status": "No Internal Data",
+                    "credentials": [],
+                },
+            ],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials=credentials,
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=2,
+        lookups_executed_count=2,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 2, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    assert report.top_opportunities[0].opportunity.opportunity_id == "opp_b"
+    assert report.top_opportunities[1].opportunity.opportunity_id == "opp_a"
+    assert report.top_opportunities[0].credentials[0].title == "Credential B"
+    assert report.top_opportunities[1].credentials[0].title == "Credential A"
+
+
+def test_synthesize_returns_fallback_when_kernel_bootstrap_fails(monkeypatch):
+    agent = FinalAnalystAgent()
+    trigger = BDTrigger(sector="Defense", signals=["CMMC"])
+    research = DeepResearchOutput(executive_summary="Summary")
+
+    async def boom():
+        raise RuntimeError("kernel boot failed")
+
+    monkeypatch.setattr(agent, "_ensure_kernel", boom)
+
+    import asyncio
+
+    report = asyncio.run(
+        agent.synthesize(
+            trigger=trigger,
+            research=research,
+            credentials={},
+            opportunity_extraction_status="Parsed",
+            opportunity_extraction_reason=None,
+            opportunities_extracted_count=0,
+            lookups_executed_count=0,
+            lookups_skipped_reason=None,
+            credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+            credentials_lookup_mode="serial_per_opportunity",
+            credentials_batch_diagnostics=None,
+        )
+    )
+
+    assert report.synthesis_status == "fallback"
+    assert report.synthesis_fallback_reason == "synthesis_error"
+    assert "kernel boot failed" in (report.synthesis_error_message or "")
+
+
+def test_build_prompt_variables_includes_preflight_context_and_opportunity_ids():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Financial Services", signals=["FS.EXEC.TRANSITION"])
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(
+                opportunity_id="opp_a",
+                title="Opportunity A",
+                scope="Scope A",
+                confidence="High",
+            )
+        ]
+    )
+
+    prompt_vars = agent._build_prompt_variables(
+        trigger=trigger,
+        research=research,
+        credentials={
+            "opp_a": CredentialsResponse(
+                opportunity_id="opp_a",
+                opportunity_title="Opportunity A",
+                matches=[],
+                lookup_status="No Match",
+            )
+        },
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=1,
+        lookups_executed_count=1,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 0, "No Match": 1, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+        confirmed_signal_evidence=None,
+        phase3_candidates=None,
+        allowed_sources=None,
+        preflight_context={"opportunities": [{"opportunity_id": "opp_a", "title": "Opportunity A"}]},
+    )
+
+    assert '"opportunity_id": "opp_a"' in prompt_vars["opportunities_json"]
+    assert '"opportunity_id": "opp_a"' in prompt_vars["credentials_json"]
+    assert '"opportunities"' in prompt_vars["preflight_context_json"]
+
+
 def test_fallback_phase2_footnotes_use_strict_structured_schema():
     agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
     signal_evidence = [
@@ -763,6 +937,7 @@ def test_build_prompt_variables_includes_current_date_and_prompt_context():
         confirmed_signal_evidence=None,
         phase3_candidates=None,
         allowed_sources=None,
+        preflight_context=None,
     )
 
     assert prompt_vars["current_date_iso"] == date.today().isoformat()
@@ -792,6 +967,7 @@ def test_build_prompt_variables_truncates_prompt_context():
         confirmed_signal_evidence=None,
         phase3_candidates=None,
         allowed_sources=None,
+        preflight_context=None,
     )
 
     assert len(prompt_vars["user_prompt_context"]) <= 600
@@ -892,3 +1068,75 @@ def test_fallback_report_sanitizes_stale_phase3_candidate_actions():
     assert report.phase3_opportunities[0].recommended_actions == [
         "Start delivery within the next 30-90 days."
     ]
+
+
+def test_canonical_opportunities_merge_ids_from_preflight_context():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(title="Opp 2", scope="Scope 2", confidence="Medium"),
+        ]
+    )
+
+    canonical = agent._canonical_opportunities(
+        research,
+        preflight_context={
+            "opportunities": [
+                {"opportunity_id": "opp_a", "title": "Opp 1", "scope": "Scope 1"},
+                {"opportunity_id": "opp_b", "title": "Opp 2", "scope": "Scope 2"},
+            ]
+        },
+    )
+
+    assert canonical[0].opportunity_id == "opp_a"
+    assert canonical[1].opportunity_id == "opp_b"
+
+
+def test_parse_report_does_not_positionally_rebind_unknown_reported_opportunity_id():
+    agent = FinalAnalystAgent(kernel=object(), exec_settings=object())
+    trigger = BDTrigger(sector="Defense", signals=["CMMC"])
+    research = DeepResearchOutput(
+        opportunities=[
+            Opportunity(opportunity_id="opp_a", title="Opp 1", scope="Scope 1", confidence="High"),
+            Opportunity(opportunity_id="opp_b", title="Opp 2", scope="Scope 2", confidence="Medium"),
+        ]
+    )
+
+    response_text = json.dumps(
+        {
+            "trigger_summary": "Defense research",
+            "executive_summary": "Deep Research Findings\n...\nCredentials Agent Findings\n...\nCombined Report & Action Items\n...",
+            "top_opportunities": [
+                {
+                    "opportunity_id": "unknown_opp",
+                    "title": "Completely rewritten title",
+                    "scope": "Rewritten scope",
+                    "validation_status": "No Internal Data",
+                    "credentials": [],
+                }
+            ],
+            "signals_detected": [],
+            "recommended_actions": [],
+            "confidence_note": "High confidence",
+        }
+    )
+
+    report = agent._parse_report(
+        response_text=response_text,
+        trigger=trigger,
+        research=research,
+        credentials={},
+        opportunity_extraction_status="Parsed",
+        opportunity_extraction_reason=None,
+        opportunities_extracted_count=2,
+        lookups_executed_count=0,
+        lookups_skipped_reason=None,
+        credentials_status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+        credentials_lookup_mode="serial_per_opportunity",
+        credentials_batch_diagnostics=None,
+    )
+
+    opp = report.top_opportunities[0]
+    assert opp.opportunity.opportunity_id == "unknown_opp"
+    assert opp.opportunity.title == "Completely rewritten title"
