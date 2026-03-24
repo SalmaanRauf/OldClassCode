@@ -1779,6 +1779,7 @@ async def present_movement_brief(result, *, run_id: str) -> None:
     brief_element = cl.CustomElement(
         name="MovementBrief",
         display="inline",
+        size="large",
         props=payload,
     )
     await cl.Message(

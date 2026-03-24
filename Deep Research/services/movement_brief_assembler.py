@@ -4,6 +4,7 @@ Deterministic assembly for the people movement brief.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Dict, List, Optional
 
 from models.bd_schemas import BDTrigger, SignalEvidence
@@ -129,8 +130,9 @@ class MovementBriefAssembler:
                 f"No confirmed signals were extracted for {trigger.company_focus or trigger.sector}."
             )
 
-        if deep_research_summary.strip():
-            summary.append(deep_research_summary.strip())
+        account_context = self._compact_deep_research_summary(deep_research_summary)
+        if account_context:
+            summary.append(f"Account context: {account_context}")
 
         return summary[:2]
 
@@ -185,10 +187,11 @@ class MovementBriefAssembler:
             project_bits.append(f"{win_count} wins")
         project_suffix = f" ({', '.join(project_bits)})" if project_bits else ""
 
-        if movement.category == "BUYER":
-            likely_play = f"Buyer-led expansion around {movement.new_role.lower()}{project_suffix}."
-        else:
-            likely_play = f"Executive support around {movement.new_role.lower()}{project_suffix}."
+        likely_play = self._build_likely_play(
+            movement,
+            project_suffix,
+            buyer=(movement.category == "BUYER"),
+        )
 
         why_now = movement.evidence.evidence_quote
         if relationship_owner:
@@ -234,13 +237,23 @@ class MovementBriefAssembler:
         to_company = preflight.to_account.company_name if preflight else (request.to_company if request else trigger.company_focus or "the destination account")
         new_role = request.new_role if request else "the new role"
         matched_count = len([packet for packet in credential_packets.values() if packet.lookup_status == "Matched"])
-        summary = deep_research_summary.strip() or f"Broader signals reinforce the move context at {to_company}."
         action_hint = where_to_act[0].likely_play if where_to_act else "prioritize the strongest movement-led advisory opening"
+        visible_count = len(visible_rows)
+        signal_count = len(confirmed)
+        prioritized_count = len(derived_opportunities)
+        coverage_summary = (
+            f"The cover brief retains {visible_count} visible mover{'' if visible_count == 1 else 's'}, "
+            f"confirms {signal_count} supporting signal{'' if signal_count == 1 else 's'}, "
+            f"and matched credentials for {matched_count} of {prioritized_count} prioritized "
+            f"play{'' if prioritized_count == 1 else 's'}."
+        )
         if not visible_rows:
+            account_context = self._compact_deep_research_summary(deep_research_summary)
+            context_line = f" Account context: {account_context}" if account_context else ""
             return (
                 f"In this planning scenario, {request.person_name if request else lead} is moving from {from_company} to {to_company} as {new_role}. "
-                f"{summary} Movement extraction returned no visible rows for the cover brief, so treat this run as degraded "
-                f"and review the full research report and movement evidence artifacts before acting."
+                f"Movement extraction returned no visible rows for the cover brief, so treat this run as degraded "
+                f"and review the full research report and movement evidence artifacts before acting.{context_line}"
             )
         lead_in = (
             f"In this planning scenario, {request.person_name if request else lead} is moving from {from_company} to {to_company} as {new_role}. "
@@ -249,9 +262,8 @@ class MovementBriefAssembler:
         )
         return (
             f"{lead_in}"
-            f"{summary} The brief retained {len(visible_rows)} visible movement rows, confirmed {len(confirmed)} supporting signals, "
-            f"and matched credentials for {matched_count} of {len(derived_opportunities)} prioritized plays. "
-            f"Lead with {lead} and {action_hint.lower()}."
+            f"{coverage_summary} "
+            f"Start with {lead} and {action_hint.lower()}."
         )
 
     def _build_takeaway(
@@ -264,6 +276,12 @@ class MovementBriefAssembler:
         if visible_rows:
             lead = visible_rows[0]
             posture = where_to_act[0].action_posture if where_to_act else "Monitor"
+            if posture == "Monitor":
+                return (
+                    f"{trigger.company_focus or trigger.sector} shows active executive and buyer movement. "
+                    f"Keep {lead.person_name} at the top of the watchlist, then track the remaining {len(visible_rows) - 1} visible movers "
+                    f"for role changes or warm-path openings."
+                )
             return (
                 f"{trigger.company_focus or trigger.sector} shows active executive and buyer movement. "
                 f"Lead with {lead.person_name} first, then work the remaining {len(visible_rows) - 1} visible movers "
@@ -272,6 +290,50 @@ class MovementBriefAssembler:
         if signal_summary:
             return signal_summary[0]
         return f"{trigger.company_focus or trigger.sector} movement coverage is currently sparse."
+
+    @staticmethod
+    def _compact_deep_research_summary(summary: str) -> str:
+        text = str(summary or "").strip()
+        if not text:
+            return ""
+
+        text = re.sub(r"(?is)^final report:\s*", "", text)
+        text = re.sub(r"(?is)^executive summary:\s*", "", text)
+        text = text.replace("**", "").replace("__", "")
+        text = re.sub(r"\s+", " ", text).strip()
+        text = re.split(r"(?i)\bSources?:\b", text, maxsplit=1)[0].strip()
+        text = re.sub(r"^#{1,6}\s*", "", text)
+        text = re.sub(r"\s+#{1,6}\s+", " ", text)
+        if not text:
+            return ""
+
+        sentences = [item.strip() for item in re.split(r"(?<=[.!?])\s+", text) if item.strip()]
+        compact = sentences[0] if sentences else text
+        if len(compact) > 220:
+            compact = compact[:217].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
+        return compact
+
+    @staticmethod
+    def _build_likely_play(
+        movement: MovementRecord,
+        project_suffix: str,
+        *,
+        buyer: bool,
+    ) -> str:
+        new_role = (movement.new_role or "").strip()
+        previous_role = (movement.previous_role or "the prior role").strip()
+        movement_type = (movement.movement_type or "").strip().lower()
+        is_departure = (
+            "depart" in movement_type
+            or new_role.lower() in {"departed", "departure"}
+            or "depart" in new_role.lower()
+        )
+        if is_departure:
+            prefix = "Buyer transition coverage" if buyer else "Executive transition coverage"
+            return f"{prefix} around {previous_role.lower()} departure{project_suffix}."
+        if buyer:
+            return f"Buyer-led expansion around {new_role.lower()}{project_suffix}."
+        return f"Executive support around {new_role.lower()}{project_suffix}."
 
     def _action_rank_score(
         self,

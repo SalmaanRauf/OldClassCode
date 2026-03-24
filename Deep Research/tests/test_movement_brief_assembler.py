@@ -245,3 +245,100 @@ def test_assemble_brief_uses_credential_proof_to_raise_action_priority():
 
     assert brief.where_to_act[0].person_name == "Person 1"
     assert "Credential proof: Matched credentials: AI Governance Transformation." in brief.where_to_act[0].why_now
+
+
+def test_assemble_brief_keeps_cover_summary_compact_when_deep_research_summary_is_verbose_report():
+    assembler = MovementBriefAssembler()
+
+    verbose_report = (
+        "Final Report: # Federal National Mortgage Association (Fannie Mae) - Recent Risk & Regulatory Signals "
+        "Fannie Mae has undergone significant leadership changes and faces an evolving regulatory landscape over the past several months. "
+        "## 1. Executive Transitions "
+        "Detailed discussion follows with multiple sections, citations, and source blocks. "
+        "Sources: 1. Example Source 2. Another Source"
+    )
+
+    brief = assembler.assemble(
+        request=_request(),
+        preflight=_preflight(),
+        trigger=_trigger(),
+        deep_research_summary=verbose_report,
+        signal_evidence=[
+            SignalEvidence(
+                signal_code="FS.EXEC.TRANSITION",
+                signal_label="Executive Movement",
+                status="Confirmed",
+                evidence_quote="Leadership is shifting.",
+                source_url="https://example.com/exec",
+                source_title="Exec Source",
+                analysis="Executive movement supports governance reset.",
+            )
+        ],
+        ranked_rows=[
+            {
+                "movement": _movement(0),
+                "known": False,
+                "worked_with": False,
+                "project_count": 0,
+                "win_count": 0,
+                "relationship_owner": None,
+                "person_match_status": "matched",
+                "rank_score": 10,
+                "action_posture": "Expansion Opportunity",
+            }
+        ],
+        deep_enriched_rows=[],
+        credential_packets={},
+        derived_opportunities=[],
+    )
+
+    assert "Final Report:" not in brief.executive_summary
+    assert "## 1. Executive Transitions" not in brief.executive_summary
+    assert all("Final Report:" not in item for item in brief.signal_summary)
+    assert all("Sources:" not in item for item in brief.signal_summary)
+    assert brief.signal_summary[0] == "Confirmed signals: Executive Movement."
+
+
+def test_assemble_brief_uses_transition_language_for_departure_actions():
+    assembler = MovementBriefAssembler()
+    departure_row = MovementRecord(
+        person_name="Danielle M. McCoy",
+        target_company="Fannie Mae",
+        previous_role="SVP & General Counsel, Fannie Mae",
+        new_role="Departed",
+        movement_type="Departure",
+        category="BUYER",
+        company_context="internal",
+        evidence=MovementEvidence(
+            evidence_quote="Danielle M. McCoy departed after 19 years.",
+            source_url="https://example.com/departure",
+            source_title="Departure Source",
+        ),
+    )
+
+    brief = assembler.assemble(
+        request=_request(),
+        preflight=_preflight(),
+        trigger=_trigger(),
+        deep_research_summary="Fannie Mae is under active leadership transition.",
+        signal_evidence=[],
+        ranked_rows=[
+            {
+                "movement": departure_row,
+                "known": False,
+                "worked_with": False,
+                "project_count": 0,
+                "win_count": 0,
+                "relationship_owner": None,
+                "person_match_status": "matched",
+                "rank_score": 10,
+                "action_posture": "Monitor",
+            }
+        ],
+        deep_enriched_rows=[],
+        credential_packets={},
+        derived_opportunities=[],
+    )
+
+    assert "around departed" not in brief.where_to_act[0].likely_play.lower()
+    assert "transition" in brief.where_to_act[0].likely_play.lower()
