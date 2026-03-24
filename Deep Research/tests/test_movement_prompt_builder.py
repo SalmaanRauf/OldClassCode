@@ -136,9 +136,9 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
     package = builder.build(_request(), _preflight())
 
     assert "FINANCIAL SERVICES BASE PROMPT" in package.system_prompt
-    assert "Named-Move People Movement Overlay" in package.system_prompt
+    assert "People Movement Account Overlay" in package.system_prompt
     assert "buyer movement" in package.system_prompt.lower()
-    assert "lookback window" in package.system_prompt.lower()
+    assert "destination account" in package.system_prompt.lower()
 
 
 def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
@@ -147,10 +147,18 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
 
     package = builder.build(_request(synthetic=True), _preflight())
 
-    assert "Jennifer Brady has moved from Capital One to Fannie Mae" in package.user_prompt
-    assert "Chief Information Officer" in package.user_prompt
+    assert package.user_prompt.startswith(
+        "Research Federal National Mortgage Association (Fannie Mae) across all relevant Financial Services signals."
+    )
     assert "180 days" in package.user_prompt
     assert "executive movement" in package.user_prompt.lower()
     assert "buyer movement" in package.user_prompt.lower()
-    assert "hypothetical planning scenario" in package.user_prompt.lower()
-    assert "AI governance program" in package.user_prompt
+    assert "why the account matters now" in package.user_prompt.lower()
+    assert "source-backed movement evidence" in package.user_prompt.lower()
+    assert "Jennifer Brady" not in package.user_prompt
+    assert "Capital One" not in package.user_prompt
+    assert "Chief Information Officer" not in package.user_prompt
+    assert "hypothetical planning scenario" not in package.user_prompt.lower()
+    assert "AI governance program" not in package.user_prompt
+    assert "Resolved source account ID" not in package.user_prompt
+    assert "Warm intro path available" not in package.user_prompt

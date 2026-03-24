@@ -11,13 +11,12 @@ from services.prompt_loader import PromptLoader
 
 
 NAMED_MOVE_OVERLAY = """
-## Named-Move People Movement Overlay
-- This research run supports a named-move people movement workflow, not a generic company briefing.
+## People Movement Account Overlay
+- This research run supports a movement-led account brief, not a generic company briefing.
 - Keep the research broad across requested Financial Services signals, but prioritize executive movement and buyer movement.
-- Use the named move as the anchor for why-now analysis and search the requested lookback window for related movement.
-- Bias findings toward signals that explain why the move matters now, while preserving broader account-signal coverage.
-- Treat synthetic scenarios as hypothetical planning scenarios, not as verified public facts.
-- The final cover artifact is movement-led, so preserve source-backed movement evidence that can later feed the leverage table.
+- Focus research on the destination account and the requested lookback window.
+- Bias findings toward signals that explain why the account matters now, while preserving broader account-signal coverage.
+- Preserve source-backed movement evidence that can later feed the leverage table.
 """.strip()
 
 
@@ -61,37 +60,19 @@ class MovementPromptBuilder:
         request: MovementBriefRequest,
         preflight: TransitionPreflight,
     ) -> str:
-        resolved_from_company = str(preflight.from_account.company_name or "").strip() or request.from_company
         resolved_to_company = str(preflight.to_account.company_name or "").strip() or request.to_company
-        summary = (
-            f"{request.person_name} has moved from {resolved_from_company} to {resolved_to_company}, "
-            f"with a new role as {request.new_role}."
-        )
-        lines = [summary]
+        lines = [
+            f"Research {resolved_to_company} across all relevant Financial Services signals."
+        ]
         lines.append(
-            f"Source all relevant information and find executive and buyer movement within the last {request.lookback_days} days."
+            f"Prioritize Executive Movement and Buyer Movement within the last {request.lookback_days} days."
         )
         lines.append(
-            "Keep all relevant Financial Services signals in scope, but bias the research toward executive movement, buyer movement, and why the move matters now."
+            "Bias non-movement findings toward explaining why the account matters now."
         )
-        if request.synthetic_scenario:
-            lines.append(
-                "Treat this as a hypothetical planning scenario for demo purposes, not a verified public executive move."
-            )
-        lines.extend(
-            [
-                f"Named mover match status: {preflight.person_resolution.match_status}",
-                f"Resolved source account ID: {preflight.from_account.account_id or 'unresolved'}",
-                f"Resolved destination account ID: {preflight.to_account.account_id or 'unresolved'}",
-                f"Warm intro path available: {'yes' if preflight.quick_indicators.warm_intro_path_available else 'no'}",
-                f"Prior work at source account: {'yes' if preflight.quick_indicators.source_worked_before else 'no'}",
-                f"Prior work at destination account: {'yes' if preflight.quick_indicators.destination_worked_before else 'no'}",
-            ]
+        lines.append(
+            "Preserve source-backed movement evidence suitable for a movement-led account brief."
         )
-        if preflight.opportunity_hypotheses:
-            lines.append("Top hypotheses to investigate:")
-            for hypothesis in preflight.opportunity_hypotheses[:3]:
-                lines.append(f"- {hypothesis.title} ({hypothesis.confidence}): {hypothesis.rationale}")
         if request.geography:
             lines.append(f"Geography: {request.geography}")
         if request.additional_context:
