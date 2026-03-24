@@ -160,7 +160,8 @@ def test_assemble_brief_caps_rows_and_actions_and_attaches_proof_packets():
         derived_opportunities=[object(), object()],
     )
 
-    assert "Jennifer Brady moved from Capital One to Fannie Mae as Chief Information Officer." in brief.executive_summary
+    assert "planning scenario" in brief.executive_summary.lower()
+    assert "Jennifer Brady is moving from Capital One to Fannie Mae as Chief Information Officer" in brief.executive_summary
     assert len(brief.signal_summary) == 2
     assert len(brief.movement_rows) == 10
     assert len(brief.where_to_act) == 3

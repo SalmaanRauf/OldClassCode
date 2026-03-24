@@ -182,6 +182,7 @@ def build_movement_brief_payload(
         "subtitle": subtitle,
         "move_summary": _build_move_summary(request, preflight, brief),
         "signal_summary": list(brief.signal_summary[:4]),
+        "destination_account_opportunity_context": _build_destination_account_opportunity_context(preflight),
         "table_columns": MOVEMENT_TABLE_COLUMNS,
         "stats": _build_stats(visible_rows, visible_actions),
         "movement_rows": row_payloads,
@@ -340,6 +341,28 @@ def _build_move_summary(
         "source_worked_before": bool(indicators.source_worked_before) if indicators else False,
         "destination_worked_before": bool(indicators.destination_worked_before) if indicators else False,
     }
+
+
+def _build_destination_account_opportunity_context(
+    preflight: Optional[TransitionPreflight],
+) -> List[Dict[str, str]]:
+    if not preflight or not getattr(preflight, "opportunity_hypotheses", None):
+        return []
+    context: List[Dict[str, str]] = []
+    for hypothesis in list(preflight.opportunity_hypotheses)[:3]:
+        title = _normalize_text(getattr(hypothesis, "title", "") or "")
+        confidence = _normalize_text(getattr(hypothesis, "confidence", "") or "")
+        rationale = _normalize_text(getattr(hypothesis, "rationale", "") or "")
+        if not title:
+            continue
+        context.append(
+            {
+                "title": title,
+                "confidence": confidence or "Medium",
+                "rationale": rationale,
+            }
+        )
+    return context
 
 
 def _normalize_secondary_controls(controls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

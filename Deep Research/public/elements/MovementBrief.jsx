@@ -29,6 +29,7 @@ export default function MovementBrief() {
     const actions = safeList(data.where_to_act);
     const stats = data.stats || {};
     const moveSummary = data.move_summary || {};
+    const destinationOpportunityContext = safeList(data.destination_account_opportunity_context);
 
     const toggleExpanded = (rowId) => {
         setExpandedRowId((current) => (current === rowId ? null : rowId));
@@ -94,6 +95,31 @@ export default function MovementBrief() {
                             <p className="text-sm text-slate-600">No signal summary available.</p>
                         )}
                     </SectionCard>
+
+                    {destinationOpportunityContext.length ? (
+                        <SectionCard title="Destination Account Opportunity Context">
+                            <ul className="grid gap-3">
+                                {destinationOpportunityContext.map((item, index) => (
+                                    <li
+                                        key={`${item.title}-${index}`}
+                                        className="rounded-[20px] border border-[#dccfbf] bg-white px-4 py-4 shadow-sm"
+                                    >
+                                        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                            <div className="space-y-2">
+                                                <h3 className="text-base font-medium tracking-[-0.02em] text-slate-900">
+                                                    {item.title}
+                                                </h3>
+                                                <p className="text-sm leading-6 text-slate-700">{item.rationale || "No supporting rationale available."}</p>
+                                            </div>
+                                            <span className="inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-900">
+                                                {item.confidence || "Medium"}
+                                            </span>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
+                        </SectionCard>
+                    ) : null}
 
                     <SectionCard title="Who Has Moved - And Where We Have Leverage">
                         <div className="hidden md:block">

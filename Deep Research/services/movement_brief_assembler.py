@@ -238,12 +238,17 @@ class MovementBriefAssembler:
         action_hint = where_to_act[0].likely_play if where_to_act else "prioritize the strongest movement-led advisory opening"
         if not visible_rows:
             return (
-                f"{request.person_name if request else lead} moved from {from_company} to {to_company} as {new_role}. "
+                f"In this planning scenario, {request.person_name if request else lead} is moving from {from_company} to {to_company} as {new_role}. "
                 f"{summary} Movement extraction returned no visible rows for the cover brief, so treat this run as degraded "
                 f"and review the full research report and movement evidence artifacts before acting."
             )
+        lead_in = (
+            f"In this planning scenario, {request.person_name if request else lead} is moving from {from_company} to {to_company} as {new_role}. "
+            if request and request.synthetic_scenario
+            else f"{request.person_name if request else lead} moved from {from_company} to {to_company} as {new_role}. "
+        )
         return (
-            f"{request.person_name if request else lead} moved from {from_company} to {to_company} as {new_role}. "
+            f"{lead_in}"
             f"{summary} The brief retained {len(visible_rows)} visible movement rows, confirmed {len(confirmed)} supporting signals, "
             f"and matched credentials for {matched_count} of {len(derived_opportunities)} prioritized plays. "
             f"Lead with {lead} and {action_hint.lower()}."

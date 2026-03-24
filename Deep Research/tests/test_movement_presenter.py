@@ -287,6 +287,13 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
     assert payload["move_summary"]["warm_intro_path_available"] is True
     assert payload["move_summary"]["source_worked_before"] is True
     assert payload["move_summary"]["destination_worked_before"] is True
+    assert payload["destination_account_opportunity_context"] == [
+        {
+            "title": "AI governance program",
+            "confidence": "High",
+            "rationale": "CIO transition increases pressure around AI oversight.",
+        }
+    ]
     assert payload["movement_rows"][0]["signal"] == "BUYER"
     assert payload["movement_rows"][0]["has_credential_proof"] is True
     assert payload["movement_rows"][0]["has_person_detail"] is True
@@ -344,5 +351,6 @@ def test_build_movement_brief_payload_keeps_only_top_ten_rows_and_three_actions(
     assert len(payload["movement_rows"]) == 10
     assert len(payload["row_details_by_id"]) == 10
     assert len(payload["where_to_act"]) == 3
+    assert len(payload["destination_account_opportunity_context"]) == 1
     assert payload["movement_rows"][-1]["row_id"] == "movement-row-10"
     assert payload["where_to_act"][-1]["person_name"] == "Person 3"
