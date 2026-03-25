@@ -3,6 +3,10 @@ import React, { useState } from "react";
 const BRIEF_STYLES = `
   .movement-brief {
     width: 100%;
+    max-width: min(94rem, 100%);
+    margin: 0 auto;
+    padding: 0 clamp(0.25rem, 1vw, 0.75rem);
+    min-width: 0;
     color: #1f2937;
     font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
   }
@@ -14,6 +18,7 @@ const BRIEF_STYLES = `
 
   .movement-brief__surface {
     width: 100%;
+    max-width: 100%;
     background: #f7f4ee;
     border: 1px solid #d9d2c6;
     border-radius: 1.5rem;

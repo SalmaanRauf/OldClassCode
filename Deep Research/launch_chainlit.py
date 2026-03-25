@@ -27,9 +27,9 @@ def main():
 
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{root}:{env.get('PYTHONPATH','')}"
+    env["CHAINLIT_APP_ROOT"] = str(root)
     print("Launching Chainlit at http://localhost:8000")
     subprocess.run([sys.executable, "-m", "chainlit", "run", "chainlit_app/main.py", "--host", "localhost", "--port", "8000"], cwd=root, env=env, check=False)
 
 if __name__ == "__main__":
     main()
-
