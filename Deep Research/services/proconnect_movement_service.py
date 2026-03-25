@@ -3,6 +3,7 @@ Lightweight two-pass ProConnect enrichment for movement-led workflows.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from models.movement_schemas import MovementRecord
@@ -20,6 +21,7 @@ from scripts.proconnect_stakeholder_payload import (
 
 
 PersonLoader = Callable[[str, str], Optional[Dict[str, Any]]]
+logger = logging.getLogger(__name__)
 
 
 class ProConnectMovementService:
@@ -107,12 +109,23 @@ class ProConnectMovementService:
 
         account = self._resolve_company_account(person_name=person_name, target_company=target_company)
         if not account:
+            logger.info(
+                "ProConnect movement lookup unresolved person=%s company=%s reason=account_unresolved",
+                person_name,
+                target_company,
+            )
             self._person_payload_cache[cache_key] = None
             return None
 
         account_id = str(account.get("id") or "").strip()
         exact_person = self._resolve_exact_person(person_name=person_name, account=account, account_id=account_id)
         if not exact_person:
+            logger.info(
+                "ProConnect movement lookup unresolved person=%s company=%s account_id=%s reason=no_exact_person",
+                person_name,
+                target_company,
+                account_id,
+            )
             self._person_payload_cache[cache_key] = None
             return None
 
@@ -127,6 +140,15 @@ class ProConnectMovementService:
             payload["id"] = payload.get("id") or detail.get("id")
             payload["accountId"] = payload.get("accountId") or detail.get("accountId")
 
+        logger.info(
+            "ProConnect movement lookup matched person=%s company=%s account_id=%s projects=%s wins=%s owner=%s",
+            person_name,
+            target_company,
+            account_id,
+            self._project_count(payload),
+            self._win_count(payload),
+            self._relationship_owner(payload),
+        )
         self._person_payload_cache[cache_key] = payload
         return payload
 
@@ -227,9 +249,15 @@ class ProConnectMovementService:
 
     @staticmethod
     def _project_count(payload: Dict[str, Any]) -> int:
-        explicit = payload.get("projectCount")
-        if isinstance(explicit, int):
-            return max(explicit, 0)
+        for key in ("projectCount", "project_count", "numberOfProjects", "numberOfProject"):
+            explicit = payload.get(key)
+            if isinstance(explicit, int):
+                return max(explicit, 0)
+            if isinstance(explicit, str) and explicit.strip():
+                try:
+                    return max(int(float(explicit)), 0)
+                except ValueError:
+                    pass
         projects = payload.get("projects")
         if isinstance(projects, list):
             return len(projects)
@@ -237,9 +265,18 @@ class ProConnectMovementService:
 
     @staticmethod
     def _win_count(payload: Dict[str, Any]) -> int:
-        explicit = payload.get("winCount")
-        if isinstance(explicit, int):
-            return max(explicit, 0)
+        for key in ("winCount", "win_count", "numberOfWins", "wins"):
+            explicit = payload.get(key)
+            if isinstance(explicit, int):
+                return max(explicit, 0)
+            if isinstance(explicit, str) and explicit.strip():
+                try:
+                    return max(int(float(explicit)), 0)
+                except ValueError:
+                    pass
+        explicit_wins = payload.get("closeWonOpps") or payload.get("closeWonOpportunities")
+        if isinstance(explicit_wins, list):
+            return len([item for item in explicit_wins if isinstance(item, dict)])
         wins = 0
         for item in payload.get("primaryKeyBuyerOf") or []:
             if not isinstance(item, dict):
@@ -256,12 +293,12 @@ class ProConnectMovementService:
         connections = payload.get("connections")
         if isinstance(connections, list) and connections:
             return True
-        relationship_owner = payload.get("relationshipOwner")
+        relationship_owner = payload.get("relationshipOwner") or payload.get("relationship_owner")
         return bool(str(relationship_owner or "").strip())
 
     @staticmethod
     def _relationship_owner(payload: Dict[str, Any]) -> Optional[str]:
-        direct = str(payload.get("relationshipOwner") or "").strip()
+        direct = str(payload.get("relationshipOwner") or payload.get("relationship_owner") or "").strip()
         if direct:
             return direct
         connections = payload.get("connections")

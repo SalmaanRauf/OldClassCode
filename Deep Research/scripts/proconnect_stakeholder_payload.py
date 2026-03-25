@@ -2138,6 +2138,12 @@ def extract_person_search_candidates(payload: Any) -> List[Dict[str, Any]]:
                 "lastUpdated": first_non_empty(document, ["lastUpdated", "modifiedDate"]),
                 "accountId": first_non_empty(document, ["accountId", "sfdcAccountId"]),
                 "companyName": first_non_empty(document, ["companyName", "name"]),
+                "relationshipOwner": first_non_empty(document, ["relationshipOwner", "relationship_owner"]),
+                "projectCount": first_non_empty(document, ["projectCount", "project_count", "numberOfProjects"]),
+                "winCount": first_non_empty(document, ["winCount", "win_count", "numberOfWins", "wins"]),
+                "projects": first_non_empty(document, ["projects"]),
+                "closeWonOpps": first_non_empty(document, ["closeWonOpps", "closeWonOpportunities"]),
+                "connections": first_non_empty(document, ["connections"]),
             }
         )
 
@@ -2781,6 +2787,12 @@ def parse_person_like_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "level": first_non_empty(node, ["level"]),
         "photoUrl": first_non_empty(node, ["photoUrl"]),
         "lastUpdated": first_non_empty(node, ["lastUpdated", "modifiedDate"]),
+        "relationshipOwner": first_non_empty(node, ["relationshipOwner", "relationship_owner"]),
+        "projectCount": first_non_empty(node, ["projectCount", "project_count", "numberOfProjects"]),
+        "winCount": first_non_empty(node, ["winCount", "win_count", "numberOfWins", "wins"]),
+        "projects": first_non_empty(node, ["projects"]),
+        "closeWonOpps": first_non_empty(node, ["closeWonOpps", "closeWonOpportunities"]),
+        "connections": first_non_empty(node, ["connections"]),
     }
 
 

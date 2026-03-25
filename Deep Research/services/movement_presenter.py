@@ -12,6 +12,7 @@ from models.movement_schemas import (
     MovementBrief,
     MovementCredentialsProof,
     MovementLeverageSummary,
+    MovementEvidence,
     MovementRecord,
 )
 from models.transition_schemas import TransitionPreflight
@@ -153,6 +154,7 @@ def build_movement_brief_payload(
     *,
     request: Optional[MovementBriefRequest] = None,
     preflight: Optional[TransitionPreflight] = None,
+    named_mover_context: Optional[Dict[str, Any]] = None,
     person_details_by_name: Optional[Dict[str, Dict[str, Any]]] = None,
     row_action_context_by_row_id: Optional[Dict[str, Dict[str, Any]]] = None,
     row_action_context_by_person_name: Optional[Dict[str, Dict[str, Any]]] = None,
@@ -160,7 +162,16 @@ def build_movement_brief_payload(
     subtitle: str = "Executive and buyer movement with leverage, proof, and next actions.",
 ) -> Dict[str, Any]:
     """Build the structured payload for the movement brief custom element."""
-    visible_rows = list(brief.movement_rows[:10])
+    visible_rows = list(brief.movement_rows or [])
+    scenario_row = _build_named_mover_board_row(
+        request=request,
+        preflight=preflight,
+        named_mover_context=named_mover_context or {},
+        movement_rows=visible_rows,
+    )
+    if scenario_row is not None:
+        visible_rows = [scenario_row, *visible_rows]
+    visible_rows = visible_rows[:10]
     visible_actions = list(brief.where_to_act[:3])
     row_payloads: List[Dict[str, Any]] = []
     row_details_by_id: Dict[str, Dict[str, Any]] = {}
@@ -179,12 +190,21 @@ def build_movement_brief_payload(
             index=index,
         )
         row_payloads.append(row_payload)
-        row_details_by_id[row_id] = _build_row_detail(
-            row=row,
-            row_id=row_id,
-            row_payload=row_payload,
-            person_details_by_name=person_details_by_name,
-        )
+        if row.company_context == "scenario":
+            row_details_by_id[row_id] = _build_named_mover_detail(
+                row=row,
+                row_id=row_id,
+                row_payload=row_payload,
+                preflight=preflight,
+                named_mover_context=named_mover_context or {},
+            )
+        else:
+            row_details_by_id[row_id] = _build_row_detail(
+                row=row,
+                row_id=row_id,
+                row_payload=row_payload,
+                person_details_by_name=person_details_by_name,
+            )
 
     payload = {
         "title": title,
@@ -227,6 +247,9 @@ def _build_row_payload(
     )
     action_posture = action_context.get("action_posture") or (action.action_posture if action else "Monitor")
     action_summary = action_context.get("action_summary") or (action.likely_play if action else "")
+    if row.company_context == "scenario" and not action_context and not action:
+        action_posture = "Expansion Opportunity" if leverage.known or leverage.worked_with else "Monitor"
+        action_summary = f"Named move scenario around {_normalize_text(row.new_role).lower()}."
     signal_label = "BUYER" if row.category == "BUYER" else "EXEC"
 
     return {
@@ -279,7 +302,7 @@ def _build_row_detail(
         "row_id": row_id,
         "signal": row_payload["signal"],
         "evidence_quote": _normalize_text(row.evidence.evidence_quote),
-        "source_url": _normalize_text(row.evidence.source_url),
+        "source_url": _public_source_url(row.evidence.source_url),
         "source_title": _normalize_text(row.evidence.source_title or "") or None,
         "source_marker": _normalize_text(row.evidence.source_marker or "") or None,
         "corroborated": row.evidence.corroborated,
@@ -374,6 +397,157 @@ def _build_destination_account_opportunity_context(
     return context
 
 
+def _build_named_mover_board_row(
+    *,
+    request: Optional[MovementBriefRequest],
+    preflight: Optional[TransitionPreflight],
+    named_mover_context: Dict[str, Any],
+    movement_rows: List[MovementRecord],
+) -> Optional[MovementRecord]:
+    if request is None or preflight is None or not request.synthetic_scenario or not named_mover_context:
+        return None
+    if _normalize_text(preflight.person_resolution.match_status).lower() != "matched":
+        return None
+
+    named_people = {
+        _normalize_person_name(request.person_name),
+        _normalize_person_name(preflight.person_resolution.matched_name or ""),
+    }
+    named_people.discard("")
+    if any(_normalize_person_name(row.person_name) in named_people for row in movement_rows):
+        return None
+
+    person_profile = _clean_dict(named_mover_context.get("person_profile"))
+    matched_person = _clean_dict(person_profile.get("matched_person"))
+    from_context = _clean_dict(named_mover_context.get("from_company_context"))
+    to_context = _clean_dict(named_mover_context.get("to_company_context"))
+    match_scope = _normalize_text(preflight.person_resolution.match_scope or matched_person.get("company_scope")).lower()
+    scope_context = from_context if match_scope == "from" else to_context if match_scope == "to" else {}
+    account_team = _clean_dict(scope_context.get("account_team"))
+    relationship_network = _clean_dict(scope_context.get("relationship_network"))
+    connected_colleagues = _clean_list(_clean_dict(relationship_network.get("connected_colleagues")).get("items"))
+    alumni = _clean_list(_clean_dict(relationship_network.get("protiviti_alumni")).get("items"))
+
+    project_count = _first_positive_int(
+        person_profile.get("project_count"),
+        matched_person.get("project_count"),
+        matched_person.get("projectCount"),
+    )
+    win_count = _first_positive_int(
+        person_profile.get("win_count"),
+        matched_person.get("win_count"),
+        matched_person.get("winCount"),
+    )
+    relationship_owner = _first_non_empty_text(
+        person_profile.get("relationship_owner"),
+        matched_person.get("relationship_owner"),
+        matched_person.get("relationshipOwner"),
+        _clean_dict(account_team.get("account_executive")).get("name"),
+        _clean_dict(account_team.get("account_mdd")).get("name"),
+        _clean_dict(account_team.get("account_pmo")).get("name"),
+    )
+
+    scope_worked_before = (
+        preflight.quick_indicators.source_worked_before
+        if match_scope == "from"
+        else preflight.quick_indicators.destination_worked_before
+        if match_scope == "to"
+        else (
+            preflight.quick_indicators.source_worked_before
+            or preflight.quick_indicators.destination_worked_before
+        )
+    )
+    known = bool(
+        person_profile.get("direct_person_evidence")
+        or preflight.quick_indicators.warm_intro_path_available
+        or project_count > 0
+        or win_count > 0
+        or relationship_owner
+        or connected_colleagues
+        or alumni
+    )
+    worked_with = bool(project_count > 0 or win_count > 0 or scope_worked_before)
+    leverage = MovementLeverageSummary(
+        known=known,
+        worked_with=worked_with,
+        project_count=project_count,
+        win_count=win_count,
+        relationship_owner=relationship_owner or None,
+        person_match_status=_normalize_text(preflight.person_resolution.match_status) or None,
+    )
+
+    matched_name = _normalize_text(preflight.person_resolution.matched_name or request.person_name)
+    matched_title = _normalize_text(preflight.person_resolution.matched_title or "")
+    target_company = _normalize_text(preflight.to_account.company_name or request.to_company)
+    return MovementRecord(
+        person_name=matched_name,
+        target_company=target_company,
+        previous_role=matched_title or f"Current role at {request.from_company}",
+        new_role=_normalize_text(request.new_role),
+        movement_type="Named move scenario",
+        category=_infer_named_mover_category(request.new_role),
+        company_context="scenario",
+        evidence=MovementEvidence(
+            evidence_quote=(
+                f"Scenario input validated against ProConnect: {matched_name} is modeled as moving "
+                f"from {request.from_company} to {target_company} as {request.new_role}."
+            ),
+            source_url="internal://named-move-scenario",
+            source_title="Scenario input + ProConnect preflight",
+            source_marker="Scenario",
+            corroborated=False,
+            confidence_label=None,
+        ),
+        leverage=leverage,
+    )
+
+
+def _build_named_mover_detail(
+    *,
+    row: MovementRecord,
+    row_id: str,
+    row_payload: Dict[str, Any],
+    preflight: Optional[TransitionPreflight],
+    named_mover_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    person_profile = _clean_dict(named_mover_context.get("person_profile"))
+    matched_person = _clean_dict(person_profile.get("matched_person"))
+    person_detail = {
+        "name": _normalize_text(preflight.person_resolution.matched_name if preflight else row.person_name) or row.person_name,
+        "title": _first_non_empty_text(preflight.person_resolution.matched_title if preflight else "", matched_person.get("title")),
+        "match_scope": _first_non_empty_text(
+            preflight.person_resolution.match_scope if preflight else "",
+            matched_person.get("company_scope"),
+        ),
+        "match_source": _normalize_text(preflight.person_resolution.match_source if preflight else ""),
+        "claim_policy_note": _normalize_text(person_profile.get("claim_policy_note")),
+    }
+    person_detail = {key: value for key, value in person_detail.items() if value}
+
+    return {
+        "row_id": row_id,
+        "signal": row_payload["signal"],
+        "evidence_quote": _normalize_text(row.evidence.evidence_quote),
+        "source_url": None,
+        "source_title": _normalize_text(row.evidence.source_title or "") or None,
+        "source_marker": _normalize_text(row.evidence.source_marker or "") or None,
+        "corroborated": False,
+        "confidence_label": row.evidence.confidence_label,
+        "known": row_payload["known"],
+        "worked_with": row_payload["worked_with"],
+        "project_count": row_payload["project_count"],
+        "win_count": row_payload["win_count"],
+        "relationship_owner": row_payload["relationship_owner"],
+        "person_match_status": row_payload["person_match_status"],
+        "credential_summary": "",
+        "lookup_status": "",
+        "matched_credentials": [],
+        "person_detail": person_detail,
+        "action_posture": row_payload["action_posture"],
+        "action_summary": _normalize_text(row_payload["action_summary"]),
+    }
+
+
 def _normalize_secondary_controls(controls: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     normalized: List[Dict[str, Any]] = []
     for control in controls:
@@ -398,6 +572,10 @@ def _clean_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _clean_list(value: Any) -> List[Any]:
+    return value if isinstance(value, list) else []
+
+
 def _normalize_action_context(value: Any) -> Dict[str, Any]:
     if not isinstance(value, dict):
         return {}
@@ -409,6 +587,62 @@ def _normalize_action_context(value: Any) -> Dict[str, Any]:
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _public_source_url(value: str) -> Optional[str]:
+    text = _normalize_text(value)
+    if not text or text.startswith("internal://"):
+        return None
+    return text
+
+
+def _normalize_person_name(value: str) -> str:
+    return _normalize_text(value).lower()
+
+
+def _first_non_empty_text(*values: Any) -> str:
+    for value in values:
+        normalized = _normalize_text(value)
+        if normalized:
+            return normalized
+    return ""
+
+
+def _first_positive_int(*values: Any) -> int:
+    for value in values:
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            if value > 0:
+                return value
+            continue
+        text = _normalize_text(value)
+        if not text:
+            continue
+        try:
+            parsed = int(float(text))
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            return parsed
+    return 0
+
+
+def _infer_named_mover_category(new_role: str) -> str:
+    normalized = _normalize_text(new_role).lower()
+    exec_markers = (
+        "chief",
+        "ceo",
+        "cio",
+        "cto",
+        "cfo",
+        "coo",
+        "president",
+        "general counsel",
+        "board",
+        "head of",
+    )
+    return "EXEC" if any(marker in normalized for marker in exec_markers) else "BUYER"
 
 
 def _format_industry_label(industry_key: str) -> str:

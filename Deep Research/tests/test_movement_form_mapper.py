@@ -455,7 +455,7 @@ def test_build_movement_person_details_and_row_action_context_capture_non_top_ro
     assert "executive support" in row_context["Jane Doe"]["action_summary"].lower()
 
 
-def test_build_movement_progress_content_tracks_pipeline_and_deep_research_polling():
+def test_build_movement_progress_content_tracks_pipeline_after_deep_research_handoff():
     content = build_movement_progress_content(
         {
             "person_name": "Jennifer Brady",
@@ -504,8 +504,8 @@ def test_build_movement_progress_content_tracks_pipeline_and_deep_research_polli
     assert "Executive movement: complete" in content
     assert "Buyer movement: complete" in content
     assert "ProConnect matching/enrichment: in progress" in content
-    assert "Deep Research polling" in content
-    assert "Poll: #2" in content
+    assert "Deep Research polling" not in content
+    assert "Poll: #2" not in content
 
 
 def test_build_movement_progress_content_omits_verbose_final_report_text_from_polling():
@@ -546,3 +546,46 @@ def test_build_movement_progress_content_omits_verbose_final_report_text_from_po
     assert "Latest update:" not in content
     assert "Final Report:" not in content
     assert "## 1. Executive Transitions" not in content
+
+
+def test_build_movement_progress_content_hides_deep_research_polling_once_downstream_stages_start():
+    content = build_movement_progress_content(
+        {
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "industry_override": "financial_services",
+        },
+        [
+            {
+                "stage": "running_deep_research",
+                "message": "Polling Deep Research.",
+                "status": "in_progress",
+                "citation_count": 48,
+                "poll_count": 336,
+                "activity_log": ["Scanning filings", "Checking leadership pages"],
+            },
+            {
+                "stage": "account_signals",
+                "message": "Normalizing financial-services signal evidence.",
+                "status": "in_progress",
+            },
+            {
+                "stage": "executive_movement",
+                "message": "Executive movement extracted.",
+                "status": "complete",
+            },
+            {
+                "stage": "assembling_brief",
+                "message": "Movement brief assembled.",
+                "status": "complete",
+            },
+        ],
+    )
+
+    assert "Stage: Brief assembly" in content
+    assert "Status: Complete" in content
+    assert "Deep Research polling" not in content
+    assert "Poll: #336" not in content

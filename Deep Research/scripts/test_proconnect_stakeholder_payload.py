@@ -513,6 +513,58 @@ def test_run_stakeholder_case_uses_har_backed_probe_data_and_person_detail(monke
     assert ("/api/prospects/contact-123", None) in client.endpoint_calls
 
 
+def test_parse_person_like_record_preserves_relationship_fields() -> None:
+    record = stakeholder_payload.parse_person_like_record(
+        {
+            "firstName": "Jason",
+            "lastName": "Dandridge",
+            "title": "Head of Operations",
+            "location": "Washington, DC, United States",
+            "relationshipOwner": "Ben L",
+            "projectCount": 4,
+            "projects": [{"name": "Control Environment Assessment"}],
+            "closeWonOpps": [{"name": "RCSA Program Development and Implementation"}],
+            "connections": [{"employee": {"name": "Ben L"}}],
+        }
+    )
+
+    assert record is not None
+    assert record["relationshipOwner"] == "Ben L"
+    assert record["projectCount"] == 4
+    assert len(record["projects"]) == 1
+    assert len(record["closeWonOpps"]) == 1
+    assert len(record["connections"]) == 1
+
+
+def test_extract_person_search_candidates_preserves_relationship_fields_when_present() -> None:
+    candidates = stakeholder_payload.extract_person_search_candidates(
+        {
+            "value": [
+                {
+                    "document": {
+                        "contactId": "contact-1",
+                        "accountId": "001-to",
+                        "companyName": "Federal National Mortgage Association (Fannie Mae)",
+                        "name": "Jason Dandridge",
+                        "title": "Head of Operations",
+                        "relationshipOwner": "Ben L",
+                        "projectCount": 3,
+                        "projects": [{"name": "Controls Review"}],
+                        "closeWonOpps": [{"name": "Controls Review"}],
+                        "connections": [{"employee": {"name": "Ben L"}}],
+                    }
+                }
+            ]
+        }
+    )
+
+    assert candidates[0]["relationshipOwner"] == "Ben L"
+    assert candidates[0]["projectCount"] == 3
+    assert len(candidates[0]["projects"]) == 1
+    assert len(candidates[0]["closeWonOpps"]) == 1
+    assert len(candidates[0]["connections"]) == 1
+
+
 def test_summarize_probe_payloads_surfaces_top_level_keys_and_node_paths() -> None:
     summaries = summarize_probe_payloads(
         [

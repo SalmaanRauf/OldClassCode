@@ -385,3 +385,55 @@ def test_build_movement_brief_payload_keeps_only_top_ten_rows_and_three_actions(
     assert len(payload["destination_account_opportunity_context"]) == 1
     assert payload["movement_rows"][-1]["row_id"] == "movement-row-10"
     assert payload["where_to_act"][-1]["person_name"] == "Person 3"
+
+
+def test_build_movement_brief_payload_prepends_named_mover_board_row_from_preflight_context():
+    movement_rows = [_movement(index) for index in range(3)]
+    payload = build_movement_brief_payload(
+        _brief(movement_rows, []),
+        request=_request(),
+        preflight=_preflight(),
+        named_mover_context={
+            "person_profile": {
+                "direct_person_evidence": True,
+                "relationship_owner": "Bernadette Norrington",
+                "project_count": 4,
+                "win_count": 2,
+                "claim_policy_note": "Direct person-level evidence found in ProConnect; person-level claim allowed.",
+                "matched_person": {
+                    "name": "Jennifer Brady",
+                    "title": "Senior Director of Technology Risk",
+                    "company_scope": "from",
+                },
+            },
+            "from_company_context": {
+                "account_team": {
+                    "account_executive": {"name": "Bernadette Norrington"},
+                },
+                "relationship_network": {
+                    "connected_colleagues": {"items": [{"name": "Bernadette Norrington"}]},
+                    "protiviti_alumni": {"items": []},
+                },
+            },
+            "to_company_context": {
+                "relationship_network": {
+                    "connected_colleagues": {"items": []},
+                    "protiviti_alumni": {"items": []},
+                }
+            },
+        },
+    )
+
+    assert payload["movement_rows"][0]["person_name"] == "Jennifer Brady"
+    assert payload["movement_rows"][0]["previous_role"] == "Senior Director of Technology Risk"
+    assert payload["movement_rows"][0]["new_role"] == "Chief Information Officer"
+    assert payload["movement_rows"][0]["known"] is True
+    assert payload["movement_rows"][0]["worked_with"] is True
+    assert payload["movement_rows"][0]["project_count"] == 4
+    assert payload["movement_rows"][0]["win_count"] == 2
+    assert payload["movement_rows"][0]["relationship_owner"] == "Bernadette Norrington"
+
+    detail = payload["row_details_by_id"]["movement-row-1"]
+    assert detail["source_title"] == "Scenario input + ProConnect preflight"
+    assert detail["source_url"] is None
+    assert detail["person_detail"]["match_scope"] == "from"

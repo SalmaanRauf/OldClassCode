@@ -59,6 +59,7 @@ class MovementBriefRunResult:
 
     request: MovementBriefRequest
     preflight: TransitionPreflight
+    actioning_context: Dict[str, Any]
     prompt_package: MovementPromptPackage
     movement_brief: MovementBrief
     deep_research_markdown: str
@@ -241,6 +242,20 @@ class MovementBriefOrchestrator:
             deep_research_markdown=deep_research_markdown,
             target_company_aliases=self._target_company_aliases(request, preflight),
         )
+        logger.info(
+            "Movement rows prepared run_id=%s extracted=%s retained=%s named_mover_present=%s",
+            reviewed_run_id,
+            movement_diagnostics.get("movements_returned"),
+            len(movement_rows),
+            any(
+                self._normalize_person_name(row.person_name)
+                in {
+                    self._normalize_person_name(request.person_name),
+                    self._normalize_person_name(preflight.person_resolution.matched_name or ""),
+                }
+                for row in movement_rows
+            ),
+        )
         executive_count = len([row for row in movement_rows if getattr(row, "category", "") == "EXEC"])
         buyer_count = len([row for row in movement_rows if getattr(row, "category", "") == "BUYER"])
         await self._emit(
@@ -296,6 +311,23 @@ class MovementBriefOrchestrator:
             status="complete",
             visible_row_count=len(ranked_rows[:10]),
             run_id=reviewed_run_id,
+        )
+        logger.info(
+            "Movement ProConnect enrichment summary run_id=%s rows=%s top=%s",
+            reviewed_run_id,
+            len(ranked_rows),
+            [
+                {
+                    "person": getattr(item.get("movement"), "person_name", ""),
+                    "match_status": item.get("person_match_status"),
+                    "known": bool(item.get("known")),
+                    "worked_with": bool(item.get("worked_with")),
+                    "projects": int(item.get("project_count") or 0),
+                    "wins": int(item.get("win_count") or 0),
+                    "owner": item.get("relationship_owner"),
+                }
+                for item in ranked_rows[:5]
+            ],
         )
 
         await self._emit(
@@ -372,6 +404,7 @@ class MovementBriefOrchestrator:
         return MovementBriefRunResult(
             request=request,
             preflight=preflight,
+            actioning_context=dict(actioning_context or {}),
             prompt_package=prompt_package,
             movement_brief=movement_brief,
             deep_research_markdown=deep_research_markdown,

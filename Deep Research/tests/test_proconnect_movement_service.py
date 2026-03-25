@@ -215,6 +215,30 @@ def test_worked_with_is_conservative_when_only_relationship_exists():
     assert enriched[0]["win_count"] == 0
 
 
+def test_light_enrichment_uses_close_won_and_snake_case_relationship_owner_fields():
+    def loader(name: str, company: str):
+        return {
+            "name": name,
+            "title": "Head of Operations",
+            "projectCount": 3,
+            "closeWonOpps": [
+                {"name": "Controls Review"},
+                {"name": "RCSA Program"},
+            ],
+            "relationship_owner": "Ben L",
+        }
+
+    service = ProConnectMovementService(person_loader=loader)
+
+    enriched = service.light_enrich_movements([_row("Jason Dandridge")])
+
+    assert enriched[0]["known"] is True
+    assert enriched[0]["worked_with"] is True
+    assert enriched[0]["project_count"] == 3
+    assert enriched[0]["win_count"] == 2
+    assert enriched[0]["relationship_owner"] == "Ben L"
+
+
 def test_deep_enrichment_preserves_default_values_when_no_match_exists():
     service = ProConnectMovementService(person_loader=lambda *_: None)
 

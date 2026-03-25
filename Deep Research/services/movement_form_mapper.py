@@ -406,6 +406,9 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             if idx < last_index:
                 item[1] = "complete"
 
+    if last_index >= _stage_index("account_signals"):
+        deep_research_event = None
+
     if latest_stage == "resolving_named_move":
         current_stage_label = "Move validation"
     elif latest_stage == "building_relationship_context":
@@ -575,6 +578,8 @@ def _format_movement_evidence(result: Any) -> str:
     for index, row in enumerate(movement_rows[:6], start=1):
         source_title = _normalize_text(getattr(getattr(row, "evidence", None), "source_title", "") or "")
         source_url = _normalize_text(getattr(getattr(row, "evidence", None), "source_url", "") or "")
+        if source_url.startswith("internal://"):
+            source_url = ""
         quote = _normalize_text(getattr(getattr(row, "evidence", None), "evidence_quote", "") or "")
         leverage = getattr(row, "leverage", None)
         proof = getattr(row, "credentials_proof", None)

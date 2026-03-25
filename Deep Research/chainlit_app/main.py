@@ -1783,6 +1783,7 @@ async def present_movement_brief(result, *, run_id: str) -> None:
         result.movement_brief,
         request=result.request,
         preflight=result.preflight,
+        named_mover_context=getattr(result, "actioning_context", {}) or {},
         person_details_by_name=build_movement_person_details_by_name(result),
         row_action_context_by_person_name=build_movement_row_action_context_by_person_name(result),
     )
