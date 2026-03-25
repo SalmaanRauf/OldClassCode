@@ -165,3 +165,66 @@ async def test_digest_filters_peer_company_movement_not_tied_to_target_company()
 
     assert rows == []
     assert diagnostics["movements_returned"] == 0
+
+
+@pytest.mark.asyncio
+async def test_digest_normalizes_categories_dedupes_rows_and_keeps_partial_role_rows():
+    digestor = FSMovementDigestor(kernel=_FakeKernel({
+        "movement_records": [
+            {
+                "person_name": "Thomas Klein",
+                "target_company": "Federal National Mortgage Association (Fannie Mae)",
+                "previous_role": "Enterprise Deputy General Counsel",
+                "new_role": "Acting General Counsel",
+                "movement_type": "Promotion",
+                "category": "buyer",
+                "company_context": "internal",
+                "evidence_quote": "Thomas Klein was elevated to Acting General Counsel.",
+                "source_url": "https://example.com/thomas-klein",
+                "source_title": "Leadership update",
+            },
+            {
+                "person_name": "Thomas Klein",
+                "target_company": "Fannie Mae",
+                "previous_role": "Enterprise Deputy General Counsel",
+                "new_role": "Acting General Counsel",
+                "movement_type": "Promotion",
+                "category": "BUYER",
+                "company_context": "internal",
+                "evidence_quote": "Thomas Klein was elevated to Acting General Counsel.",
+                "source_url": "https://example.com/thomas-klein",
+                "source_title": "Leadership update",
+            },
+            {
+                "person_name": "Priscilla Almodovar",
+                "target_company": "Fannie Mae",
+                "previous_role": "",
+                "new_role": "Departed",
+                "movement_type": "Departure",
+                "category": "exec",
+                "company_context": "leadership_change",
+                "evidence_quote": "Priscilla Almodovar stepped down as CEO.",
+                "source_url": "https://example.com/priscilla-almodovar",
+                "source_title": "CEO transition",
+            },
+        ]
+    }))
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.EXEC.TRANSITION"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find executive and buyer movement at Fannie Mae.",
+        ),
+        deep_research_markdown="Movement notes here.",
+        target_company_aliases=["Fannie Mae", "Federal National Mortgage Association (Fannie Mae)"],
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert diagnostics["movements_returned"] == 2
+    assert [(row.person_name, row.category) for row in rows] == [
+        ("Thomas Klein", "BUYER"),
+        ("Priscilla Almodovar", "EXEC"),
+    ]
+    assert rows[1].previous_role == ""

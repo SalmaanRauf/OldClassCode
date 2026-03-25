@@ -17,6 +17,7 @@ try:  # pragma: no cover - import style depends on entrypoint
         full_person_name,
         get_zoom_info_account_id,
         resolve_company_and_account,
+        same_first_last_name,
         top_person_candidates,
     )
 except ImportError:  # pragma: no cover
@@ -28,6 +29,7 @@ except ImportError:  # pragma: no cover
         full_person_name,
         get_zoom_info_account_id,
         resolve_company_and_account,
+        same_first_last_name,
         top_person_candidates,
     )
 
@@ -469,6 +471,8 @@ def run_stakeholder_case(
             "status": person_profile.get("match_status"),
             "match_source": person_resolution.get("match_source"),
             "match_scope": person_resolution.get("match_scope"),
+            "match_strategy": person_resolution.get("match_strategy"),
+            "loose_match_count": person_resolution.get("loose_match_count"),
             "matched_person": person_profile.get("matched_person"),
             "candidate_suggestions": person_profile.get("candidate_suggestions"),
             "direct_person_evidence": person_profile.get("direct_person_evidence"),
@@ -1341,59 +1345,100 @@ def resolve_person_transition(
     from_title_hints: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     exact_matches = [candidate for candidate in candidates if exact_name_equals(person_name, full_person_name(candidate))]
+    loose_matches = [
+        candidate
+        for candidate in candidates
+        if same_first_last_name(person_name, full_person_name(candidate))
+    ]
+
+    def _match_payload(
+        *,
+        matches: List[Dict[str, Any]],
+        scope: Optional[str],
+        title_hints: List[str],
+        strategy: str,
+    ) -> Dict[str, Any]:
+        selected = merge_person_candidates(
+            candidates=matches,
+            selected=select_best_candidate(matches, title_hints=title_hints),
+            title_hints=title_hints,
+        )
+        return {
+            "status": "matched",
+            "match_source": selected.get("_source"),
+            "match_scope": scope or selected.get("_company_scope") or "unknown",
+            "matched": selected,
+            "exact_match_count": len(exact_matches),
+            "loose_match_count": len(loose_matches),
+            "match_strategy": strategy,
+        }
 
     if not exact_matches:
+        to_loose_matches = [
+            item for item in loose_matches if str(item.get("linked_account_id") or "") == to_account_id
+        ]
+        if len(to_loose_matches) == 1:
+            return _match_payload(
+                matches=to_loose_matches,
+                scope="to",
+                title_hints=to_title_hints or [],
+                strategy="first_last_name_to_account",
+            )
+
+        from_loose_matches = [
+            item for item in loose_matches if str(item.get("linked_account_id") or "") == from_account_id
+        ]
+        if len(from_loose_matches) == 1:
+            return _match_payload(
+                matches=from_loose_matches,
+                scope="from",
+                title_hints=from_title_hints or [],
+                strategy="first_last_name_from_account",
+            )
+
+        if len(loose_matches) == 1:
+            return _match_payload(
+                matches=loose_matches,
+                scope=str(loose_matches[0].get("_company_scope") or "unknown"),
+                title_hints=[],
+                strategy="first_last_name_global",
+            )
+
         return {
             "status": "not_found",
             "match_source": None,
             "match_scope": None,
             "matched": None,
             "exact_match_count": 0,
+            "loose_match_count": len(loose_matches),
+            "match_strategy": None,
         }
 
     to_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == to_account_id]
     if to_matches:
-        selected = merge_person_candidates(
-            candidates=to_matches,
-            selected=select_best_candidate(to_matches, title_hints=to_title_hints or []),
+        return _match_payload(
+            matches=to_matches,
+            scope="to",
             title_hints=to_title_hints or [],
+            strategy="exact_name_to_account",
         )
-        return {
-            "status": "matched",
-            "match_source": selected.get("_source"),
-            "match_scope": "to",
-            "matched": selected,
-            "exact_match_count": len(exact_matches),
-        }
 
     from_matches = [item for item in exact_matches if str(item.get("linked_account_id") or "") == from_account_id]
     if from_matches:
-        selected = merge_person_candidates(
-            candidates=from_matches,
-            selected=select_best_candidate(from_matches, title_hints=from_title_hints or []),
+        return _match_payload(
+            matches=from_matches,
+            scope="from",
             title_hints=from_title_hints or [],
+            strategy="exact_name_from_account",
         )
-        return {
-            "status": "matched",
-            "match_source": selected.get("_source"),
-            "match_scope": "from",
-            "matched": selected,
-            "exact_match_count": len(exact_matches),
-        }
 
     if len(exact_matches) == 1:
-        selected = merge_person_candidates(
-            candidates=exact_matches,
-            selected=exact_matches[0],
+        return _match_payload(
+            matches=exact_matches,
+            scope=str(exact_matches[0].get("_company_scope") or "unknown"),
             title_hints=[],
+            strategy="exact_name_global",
         )
-        return {
-            "status": "matched",
-            "match_source": selected.get("_source"),
-            "match_scope": selected.get("_company_scope") or "unknown",
-            "matched": selected,
-            "exact_match_count": 1,
-        }
 
     return {
         "status": "ambiguous",
@@ -1401,6 +1446,8 @@ def resolve_person_transition(
         "match_scope": None,
         "matched": None,
         "exact_match_count": len(exact_matches),
+        "loose_match_count": len(loose_matches),
+        "match_strategy": None,
     }
 
 
@@ -1546,6 +1593,10 @@ def build_person_profile_transition(
             else "No direct person-level evidence found; use account-level claim with caution."
         ),
         "evidence_basis": evidence_basis,
+        "relationship_owner": None,
+        "project_count": 0,
+        "win_count": 0,
+        "match_strategy": person_resolution.get("match_strategy"),
     }
 
     if not matched:
@@ -1557,6 +1608,12 @@ def build_person_profile_transition(
         "source": person_resolution.get("match_source"),
         "company_scope": person_resolution.get("match_scope"),
         "linked_account_id": matched.get("linked_account_id"),
+        "relationship_owner": first_non_empty(matched, ["relationshipOwner", "relationship_owner"]),
+        "project_count": to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])),
+        "win_count": (
+            to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"]))
+            or len(to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"])))
+        ),
         "score": 1.0,
     }
 
@@ -1577,6 +1634,17 @@ def build_person_profile_transition(
     profile["last_updated"] = first_non_empty(matched, ["lastUpdated", "modifiedDate"])
     profile["past_job_experience"] = to_list(first_non_empty(matched, ["pastJobExperience", "pastJobs"]))
     profile["education"] = to_list(first_non_empty(matched, ["education", "educationList"]))
+    profile["relationship_owner"] = first_non_empty(matched, ["relationshipOwner", "relationship_owner"])
+    profile["project_count"] = (
+        to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"]))
+        or len(to_list_dicts(first_non_empty(matched, ["projects"])))
+        or 0
+    )
+    profile["win_count"] = (
+        to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"]))
+        or len(to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"])))
+        or 0
+    )
 
     if not any(
         [
@@ -2609,6 +2677,10 @@ def to_people_from_key_buyers(key_buyers: Any) -> List[Dict[str, Any]]:
                 "function": buyer.get("function"),
                 "lastOpportunityWonDate": buyer.get("lastOpportunityWonDate"),
                 "lastOpportunityStage": buyer.get("lastOpportunityStage"),
+                "relationshipOwner": buyer.get("relationshipOwner"),
+                "projectCount": first_non_empty(buyer, ["projectCount", "numberOfProjects", "numberOfProject"]),
+                "winCount": first_non_empty(buyer, ["winCount", "wins", "numberOfWins"]),
+                "projects": buyer.get("projects"),
                 "closeWonOpps": buyer.get("closeWonOpps"),
                 "_source": "key_buyers",
             }

@@ -43,7 +43,10 @@ class ProConnectMovementService:
 
     def light_enrich_movements(self, movement_rows: List[MovementRecord]) -> List[Dict[str, Any]]:
         """Return compact leverage facts for all movement rows."""
-        return [self._build_enrichment(row, include_person_detail=False) for row in movement_rows]
+        return [
+            self.enrich_movement(row, include_person_detail=False)
+            for row in movement_rows
+        ]
 
     def deep_enrich_movements(
         self,
@@ -53,10 +56,30 @@ class ProConnectMovementService:
     ) -> List[Dict[str, Any]]:
         """Return richer person detail for the highest-priority movement rows."""
         selected = movement_rows[:max_rows]
-        return [self._build_enrichment(row, include_person_detail=True) for row in selected]
+        return [
+            self.enrich_movement(row, include_person_detail=True)
+            for row in selected
+        ]
 
-    def _build_enrichment(self, row: MovementRecord, *, include_person_detail: bool) -> Dict[str, Any]:
-        payload = self.person_loader(row.person_name, row.target_company) or {}
+    def enrich_movement(
+        self,
+        row: MovementRecord,
+        *,
+        company_hint: Optional[str] = None,
+        include_person_detail: bool = False,
+    ) -> Dict[str, Any]:
+        """Return leverage facts for a single movement row, optionally scoped to a specific company."""
+        payload = self.person_loader(row.person_name, company_hint or row.target_company) or {}
+        return self._build_enrichment(row, payload=payload, include_person_detail=include_person_detail)
+
+    def _build_enrichment(
+        self,
+        row: MovementRecord,
+        *,
+        payload: Optional[Dict[str, Any]] = None,
+        include_person_detail: bool,
+    ) -> Dict[str, Any]:
+        payload = payload or {}
         matched = bool(payload)
         project_count = self._project_count(payload)
         win_count = self._win_count(payload)

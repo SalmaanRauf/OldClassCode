@@ -484,12 +484,14 @@ def _store_reviewed_run(
     *,
     run_id: str,
     preflight: Any,
+    actioning_context: Optional[Dict[str, Any]] = None,
     prompt_package: Any,
 ) -> WorkflowRunContext:
     updated = update_workflow_run(
         cl.user_session,
         run_id,
         preflight=_dump_model(preflight),
+        actioning_context=dict(actioning_context or {}) or None,
         prompt_package=_dump_model(prompt_package),
         prompt_override=None,
         progress=[],
@@ -567,6 +569,10 @@ def _load_movement_preflight_from_run(run: WorkflowRunContext):
     if hasattr(TransitionPreflight, "model_validate"):
         return TransitionPreflight.model_validate(payload)
     return TransitionPreflight.parse_obj(payload)
+
+
+def _load_movement_actioning_context_from_run(run: WorkflowRunContext) -> Dict[str, Any]:
+    return dict(run.actioning_context or {})
 
 
 def _load_transition_prompt_from_run(run: WorkflowRunContext) -> Optional[TransitionPromptPackage]:
@@ -704,6 +710,7 @@ async def _run_movement_preflight_flow(run_id: str) -> None:
         _store_reviewed_run(
             run_id=run_id,
             preflight=preflight_result.preflight,
+            actioning_context=preflight_result.actioning_context,
             prompt_package=preflight_result.prompt_package,
         )
         cl.user_session.set(MOVEMENT_PREFLIGHT_SESSION_KEY, _dump_model(preflight_result.preflight))
@@ -744,6 +751,7 @@ async def _run_movement_research_flow(run_id: str) -> None:
         return
     request = _load_movement_request_from_run(run)
     preflight = _load_movement_preflight_from_run(run)
+    actioning_context = _load_movement_actioning_context_from_run(run)
     prompt_package = _load_movement_prompt_from_run(run)
     if not request or not preflight or not prompt_package:
         await cl.Message("No people movement scenario is loaded. Re-open the movement form first.").send()
@@ -769,6 +777,7 @@ async def _run_movement_research_flow(run_id: str) -> None:
             result = await orchestrator.run_from_reviewed_context(
                 request=request,
                 preflight=preflight,
+                actioning_context=actioning_context,
                 prompt_package=prompt_package,
                 run_id=run_id,
                 progress_cb=progress_cb,
@@ -777,6 +786,7 @@ async def _run_movement_research_flow(run_id: str) -> None:
             result = await orchestrator.run(
                 request,
                 reviewed_preflight=preflight,
+                reviewed_actioning_context=actioning_context,
                 reviewed_prompt_package=prompt_package,
                 progress_cb=progress_cb,
                 prompt_override=prompt_override,
@@ -1783,7 +1793,7 @@ async def present_movement_brief(result, *, run_id: str) -> None:
         props=payload,
     )
     await cl.Message(
-        content="**People Movement Brief**",
+        content="",
         elements=[brief_element],
     ).send()
 

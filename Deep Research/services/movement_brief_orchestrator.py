@@ -31,6 +31,7 @@ from services.movement_credentials_service import MovementCredentialsService
 from services.movement_form_mapper import build_movement_trigger, build_transition_request_for_movement
 from services.movement_opportunity_deriver import MovementOpportunityDeriver
 from services.movement_prompt_builder import MovementPromptBuilder, MovementPromptPackage
+from services.movement_brief_synthesizer import MovementBriefSynthesizer
 from services.proconnect_auth import resolve_runtime_bearer_token
 from services.proconnect_movement_service import ProConnectMovementService
 from services.proconnect_transition_service import ProConnectTransitionService
@@ -48,6 +49,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent.parent / "scripts"
 @dataclass(frozen=True)
 class MovementPreflightResult:
     preflight: TransitionPreflight
+    actioning_context: Dict[str, Any]
     prompt_package: MovementPromptPackage
 
 
@@ -77,6 +79,7 @@ class ReviewedMovementRunInput:
     run_id: str
     request: MovementBriefRequest
     preflight: TransitionPreflight
+    actioning_context: Dict[str, Any]
     prompt_package: MovementPromptPackage
 
 
@@ -96,6 +99,7 @@ class MovementBriefOrchestrator:
         credentials_lookup_runner: Optional[CredentialsLookupRunner] = None,
         credentials_service: Optional[MovementCredentialsService] = None,
         assembler: Optional[MovementBriefAssembler] = None,
+        brief_synthesizer: Optional[MovementBriefSynthesizer] = None,
         deep_research_runner: Optional[DeepResearchRunner] = None,
     ) -> None:
         self.signal_registry = get_signal_registry_service()
@@ -113,6 +117,7 @@ class MovementBriefOrchestrator:
         self.credentials_lookup_runner = credentials_lookup_runner or CredentialsLookupRunner()
         self.credentials_service = credentials_service or MovementCredentialsService()
         self.assembler = assembler or MovementBriefAssembler()
+        self.brief_synthesizer = brief_synthesizer or MovementBriefSynthesizer()
         self.deep_research_runner = deep_research_runner
 
     async def build_preflight(
@@ -120,11 +125,15 @@ class MovementBriefOrchestrator:
         request: MovementBriefRequest,
         progress_cb: Optional[ProgressCallback] = None,
     ) -> MovementPreflightResult:
-        _, preflight, prompt_package = await self._prepare_move_context(
+        _, preflight, actioning_context, prompt_package = await self._prepare_move_context(
             request,
             progress_cb=progress_cb,
         )
-        return MovementPreflightResult(preflight=preflight, prompt_package=prompt_package)
+        return MovementPreflightResult(
+            preflight=preflight,
+            actioning_context=actioning_context,
+            prompt_package=prompt_package,
+        )
 
     async def run(
         self,
@@ -135,12 +144,14 @@ class MovementBriefOrchestrator:
         progress_cb: Optional[ProgressCallback] = None,
         prompt_override: Optional[str] = None,
         reviewed_preflight: Optional[TransitionPreflight] = None,
+        reviewed_actioning_context: Optional[Dict[str, Any]] = None,
         reviewed_prompt_package: Optional[MovementPromptPackage] = None,
         reviewed_run_id: Optional[str] = None,
     ) -> MovementBriefRunResult:
         """Run the full named-move movement-led pipeline."""
         if reviewed_preflight and reviewed_prompt_package:
             preflight = reviewed_preflight
+            actioning_context = dict(reviewed_actioning_context or {})
             prompt_package = reviewed_prompt_package
             logger.info(
                 "Movement research using reviewed context run_id=%s person=%s destination=%s",
@@ -149,7 +160,7 @@ class MovementBriefOrchestrator:
                 request.to_company,
             )
         else:
-            _, preflight, prompt_package = await self._prepare_move_context(
+            _, preflight, actioning_context, prompt_package = await self._prepare_move_context(
                 request,
                 progress_cb=progress_cb,
                 prompt_override=prompt_override,
@@ -258,10 +269,26 @@ class MovementBriefOrchestrator:
         )
         proconnect_service = self._get_proconnect_service()
         light_enriched_rows = proconnect_service.light_enrich_movements(movement_rows)
+        light_enriched_rows = self._refresh_named_mover_enrichment(
+            light_enriched_rows,
+            request=request,
+            preflight=preflight,
+            actioning_context=actioning_context,
+            proconnect_service=proconnect_service,
+            include_person_detail=False,
+        )
         ranked_rows = self.ranker.rank(light_enriched_rows, max_rows=10)
 
         ranked_movements = [row["movement"] for row in ranked_rows]
         deep_enriched_rows = proconnect_service.deep_enrich_movements(ranked_movements, max_rows=10)
+        deep_enriched_rows = self._refresh_named_mover_enrichment(
+            deep_enriched_rows,
+            request=request,
+            preflight=preflight,
+            actioning_context=actioning_context,
+            proconnect_service=proconnect_service,
+            include_person_detail=True,
+        )
         await self._emit(
             progress_cb,
             stage=WorkflowStage.PROCONNECT_ENRICHMENT.value,
@@ -326,6 +353,14 @@ class MovementBriefOrchestrator:
             derived_opportunities=derived_opportunities,
             credentials_lookup=credentials_lookup,
         )
+        movement_brief = await self._apply_brief_synthesis(
+            movement_brief,
+            request=request,
+            preflight=preflight,
+            signal_evidence=signal_evidence,
+            deep_research_summary=deep_research_summary,
+            run_id=reviewed_run_id,
+        )
         await self._emit(
             progress_cb,
             stage=WorkflowStage.ASSEMBLING_BRIEF.value,
@@ -357,6 +392,7 @@ class MovementBriefOrchestrator:
         *,
         request: MovementBriefRequest,
         preflight: TransitionPreflight,
+        actioning_context: Optional[Dict[str, Any]],
         prompt_package: MovementPromptPackage,
         run_id: str,
         progress_cb: Optional[ProgressCallback] = None,
@@ -365,12 +401,14 @@ class MovementBriefOrchestrator:
             run_id=run_id,
             request=request,
             preflight=preflight,
+            actioning_context=dict(actioning_context or {}),
             prompt_package=prompt_package,
         )
         return await self.run(
             reviewed.request,
             progress_cb=progress_cb,
             reviewed_preflight=reviewed.preflight,
+            reviewed_actioning_context=reviewed.actioning_context,
             reviewed_prompt_package=reviewed.prompt_package,
             reviewed_run_id=reviewed.run_id,
         )
@@ -398,7 +436,7 @@ class MovementBriefOrchestrator:
         *,
         progress_cb: Optional[ProgressCallback],
         prompt_override: Optional[str] = None,
-    ) -> tuple[Any, TransitionPreflight, MovementPromptPackage]:
+    ) -> tuple[Any, TransitionPreflight, Dict[str, Any], MovementPromptPackage]:
         await self._emit(
             progress_cb,
             stage=WorkflowStage.RESOLVING_NAMED_MOVE.value,
@@ -407,6 +445,8 @@ class MovementBriefOrchestrator:
         )
         transition_request = build_transition_request_for_movement(request)
         service = self._get_transition_service()
+        transition_case: Optional[Dict[str, Any]] = None
+        actioning_context: Dict[str, Any] = {}
 
         await self._emit(
             progress_cb,
@@ -414,7 +454,25 @@ class MovementBriefOrchestrator:
             message="Building relationship context from ProConnect.",
             status="in_progress",
         )
-        preflight = await asyncio.to_thread(service.build_preflight, transition_request)
+        load_transition_case = getattr(service, "load_transition_case", None)
+        build_actioning_context = getattr(service, "build_actioning_context", None)
+        if callable(load_transition_case):
+            transition_case = await asyncio.to_thread(load_transition_case, transition_request)
+            preflight = await asyncio.to_thread(
+                service.build_preflight,
+                transition_request,
+                transition_case=transition_case,
+            )
+            if callable(build_actioning_context):
+                actioning_context = await asyncio.to_thread(
+                    build_actioning_context,
+                    transition_request,
+                    transition_case=transition_case,
+                )
+        else:
+            preflight = await asyncio.to_thread(service.build_preflight, transition_request)
+            if callable(build_actioning_context):
+                actioning_context = await asyncio.to_thread(build_actioning_context, transition_request)
         logger.info(
             "Movement preflight resolved person=%s source_resolved=%s destination_resolved=%s match_status=%s",
             request.person_name,
@@ -454,7 +512,7 @@ class MovementBriefOrchestrator:
             industry_key=prompt_package.industry_key,
             prompt_overridden=bool(prompt_override),
         )
-        return transition_request, preflight, prompt_package
+        return transition_request, preflight, dict(actioning_context or {}), prompt_package
 
     async def _run_deep_research(
         self,
@@ -496,6 +554,381 @@ class MovementBriefOrchestrator:
         if self._owns_proconnect_service:
             return self._build_live_movement_service()
         return self.proconnect_service
+
+    async def _apply_brief_synthesis(
+        self,
+        brief: MovementBrief,
+        *,
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+        signal_evidence: List[SignalEvidence],
+        deep_research_summary: str,
+        run_id: Optional[str],
+    ) -> MovementBrief:
+        if not self.brief_synthesizer:
+            return brief
+        try:
+            synthesis_input = self.brief_synthesizer.build_input(
+                run_id=run_id,
+                request=request,
+                preflight=preflight,
+                brief=brief,
+                signal_evidence=signal_evidence,
+                deep_research_summary=deep_research_summary,
+            )
+            synthesis = await self.brief_synthesizer.synthesize(synthesis_input)
+            if synthesis:
+                apply_synthesis = getattr(self.assembler, "apply_synthesis", None)
+                if callable(apply_synthesis):
+                    return apply_synthesis(brief, synthesis)
+                updates = {
+                    "executive_summary": getattr(synthesis, "move_summary", "") or brief.executive_summary,
+                    "signal_summary": list(getattr(synthesis, "signal_summary", []) or []) or brief.signal_summary,
+                    "takeaway": getattr(synthesis, "takeaway", "") or brief.takeaway,
+                }
+                if hasattr(brief, "model_copy"):
+                    return brief.model_copy(update=updates)
+                return brief.copy(update=updates)  # pragma: no cover
+        except Exception as exc:
+            logger.warning("Movement brief synthesis overlay failed: %s", exc)
+        return brief
+
+    def _refresh_named_mover_enrichment(
+        self,
+        enriched_rows: List[Dict[str, Any]],
+        *,
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+        actioning_context: Optional[Dict[str, Any]],
+        proconnect_service: ProConnectMovementService,
+        include_person_detail: bool,
+    ) -> List[Dict[str, Any]]:
+        enrich_row = getattr(proconnect_service, "enrich_movement", None)
+
+        named_people = {
+            self._normalize_person_name(request.person_name),
+            self._normalize_person_name(preflight.person_resolution.matched_name or ""),
+        }
+        named_people.discard("")
+        if not named_people:
+            return enriched_rows
+
+        company_hints = self._named_mover_company_hints(request=request, preflight=preflight)
+        if not company_hints:
+            return enriched_rows
+        canonical = self._build_named_mover_actioning_enrichment(
+            request=request,
+            preflight=preflight,
+            actioning_context=actioning_context or {},
+            include_person_detail=include_person_detail,
+        )
+
+        refreshed: List[Dict[str, Any]] = []
+        for entry in enriched_rows:
+            movement = entry.get("movement")
+            person_name = self._normalize_person_name(getattr(movement, "person_name", "") or "")
+            if not movement or person_name not in named_people:
+                refreshed.append(entry)
+                continue
+
+            generic_enrichment: Dict[str, Any] = {}
+            if callable(enrich_row):
+                for company_hint in company_hints:
+                    candidate = enrich_row(
+                        movement,
+                        company_hint=company_hint,
+                        include_person_detail=include_person_detail,
+                    )
+                    if self._has_enrichment_signal(candidate):
+                        generic_enrichment = candidate
+                        break
+
+            refreshed.append(
+                self._merge_enrichment(
+                    entry,
+                    generic_enrichment,
+                    canonical=canonical,
+                    preflight=preflight,
+                )
+            )
+
+        return refreshed
+
+    def _build_named_mover_actioning_enrichment(
+        self,
+        *,
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+        actioning_context: Dict[str, Any],
+        include_person_detail: bool,
+    ) -> Dict[str, Any]:
+        person_profile = self._as_dict(actioning_context.get("person_profile"))
+        from_context = self._as_dict(actioning_context.get("from_company_context"))
+        to_context = self._as_dict(actioning_context.get("to_company_context"))
+        matched_person = self._as_dict(person_profile.get("matched_person"))
+        match_scope = self._normalized_text(
+            preflight.person_resolution.match_scope
+            or matched_person.get("company_scope")
+        )
+
+        scope_context = from_context if match_scope == "from" else to_context if match_scope == "to" else {}
+        account_team = self._as_dict(scope_context.get("account_team"))
+        relationship_network = self._as_dict(scope_context.get("relationship_network"))
+        connected_colleagues = self._as_list(
+            self._as_dict(relationship_network.get("connected_colleagues")).get("items")
+        )
+        alumni = self._as_list(
+            self._as_dict(relationship_network.get("protiviti_alumni")).get("items")
+        )
+
+        project_count = self._first_positive_int(
+            person_profile.get("project_count"),
+            matched_person.get("project_count"),
+            matched_person.get("projectCount"),
+            len(self._as_list(matched_person.get("projects"))),
+        )
+        win_count = self._first_positive_int(
+            person_profile.get("win_count"),
+            matched_person.get("win_count"),
+            matched_person.get("winCount"),
+            len(self._as_list(matched_person.get("closeWonOpps"))),
+        )
+        relationship_owner = self._first_non_empty_text(
+            person_profile.get("relationship_owner"),
+            matched_person.get("relationship_owner"),
+            matched_person.get("relationshipOwner"),
+            self._as_dict(account_team.get("account_executive")).get("name"),
+            self._as_dict(account_team.get("account_mdd")).get("name"),
+            self._as_dict(account_team.get("account_pmo")).get("name"),
+        )
+
+        scope_worked_before = (
+            preflight.quick_indicators.source_worked_before
+            if match_scope == "from"
+            else preflight.quick_indicators.destination_worked_before
+            if match_scope == "to"
+            else (
+                preflight.quick_indicators.source_worked_before
+                or preflight.quick_indicators.destination_worked_before
+            )
+        )
+
+        known = bool(
+            person_profile.get("direct_person_evidence")
+            or preflight.quick_indicators.warm_intro_path_available
+            or project_count > 0
+            or win_count > 0
+            or relationship_owner
+            or connected_colleagues
+            or alumni
+        )
+        worked_with = bool(project_count > 0 or win_count > 0 or scope_worked_before)
+
+        person_match_status = self._normalized_text(preflight.person_resolution.match_status) or None
+        person_detail: Dict[str, Any] = {}
+        if include_person_detail:
+            person_detail = {
+                "name": preflight.person_resolution.matched_name or request.person_name,
+                "title": preflight.person_resolution.matched_title,
+                "matched_name": preflight.person_resolution.matched_name or request.person_name,
+                "matched_title": preflight.person_resolution.matched_title,
+                "match_scope": match_scope or None,
+                "match_source": preflight.person_resolution.match_source,
+                "linked_account_id": preflight.person_resolution.linked_account_id,
+                "direct_person_evidence": bool(person_profile.get("direct_person_evidence")),
+                "claim_policy_note": self._normalized_text(person_profile.get("claim_policy_note")) or None,
+                "relationship_owner": relationship_owner or None,
+                "project_count": project_count,
+                "win_count": win_count,
+                "known": known,
+                "worked_with": worked_with,
+                "warm_intro_path_available": preflight.quick_indicators.warm_intro_path_available,
+                "source_worked_before": preflight.quick_indicators.source_worked_before,
+                "destination_worked_before": preflight.quick_indicators.destination_worked_before,
+                "connected_colleague_count": len(connected_colleagues),
+                "protiviti_alumni_count": len(alumni),
+                "candidate_suggestions": [
+                    self._normalized_text(item.get("name"))
+                    for item in self._as_list(person_profile.get("candidate_suggestions"))[:3]
+                    if isinstance(item, dict) and self._normalized_text(item.get("name"))
+                ],
+            }
+            person_detail = {
+                key: value
+                for key, value in person_detail.items()
+                if value not in (None, "", [], {})
+            }
+
+        enrichment = {
+            "known": known,
+            "worked_with": worked_with,
+            "project_count": project_count,
+            "win_count": win_count,
+            "relationship_owner": relationship_owner or None,
+            "person_match_status": person_match_status,
+            "person_detail": person_detail,
+        }
+        if not self._has_enrichment_signal(enrichment):
+            return {}
+        return enrichment
+
+    def _named_mover_company_hints(
+        self,
+        *,
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+    ) -> List[str]:
+        match_scope = str(preflight.person_resolution.match_scope or "").strip().lower()
+        ordered_candidates: List[Optional[str]]
+        if match_scope == "from":
+            ordered_candidates = [
+                preflight.from_account.company_name,
+                request.from_company,
+                preflight.to_account.company_name,
+                request.to_company,
+            ]
+        elif match_scope == "to":
+            ordered_candidates = [
+                preflight.to_account.company_name,
+                request.to_company,
+                preflight.from_account.company_name,
+                request.from_company,
+            ]
+        else:
+            ordered_candidates = [
+                preflight.from_account.company_name,
+                request.from_company,
+                preflight.to_account.company_name,
+                request.to_company,
+            ]
+
+        hints: List[str] = []
+        seen: set[str] = set()
+        for candidate in ordered_candidates:
+            normalized = " ".join(str(candidate or "").split()).strip()
+            key = normalized.lower()
+            if not normalized or key in seen:
+                continue
+            seen.add(key)
+            hints.append(normalized)
+        return hints
+
+    def _merge_enrichment(
+        self,
+        original: Dict[str, Any],
+        replacement: Dict[str, Any],
+        *,
+        canonical: Optional[Dict[str, Any]] = None,
+        preflight: TransitionPreflight,
+    ) -> Dict[str, Any]:
+        merged = dict(original)
+        fallback_known = bool(
+            preflight.person_resolution.direct_person_evidence
+            or preflight.quick_indicators.warm_intro_path_available
+            or preflight.quick_indicators.source_worked_before
+            or preflight.quick_indicators.destination_worked_before
+        )
+        fallback_worked_with = bool(
+            preflight.quick_indicators.source_worked_before
+            or preflight.quick_indicators.destination_worked_before
+        )
+
+        for candidate in (replacement or {}, canonical or {}):
+            if not candidate:
+                continue
+            merged["known"] = bool(merged.get("known")) or bool(candidate.get("known"))
+            merged["worked_with"] = bool(merged.get("worked_with")) or bool(candidate.get("worked_with"))
+            merged["project_count"] = max(
+                int(merged.get("project_count") or 0),
+                int(candidate.get("project_count") or 0),
+            )
+            merged["win_count"] = max(
+                int(merged.get("win_count") or 0),
+                int(candidate.get("win_count") or 0),
+            )
+            relationship_owner = self._normalized_text(candidate.get("relationship_owner"))
+            if relationship_owner and (candidate is canonical or not self._normalized_text(merged.get("relationship_owner"))):
+                merged["relationship_owner"] = relationship_owner
+            candidate_status = self._normalized_text(candidate.get("person_match_status")).lower()
+            merged_status = self._normalized_text(merged.get("person_match_status")).lower()
+            if candidate_status and (
+                candidate_status == "matched"
+                or merged_status in {"", "no_match", "not_found"}
+                or candidate is canonical
+            ):
+                merged["person_match_status"] = candidate_status
+
+            detail = self._as_dict(merged.get("person_detail"))
+            for key, value in self._as_dict(candidate.get("person_detail")).items():
+                if value in (None, "", [], {}):
+                    continue
+                if candidate is canonical or key not in detail or detail.get(key) in (None, "", [], {}):
+                    detail[key] = value
+            if detail:
+                merged["person_detail"] = detail
+
+        if merged.get("person_match_status") in {None, "", "no_match"} and preflight.person_resolution.match_status == "matched":
+            merged["person_match_status"] = "matched"
+        if not merged.get("known") and fallback_known:
+            merged["known"] = True
+        if not merged.get("worked_with") and fallback_worked_with:
+            merged["worked_with"] = True
+        return merged
+
+    @staticmethod
+    def _has_enrichment_signal(candidate: Dict[str, Any]) -> bool:
+        return bool(
+            candidate.get("known")
+            or candidate.get("worked_with")
+            or int(candidate.get("project_count") or 0) > 0
+            or int(candidate.get("win_count") or 0) > 0
+            or str(candidate.get("relationship_owner") or "").strip()
+            or str(candidate.get("person_match_status") or "").strip().lower() == "matched"
+            or bool(candidate.get("person_detail"))
+        )
+
+    @staticmethod
+    def _normalize_person_name(value: str) -> str:
+        return " ".join(str(value or "").lower().split()).strip()
+
+    @staticmethod
+    def _as_dict(value: Any) -> Dict[str, Any]:
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _as_list(value: Any) -> List[Any]:
+        return value if isinstance(value, list) else []
+
+    @staticmethod
+    def _normalized_text(value: Any) -> str:
+        return " ".join(str(value or "").split()).strip()
+
+    def _first_non_empty_text(self, *values: Any) -> str:
+        for value in values:
+            normalized = self._normalized_text(value)
+            if normalized:
+                return normalized
+        return ""
+
+    @staticmethod
+    def _first_positive_int(*values: Any) -> int:
+        for value in values:
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                if value > 0:
+                    return value
+                continue
+            text = str(value or "").strip()
+            if not text:
+                continue
+            try:
+                parsed = int(float(text))
+            except (TypeError, ValueError):
+                continue
+            if parsed > 0:
+                return parsed
+        return 0
 
     def _build_live_transition_service(self) -> ProConnectTransitionService:
         token_file = getattr(AppConfig, "PROCONNECT_TOKEN_FILE", None)

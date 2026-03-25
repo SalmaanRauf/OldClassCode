@@ -295,32 +295,7 @@ class DeepResearchClient:
             from services.signal_registry_service import get_signal_registry_service
 
             service = get_signal_registry_service()
-            tokens: List[str] = []
-            lowered = (query or "").lower()
-            normalized_query = service._normalize_signal_token(query or "")
-            aliases = sorted(service.FS_ALIAS_MAP.keys(), key=len, reverse=True)
-            seen = set()
-            for alias in aliases:
-                raw_pattern = r"\b" + re.escape(alias).replace(r"\ ", r"\s+") + r"\b"
-                normalized_alias = service._normalize_signal_token(alias)
-                normalized_pattern = (
-                    r"\b" + re.escape(normalized_alias).replace(r"\ ", r"\s+") + r"\b"
-                    if normalized_alias
-                    else None
-                )
-                if re.search(raw_pattern, lowered) or (
-                    normalized_pattern and re.search(normalized_pattern, normalized_query)
-                ):
-                    if alias not in seen:
-                        tokens.append(alias)
-                        seen.add(alias)
-
-            canonical = service.canonicalize_fs_signals(tokens)
-            if canonical:
-                return canonical
-            if re.search(r"\ball(?:\s+relevant)?\s+signals?\b", query or "", re.IGNORECASE):
-                return service.get_fs_signal_codes()
-            return []
+            return service.extract_fs_signal_codes_from_text(query)
         except Exception:
             return []
 

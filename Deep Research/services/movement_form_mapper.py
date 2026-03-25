@@ -275,21 +275,17 @@ def build_movement_row_action_context_by_person_name(result: Any) -> Dict[str, D
 
 
 def build_movement_user_query(request: MovementBriefRequest | Dict[str, Any]) -> str:
-    """Compose a concise user-query context for the movement workflow."""
+    """Compose account-focused context for downstream movement and signal normalization."""
     movement_request = _coerce_request(request)
     parts = [
+        f"Research {movement_request.to_company} across all relevant Financial Services signals.",
         (
-            f"{movement_request.person_name} has moved from {movement_request.from_company} "
-            f"to {movement_request.to_company}, with a new role as {movement_request.new_role}."
-        ),
-        (
-            f"Source all relevant information and find executive and buyer movement within the last "
+            "Prioritize executive movement and buyer movement within the last "
             f"{movement_request.lookback_days} days."
         ),
-        "Keep the research broad across financial-services signals, but bias the analysis toward executive movement, buyer movement, and why the move matters now.",
+        "Bias non-movement findings toward explaining why the account matters now.",
+        "Preserve source-backed movement evidence suitable for a movement-led account brief.",
     ]
-    if movement_request.synthetic_scenario:
-        parts.append("Treat this as a hypothetical planning scenario for demo purposes.")
     if movement_request.geography:
         parts.append(f"Geography: {movement_request.geography}.")
     if movement_request.additional_context:
@@ -332,9 +328,6 @@ def build_movement_progress_content(request: MovementBriefRequest | Dict[str, An
                 f"- Poll: #{research.get('poll_count', 0)} | Sources found: {research.get('citation_count', 0)}",
             ]
         )
-        latest_text = _normalize_text(research.get("latest_text") or research.get("message") or "")
-        if latest_text:
-            lines.append(f"- Latest update: {latest_text}")
         activity_log = research.get("activity_log") or []
         for item in activity_log[-5:]:
             text = _normalize_text(item)

@@ -88,16 +88,27 @@ class ProConnectTransitionService:
             to_account_id_override=to_account_id_override,
         )
         payload = _as_dict(case.get("transition_payload"))
+        warnings = [str(item).strip() for item in _as_list(case.get("warnings")) if str(item or "").strip()]
+        person_resolution = self._build_person_resolution(request, payload, warnings=warnings)
+        from_account = self._build_account_resolution(request, payload, scope="from")
+        to_account = self._build_account_resolution(request, payload, scope="to")
 
         return TransitionPreflight(
             request=request,
-            person_resolution=self._build_person_resolution(request, payload),
-            from_account=self._build_account_resolution(request, payload, scope="from"),
-            to_account=self._build_account_resolution(request, payload, scope="to"),
+            person_resolution=person_resolution,
+            from_account=from_account,
+            to_account=to_account,
             quick_indicators=self._build_quick_indicators(payload),
             opportunity_hypotheses=self._build_opportunity_hypotheses(payload),
             inferred_industry=self._infer_industry(payload, request),
             suggested_research_prompt="",
+            review_diagnostics=self._build_review_diagnostics(
+                request=request,
+                person_resolution=person_resolution,
+                from_account=from_account,
+                to_account=to_account,
+                warnings=warnings,
+            ),
         )
 
     def build_actioning_context(
@@ -130,16 +141,39 @@ class ProConnectTransitionService:
         self,
         request: TransitionRequest,
         payload: Dict[str, Any],
+        *,
+        warnings: Optional[List[str]] = None,
     ) -> TransitionPersonResolution:
         profile = _as_dict(payload.get("person_profile"))
+        raw_resolution = _as_dict(payload.get("person_resolution"))
         matched = _as_dict(profile.get("matched_person"))
+        suggestions_raw = _as_list(profile.get("candidate_suggestions"))
+        top_candidate = suggestions_raw[0] if suggestions_raw and isinstance(suggestions_raw[0], dict) else {}
+        raw_status = str(profile.get("match_status") or raw_resolution.get("status") or "not_requested").strip().lower()
+        normalized_status = raw_status if raw_status in {"matched", "candidate", "not_found", "not_requested"} else "not_found"
+        if normalized_status in {"ambiguous", "not_found"} and top_candidate:
+            normalized_status = "candidate"
         return TransitionPersonResolution(
             requested_name=str(profile.get("person_requested") or request.person_name),
-            match_status=str(profile.get("match_status") or "not_requested"),
-            matched_name=matched.get("name") or profile.get("person_requested"),
-            matched_title=matched.get("title") or profile.get("title_salesforce") or profile.get("title_external"),
-            match_source=matched.get("source"),
+            match_status=normalized_status,
+            matched_name=matched.get("name") or top_candidate.get("name") or profile.get("person_requested"),
+            matched_title=(
+                matched.get("title")
+                or top_candidate.get("title")
+                or profile.get("title_salesforce")
+                or profile.get("title_external")
+            ),
+            match_source=matched.get("source") or top_candidate.get("source") or raw_resolution.get("match_source"),
+            match_scope=matched.get("company_scope") or top_candidate.get("company_scope") or raw_resolution.get("match_scope"),
+            linked_account_id=matched.get("linked_account_id") or top_candidate.get("linked_account_id"),
             direct_person_evidence=bool(profile.get("direct_person_evidence")),
+            match_diagnostics=self._build_person_match_diagnostics(
+                request=request,
+                profile=profile,
+                raw_resolution=raw_resolution,
+                warnings=warnings or [],
+            ),
+            candidate_suggestions=self._format_candidate_suggestions(suggestions_raw),
         )
 
     def _build_account_resolution(
@@ -249,6 +283,102 @@ class ProConnectTransitionService:
             if normalized != "general":
                 return normalized
         return "general"
+
+    def _build_review_diagnostics(
+        self,
+        *,
+        request: TransitionRequest,
+        person_resolution: TransitionPersonResolution,
+        from_account: AccountResolution,
+        to_account: AccountResolution,
+        warnings: List[str],
+    ) -> List[str]:
+        diagnostics: List[str] = list(person_resolution.match_diagnostics)
+        if not from_account.resolved:
+            diagnostics.append(
+                f"Source account lookup did not resolve cleanly for {request.from_company}; using raw company text."
+            )
+        if not to_account.resolved:
+            diagnostics.append(
+                f"Destination account lookup did not resolve cleanly for {request.to_company}; using raw company text."
+            )
+        diagnostics.extend(warnings[:4])
+        return self._dedupe_lines(diagnostics)
+
+    def _build_person_match_diagnostics(
+        self,
+        *,
+        request: TransitionRequest,
+        profile: Dict[str, Any],
+        raw_resolution: Dict[str, Any],
+        warnings: List[str],
+    ) -> List[str]:
+        diagnostics: List[str] = []
+        status = str(profile.get("match_status") or raw_resolution.get("status") or "not_found").strip().lower()
+        matched = _as_dict(profile.get("matched_person"))
+        top_candidate = _as_list(profile.get("candidate_suggestions"))
+        match_strategy = str(raw_resolution.get("match_strategy") or "").strip()
+        if status == "matched":
+            scope = matched.get("company_scope") or raw_resolution.get("match_scope") or "unknown"
+            source = matched.get("source") or raw_resolution.get("match_source") or "unknown source"
+            strategy_note = f" using {match_strategy.replace('_', ' ')}" if match_strategy else ""
+            diagnostics.append(
+                f"Matched {request.person_name} on the {scope} account via {source}{strategy_note}."
+            )
+        elif top_candidate:
+            best = top_candidate[0] if isinstance(top_candidate[0], dict) else {}
+            score = best.get("score")
+            score_text = f" (score {score:.2f})" if isinstance(score, (int, float)) else ""
+            source = str(best.get("source") or "candidate pool").replace("_", " ")
+            diagnostics.append(
+                f"No exact account-scoped match. Closest candidate is {best.get('name') or request.person_name} via {source}{score_text}."
+            )
+        else:
+            diagnostics.append(
+                f"No exact person match was found for {request.person_name} in the scoped ProConnect account pools."
+            )
+
+        if not profile.get("direct_person_evidence"):
+            diagnostics.append("Direct person-level evidence is unavailable; treat the named mover as planning context only.")
+
+        if warnings:
+            diagnostics.extend(warnings[:2])
+        return self._dedupe_lines(diagnostics)
+
+    def _format_candidate_suggestions(self, candidates: List[Any]) -> List[str]:
+        formatted: List[str] = []
+        for item in candidates[:3]:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()
+            if not name:
+                continue
+            title = str(item.get("title") or "").strip()
+            source = str(item.get("source") or "").strip().replace("_", " ")
+            score = item.get("score")
+            suffix_bits: List[str] = []
+            if title:
+                suffix_bits.append(title)
+            if source:
+                suffix_bits.append(source)
+            if isinstance(score, (int, float)):
+                suffix_bits.append(f"score {score:.2f}")
+            suffix = f" ({'; '.join(suffix_bits)})" if suffix_bits else ""
+            formatted.append(f"{name}{suffix}")
+        return self._dedupe_lines(formatted)
+
+    @staticmethod
+    def _dedupe_lines(lines: List[str]) -> List[str]:
+        seen: set[str] = set()
+        output: List[str] = []
+        for line in lines:
+            normalized = str(line or "").strip()
+            key = normalized.lower()
+            if not normalized or key in seen:
+                continue
+            seen.add(key)
+            output.append(normalized)
+        return output
 
     @staticmethod
     def _normalize_confidence(rank_band: Any) -> str:

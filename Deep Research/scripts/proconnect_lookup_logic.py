@@ -485,8 +485,21 @@ def normalize_person_name(value: str) -> str:
     return normalize_text(value)
 
 
+def first_last_name_key(value: str) -> Tuple[str, str]:
+    tokens = normalize_person_name(value).split()
+    if len(tokens) < 2:
+        return ("", "")
+    return (tokens[0], tokens[-1])
+
+
 def exact_name_equals(left: str, right: str) -> bool:
     return bool(normalize_person_name(left) and normalize_person_name(left) == normalize_person_name(right))
+
+
+def same_first_last_name(left: str, right: str) -> bool:
+    left_key = first_last_name_key(left)
+    right_key = first_last_name_key(right)
+    return bool(left_key[0] and left_key == right_key)
 
 
 def find_exact_person_match(person_name: str, people: Iterable[Any]) -> Optional[Dict[str, Any]]:
@@ -535,6 +548,8 @@ def top_person_candidates(person_name: str, people: Iterable[Any], top_n: int = 
                 "name": candidate_name,
                 "title": item.get("title"),
                 "source": item.get("_source", "unknown"),
+                "company_scope": item.get("_company_scope"),
+                "linked_account_id": item.get("linked_account_id"),
                 "score": round(score, 4),
             }
         )

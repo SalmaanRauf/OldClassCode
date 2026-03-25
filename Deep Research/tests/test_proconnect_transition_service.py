@@ -129,6 +129,8 @@ def test_build_preflight_uses_existing_case_runner_and_returns_compact_indicator
     assert preflight.quick_indicators.destination_connected_colleague_count == 1
     assert preflight.inferred_industry == "financial_services"
     assert preflight.opportunity_hypotheses[0].title == "AI & CoPilot Advisory"
+    assert preflight.person_resolution.match_diagnostics[0].startswith("Matched Jennifer Brady")
+    assert "Org chart Finance/Strategy failed with status 500." in preflight.review_diagnostics
 
 
 def test_build_actioning_context_exposes_deeper_relationship_and_opportunity_context() -> None:
@@ -150,3 +152,39 @@ def test_build_actioning_context_exposes_deeper_relationship_and_opportunity_con
     assert context["to_company_context"]["account_team"]["account_mdd"]["name"] == "Gary Callaghan"
     assert context["ranked_opportunities_top10"][0]["opportunity"] == "AI & CoPilot Advisory"
     assert context["warnings"] == ["Org chart Finance/Strategy failed with status 500."]
+
+
+def test_build_preflight_promotes_top_candidate_when_exact_match_is_missing() -> None:
+    candidate_case = _sample_transition_case()
+    candidate_case["transition_payload"]["person_profile"]["match_status"] = "not_found"
+    candidate_case["transition_payload"]["person_profile"]["matched_person"] = None
+    candidate_case["transition_payload"]["person_profile"]["candidate_suggestions"] = [
+        {
+            "name": "Jennifer A Brady",
+            "title": "Senior Director of Technology Risk",
+            "source": "from_key_buyers",
+            "company_scope": "from",
+            "linked_account_id": "00130000000BYU2AAO",
+            "score": 0.96,
+        }
+    ]
+
+    service = ProConnectTransitionService(
+        client=object(),
+        case_runner=lambda **_: candidate_case,
+    )
+    request = TransitionRequest(
+        person_name="Jennifer Brady",
+        from_company="Capital One",
+        to_company="Fannie Mae",
+        new_role="Chief Information Officer",
+    )
+
+    preflight = service.build_preflight(request)
+
+    assert preflight.person_resolution.match_status == "candidate"
+    assert preflight.person_resolution.matched_name == "Jennifer A Brady"
+    assert preflight.person_resolution.match_source == "from_key_buyers"
+    assert preflight.person_resolution.candidate_suggestions == [
+        "Jennifer A Brady (Senior Director of Technology Risk; from key buyers; score 0.96)"
+    ]

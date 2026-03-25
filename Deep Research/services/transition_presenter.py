@@ -48,6 +48,15 @@ def build_transition_preflight_review(
         f"Prior work: Source {'Yes' if indicators.source_worked_before else 'No'} | Destination {'Yes' if indicators.destination_worked_before else 'No'}",
         f"Industry context: {_format_industry_label(prompt_package.industry_key)}",
     ]
+    if preflight.person_resolution.match_diagnostics:
+        content_lines.extend(["", "**Match diagnostics:**"])
+        content_lines.extend(f"- {item}" for item in preflight.person_resolution.match_diagnostics[:4])
+    if preflight.person_resolution.candidate_suggestions:
+        content_lines.extend(["", "**Candidate suggestions:**"])
+        content_lines.extend(f"- {item}" for item in preflight.person_resolution.candidate_suggestions[:3])
+    if preflight.review_diagnostics:
+        content_lines.extend(["", "**Review diagnostics:**"])
+        content_lines.extend(f"- {item}" for item in preflight.review_diagnostics[:4])
 
     if preflight.opportunity_hypotheses:
         content_lines.extend(["", "**Top hypotheses:**"])

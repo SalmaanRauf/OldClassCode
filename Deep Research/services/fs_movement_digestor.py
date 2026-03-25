@@ -137,7 +137,7 @@ class FSMovementDigestor:
             return []
 
         company_aliases = self._company_aliases(target_company_aliases or [trigger.company_focus])
-        rows: List[MovementRecord] = []
+        deduped_rows: Dict[Tuple[str, str, str, str], Tuple[int, int, MovementRecord]] = {}
         for entry in raw_items:
             if not isinstance(entry, dict):
                 continue
@@ -151,40 +151,54 @@ class FSMovementDigestor:
             previous_role = str(entry.get("previous_role") or "").strip()
             new_role = str(entry.get("new_role") or "").strip()
             movement_type = str(entry.get("movement_type") or "").strip()
-            category = str(entry.get("category") or "").strip()
+            category = self._normalize_category(entry.get("category"))
             company_context = str(entry.get("company_context") or "").strip()
             evidence_quote = str(entry.get("evidence_quote") or "").strip()
             source_url = str(entry.get("source_url") or "").strip()
 
-            if not all([person_name, target_company, previous_role, new_role, movement_type, category, company_context]):
+            if not all([person_name, target_company, movement_type, category, company_context]):
+                continue
+            if not (previous_role or new_role):
                 continue
             if category not in {"EXEC", "BUYER"}:
                 continue
             if not evidence_quote or not source_url:
                 continue
 
-            rows.append(
-                MovementRecord(
-                    person_name=person_name,
-                    target_company=target_company,
-                    previous_role=previous_role,
-                    new_role=new_role,
-                    movement_type=movement_type,
-                    category=category,
-                    company_context=company_context,
-                    evidence=MovementEvidence(
-                        evidence_quote=evidence_quote,
-                        source_url=source_url,
-                        source_title=entry.get("source_title"),
-                        source_marker=entry.get("source_marker"),
-                        corroborated=bool(entry.get("corroborated", False)),
-                        confidence_label=entry.get("confidence_label"),
-                    ),
-                )
+            row = MovementRecord(
+                person_name=person_name,
+                target_company=target_company,
+                previous_role=previous_role,
+                new_role=new_role,
+                movement_type=movement_type,
+                category=category,
+                company_context=company_context,
+                evidence=MovementEvidence(
+                    evidence_quote=evidence_quote,
+                    source_url=source_url,
+                    source_title=entry.get("source_title"),
+                    source_marker=entry.get("source_marker"),
+                    corroborated=bool(entry.get("corroborated", False)),
+                    confidence_label=entry.get("confidence_label"),
+                ),
             )
-            if len(rows) >= max_rows:
-                break
-        return rows
+            dedupe_key = self._movement_dedupe_key(row)
+            candidate_score = self._row_information_score(row)
+            existing = deduped_rows.get(dedupe_key)
+            if existing is None:
+                deduped_rows[dedupe_key] = (len(deduped_rows), candidate_score, row)
+                continue
+            original_index, existing_score, existing_row = existing
+            if candidate_score > existing_score:
+                deduped_rows[dedupe_key] = (original_index, candidate_score, row)
+            else:
+                deduped_rows[dedupe_key] = (original_index, existing_score, existing_row)
+
+        rows = [
+            item[2]
+            for item in sorted(deduped_rows.values(), key=lambda payload: payload[0])
+        ]
+        return rows[:max_rows]
 
     def _extract_json(self, text: str) -> str:
         cleaned = text.strip()
@@ -210,6 +224,34 @@ class FSMovementDigestor:
     def _normalize_company(value: Optional[str]) -> str:
         normalized = re.sub(r"[\s,.-]+", " ", (value or "").strip().lower())
         return normalized.strip()
+
+    @staticmethod
+    def _normalize_category(value: Any) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized in {"exec", "executive", "executive movement"}:
+            return "EXEC"
+        if normalized in {"buyer", "buying", "buying_center", "buying center"}:
+            return "BUYER"
+        return str(value or "").strip().upper()
+
+    @classmethod
+    def _movement_dedupe_key(cls, row: MovementRecord) -> Tuple[str, str, str, str]:
+        return (
+            cls._normalize_company(row.person_name),
+            cls._normalize_company(row.previous_role),
+            cls._normalize_company(row.new_role),
+            cls._normalize_company(row.evidence.source_url),
+        )
+
+    @staticmethod
+    def _row_information_score(row: MovementRecord) -> int:
+        score = 0
+        score += 2 if row.previous_role else 0
+        score += 2 if row.new_role else 0
+        score += 1 if row.evidence.source_title else 0
+        score += 1 if row.evidence.source_marker else 0
+        score += 1 if row.evidence.corroborated else 0
+        return score
 
     @classmethod
     def _company_aliases(cls, values: List[Optional[str]]) -> set[str]:

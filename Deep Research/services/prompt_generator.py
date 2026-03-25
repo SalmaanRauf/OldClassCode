@@ -174,12 +174,12 @@ class PromptGenerator:
         return f"{base} {scope_sentence}"
 
     def _company_scope_sentence(self, params: ResearchParameters) -> str:
-        sector = (params.sector or "").strip().lower().replace(" ", "_")
         company = (params.company or "").strip()
-        if not company or sector != "financial_services":
+        if not company:
             return ""
         return (
-            f"Anchor findings to {company} only; exclude unrelated peer-company personnel moves."
+            f"Anchor findings to {company} and directly related entities; "
+            "exclude unrelated peer-company noise unless needed for comparison."
         )
 
 # Global instance

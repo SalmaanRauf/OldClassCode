@@ -67,6 +67,7 @@ def _preflight() -> TransitionPreflight:
             matched_name="Jennifer Brady",
             matched_title="Senior Director of Technology Risk",
             match_source="from_key_buyers",
+            match_scope="from",
             direct_person_evidence=True,
         ),
         from_account=AccountResolution(
@@ -120,11 +121,29 @@ def _movement(index: int) -> MovementRecord:
 @pytest.mark.asyncio
 async def test_orchestrator_builds_preflight_and_prompt_review_context():
     preflight = _preflight()
+    case_payload = {"transition_payload": {"stub": True}}
+    captured = {}
 
     class FakeTransitionService:
+        def load_transition_case(self, request, **kwargs):
+            captured["load_request"] = request.person_name
+            return case_payload
+
         def build_preflight(self, request, *, transition_case=None):
             assert request.person_name == "Jennifer Brady"
+            assert transition_case is case_payload
             return preflight
+
+        def build_actioning_context(self, request, *, transition_case=None):
+            assert transition_case is case_payload
+            return {
+                "person_profile": {
+                    "match_status": "matched",
+                    "relationship_owner": "Ben L",
+                    "project_count": 4,
+                    "win_count": 2,
+                }
+            }
 
     class FakePromptBuilder:
         def build(self, request, preflight_arg):
@@ -145,6 +164,7 @@ async def test_orchestrator_builds_preflight_and_prompt_review_context():
 
     assert result.preflight is preflight
     assert result.prompt_package.user_prompt == "Generated move prompt."
+    assert result.actioning_context["person_profile"]["relationship_owner"] == "Ben L"
 
 
 @pytest.mark.asyncio
@@ -486,6 +506,318 @@ async def test_orchestrator_wraps_deep_research_progress_metadata():
     assert "Movement summary from Deep Research" in result.deep_research_markdown
 
 
+@pytest.mark.asyncio
+async def test_orchestrator_reuses_named_mover_scope_for_row_leverage() -> None:
+    preflight = _preflight()
+    assembled = {}
+    case_payload = {"transition_payload": {"stub": True}}
+
+    class FakeTransitionService:
+        def load_transition_case(self, request, **kwargs):
+            return case_payload
+
+        def build_preflight(self, request, *, transition_case=None):
+            assert transition_case is case_payload
+            return preflight
+
+        def build_actioning_context(self, request, *, transition_case=None):
+            assert transition_case is case_payload
+            return {
+                "person_profile": {
+                    "match_status": "matched",
+                    "matched_person": {
+                        "name": "Jennifer Brady",
+                        "title": "Senior Director of Technology Risk",
+                    },
+                    "relationship_owner": "Bernadette Norrington",
+                    "project_count": 3,
+                    "win_count": 2,
+                    "claim_policy_note": "Direct person-level evidence found in ProConnect; person-level claim allowed.",
+                    "direct_person_evidence": True,
+                },
+                "from_company_context": {
+                    "account_team": {
+                        "account_executive": {"name": "Bernadette Norrington", "title": "Managing Director"},
+                    },
+                    "relationship_network": {
+                        "connected_colleagues": {"items": [{"name": "Bernadette Norrington"}]},
+                        "protiviti_alumni": {"items": []},
+                    },
+                },
+                "to_company_context": {
+                    "relationship_network": {
+                        "connected_colleagues": {"items": []},
+                        "protiviti_alumni": {"items": []},
+                    },
+                },
+            }
+
+    class FakePromptBuilder:
+        def build(self, request, preflight_arg):
+            return MovementPromptPackage(
+                industry_key="financial_services",
+                system_prompt="FS prompt + overlay",
+                user_prompt="Generated move prompt.",
+            )
+
+    class FakeFSSignalDigestor:
+        async def digest(self, **kwargs):
+            return ([], {"status": "Succeeded"}, [])
+
+    class FakeMovementDigestor:
+        async def digest(self, **kwargs):
+            return (
+                [
+                    MovementRecord(
+                        person_name="Jennifer Brady",
+                        target_company="Fannie Mae",
+                        previous_role="Senior Executive, Capital One",
+                        new_role="Chief Information Officer",
+                        movement_type="External Hire",
+                        category="EXEC",
+                        company_context="inbound",
+                        evidence=MovementEvidence(
+                            evidence_quote="Jennifer Brady joined as CIO.",
+                            source_url="https://example.com/jennifer",
+                            source_title="Leadership update",
+                        ),
+                    )
+                ],
+                {"status": "Succeeded", "movements_returned": 1},
+            )
+
+    class FakeProConnectService:
+        def light_enrich_movements(self, movement_rows):
+            return [
+                {
+                    "movement": movement_rows[0],
+                    "known": False,
+                    "worked_with": False,
+                    "project_count": 0,
+                    "win_count": 0,
+                    "relationship_owner": None,
+                    "person_match_status": "no_match",
+                }
+            ]
+
+        def deep_enrich_movements(self, movement_rows, *, max_rows=10):
+            return [
+                {
+                    "movement": movement_rows[0],
+                    "known": False,
+                    "worked_with": False,
+                    "project_count": 0,
+                    "win_count": 0,
+                    "relationship_owner": None,
+                    "person_match_status": "no_match",
+                    "person_detail": {},
+                }
+            ]
+
+        def enrich_movement(self, row, *, company_hint=None, include_person_detail=False):
+            assert company_hint == "Capital One Financial Corporation"
+            return {
+                "movement": row,
+                "known": True,
+                "worked_with": True,
+                "project_count": 2,
+                "win_count": 1,
+                "relationship_owner": "Ben L",
+                "person_match_status": "matched",
+                "person_detail": {"name": row.person_name} if include_person_detail else {},
+            }
+
+    class FakeRanker:
+        def rank(self, enriched_rows, max_rows=10):
+            return [{**enriched_rows[0], "rank_score": 99, "action_posture": "Immediate Re-engagement"}]
+
+    class FakeOpportunityDeriver:
+        def derive(self, **kwargs):
+            return []
+
+    class FakeCredentialsLookupRunner:
+        async def run(self, opportunities, *, sector, max_opportunities=3):
+            return SimpleNamespace(
+                results={},
+                diagnostics={},
+                batch_diagnostics=None,
+                status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+                lookups_executed_count=0,
+            )
+
+    class FakeMovementCredentialsService:
+        def build_proof_packets(self, derived_opportunities, lookup_results):
+            return {}
+
+    class CapturingAssembler:
+        def assemble(self, **kwargs):
+            assembled.update(kwargs)
+            return MovementBrief(
+                executive_summary="Move summary text.",
+                signal_summary=[],
+                movement_rows=kwargs["movement_rows"],
+                where_to_act=[],
+                takeaway="Takeaway",
+            )
+
+    orchestrator = MovementBriefOrchestrator(
+        transition_service=FakeTransitionService(),
+        prompt_builder=FakePromptBuilder(),
+        fs_signal_evidence_digestor=FakeFSSignalDigestor(),
+        movement_digestor=FakeMovementDigestor(),
+        proconnect_service=FakeProConnectService(),
+        ranker=FakeRanker(),
+        opportunity_deriver=FakeOpportunityDeriver(),
+        credentials_lookup_runner=FakeCredentialsLookupRunner(),
+        credentials_service=FakeMovementCredentialsService(),
+        assembler=CapturingAssembler(),
+    )
+
+    await orchestrator.run(_request(), deep_research_output="### Executive Summary\nMovement notes here.")
+
+    assert assembled["ranked_rows"][0]["known"] is True
+    assert assembled["ranked_rows"][0]["worked_with"] is True
+    assert assembled["ranked_rows"][0]["project_count"] == 3
+    assert assembled["ranked_rows"][0]["win_count"] == 2
+    assert assembled["ranked_rows"][0]["relationship_owner"] == "Bernadette Norrington"
+    assert assembled["deep_enriched_rows"][0]["person_match_status"] == "matched"
+    assert assembled["deep_enriched_rows"][0]["person_detail"]["match_scope"] == "from"
+    assert assembled["deep_enriched_rows"][0]["person_detail"]["relationship_owner"] == "Bernadette Norrington"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_applies_bounded_brief_synthesis_to_cover_fields() -> None:
+    preflight = _preflight()
+
+    class FakeTransitionService:
+        def build_preflight(self, request, *, transition_case=None):
+            return preflight
+
+    class FakePromptBuilder:
+        def build(self, request, preflight_arg):
+            return MovementPromptPackage(
+                industry_key="financial_services",
+                system_prompt="FS prompt + overlay",
+                user_prompt="Generated move prompt.",
+            )
+
+    class FakeFSSignalDigestor:
+        async def digest(self, **kwargs):
+            return (
+                [
+                    SignalEvidence(
+                        signal_code="FS.EXEC.TRANSITION",
+                        signal_label="Executive Movement",
+                        status="Confirmed",
+                        evidence_quote="Leadership changed.",
+                        source_url="https://example.com/exec",
+                        source_title="Exec Source",
+                        analysis="Leadership movement is active.",
+                    )
+                ],
+                {"status": "Succeeded"},
+                [],
+            )
+
+    class FakeMovementDigestor:
+        async def digest(self, **kwargs):
+            return (
+                [_movement(0), _movement(1)],
+                {"status": "Succeeded", "movements_returned": 2},
+            )
+
+    class FakeProConnectService:
+        def light_enrich_movements(self, movement_rows):
+            return [{"movement": row} for row in movement_rows]
+
+        def deep_enrich_movements(self, movement_rows, *, max_rows=10):
+            return [{"movement": row} for row in movement_rows[:max_rows]]
+
+        def enrich_movement(self, row, *, company_hint=None, include_person_detail=False):
+            return {"movement": row, "person_match_status": "no_match", "person_detail": {}}
+
+    class FakeRanker:
+        def rank(self, enriched_rows, max_rows=10):
+            return [
+                {**row, "rank_score": 20 - index, "action_posture": "Monitor"}
+                for index, row in enumerate(enriched_rows[:max_rows])
+            ]
+
+    class FakeOpportunityDeriver:
+        def derive(self, **kwargs):
+            return []
+
+    class FakeCredentialsLookupRunner:
+        async def run(self, opportunities, *, sector, max_opportunities=3):
+            return SimpleNamespace(
+                results={},
+                diagnostics={},
+                batch_diagnostics=None,
+                status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+                lookups_executed_count=0,
+            )
+
+    class FakeMovementCredentialsService:
+        def build_proof_packets(self, derived_opportunities, lookup_results):
+            return {}
+
+    class FakeAssembler:
+        def assemble(self, **kwargs):
+            rows = kwargs["movement_rows"][:2]
+            return MovementBrief(
+                executive_summary="Deterministic move summary.",
+                signal_summary=["Deterministic signal summary."],
+                movement_rows=rows,
+                where_to_act=[
+                    MovementAction(
+                        action_posture="Monitor",
+                        person_name=row.person_name,
+                        likely_play=f"Play for {row.person_name}",
+                        why_now=row.evidence.evidence_quote,
+                        relationship_owner=None,
+                    )
+                    for row in rows
+                ],
+                takeaway="Deterministic takeaway.",
+            )
+
+    class FakeBriefSynthesizer:
+        def build_input(self, **kwargs):
+            return {"built": True, "row_count": len(kwargs["brief"].movement_rows)}
+
+        async def synthesize(self, synthesis_input):
+            assert synthesis_input["built"] is True
+            assert synthesis_input["row_count"] == 2
+            return SimpleNamespace(
+                move_summary="LLM move summary.",
+                signal_summary=["LLM signal summary 1.", "LLM signal summary 2."],
+                takeaway="LLM takeaway.",
+                action_narratives=[],
+            )
+
+    orchestrator = MovementBriefOrchestrator(
+        transition_service=FakeTransitionService(),
+        prompt_builder=FakePromptBuilder(),
+        fs_signal_evidence_digestor=FakeFSSignalDigestor(),
+        movement_digestor=FakeMovementDigestor(),
+        proconnect_service=FakeProConnectService(),
+        ranker=FakeRanker(),
+        opportunity_deriver=FakeOpportunityDeriver(),
+        credentials_lookup_runner=FakeCredentialsLookupRunner(),
+        credentials_service=FakeMovementCredentialsService(),
+        assembler=FakeAssembler(),
+        brief_synthesizer=FakeBriefSynthesizer(),
+    )
+
+    result = await orchestrator.run(_request(), deep_research_output="### Executive Summary\nMovement notes here.")
+
+    assert result.movement_brief.executive_summary == "LLM move summary."
+    assert result.movement_brief.signal_summary == ["LLM signal summary 1.", "LLM signal summary 2."]
+    assert result.movement_brief.takeaway == "LLM takeaway."
+    assert len(result.movement_brief.movement_rows) == 2
+    assert result.movement_brief.where_to_act[0].likely_play == "Play for Person 0"
+
+
 def test_orchestrator_builds_token_backed_transition_and_movement_proconnect_services(monkeypatch):
     created = []
 
@@ -636,6 +968,7 @@ async def test_reviewed_movement_context_is_executed_without_rebuilding_prefligh
     result = await orchestrator.run_from_reviewed_context(
         request=_request(),
         preflight=preflight,
+        actioning_context={},
         prompt_package=MovementPromptPackage(
             industry_key="financial_services",
             system_prompt="REVIEWED SYSTEM PROMPT",

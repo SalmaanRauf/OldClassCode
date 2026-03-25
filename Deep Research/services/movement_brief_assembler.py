@@ -80,6 +80,23 @@ class MovementBriefAssembler:
             takeaway=takeaway,
         )
 
+    def apply_synthesis(self, brief: MovementBrief, synthesis: Any) -> MovementBrief:
+        """Overlay bounded synthesis on the compact cover fields only."""
+        move_summary = self._normalized_text(getattr(synthesis, "move_summary", "") or "")
+        signal_summary = [
+            self._normalized_text(item)
+            for item in list(getattr(synthesis, "signal_summary", []) or [])
+            if self._normalized_text(item)
+        ]
+        takeaway = self._normalized_text(getattr(synthesis, "takeaway", "") or "")
+
+        return self._copy_model(
+            brief,
+            executive_summary=move_summary or brief.executive_summary,
+            signal_summary=signal_summary[:3] or brief.signal_summary,
+            takeaway=takeaway or brief.takeaway,
+        )
+
     def _order_ranked_rows(self, ranked_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if not ranked_rows:
             return []
@@ -312,6 +329,10 @@ class MovementBriefAssembler:
         if len(compact) > 220:
             compact = compact[:217].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
         return compact
+
+    @staticmethod
+    def _normalized_text(value: Any) -> str:
+        return re.sub(r"\s+", " ", str(value or "").strip())
 
     @staticmethod
     def _build_likely_play(

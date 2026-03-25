@@ -194,9 +194,12 @@ def test_build_movement_trigger_reuses_financial_services_signal_mapping_and_loo
     assert trigger.company_focus == "Fannie Mae"
     assert trigger.time_window_days == 180
     assert trigger.signals == get_signal_registry_service().get_fs_signal_codes()
-    assert "Jennifer Brady" in (trigger.user_prompt_context or "")
-    assert "Capital One" in (trigger.user_prompt_context or "")
+    assert "Jennifer Brady" not in (trigger.user_prompt_context or "")
+    assert "Capital One" not in (trigger.user_prompt_context or "")
     assert "Fannie Mae" in (trigger.user_prompt_context or "")
+    assert "executive movement" in (trigger.user_prompt_context or "").lower()
+    assert "buyer movement" in (trigger.user_prompt_context or "").lower()
+    assert "why the account matters now" in (trigger.user_prompt_context or "").lower()
 
 
 def test_build_movement_progress_content_marks_review_ready_after_preflight():
@@ -503,3 +506,43 @@ def test_build_movement_progress_content_tracks_pipeline_and_deep_research_polli
     assert "ProConnect matching/enrichment: in progress" in content
     assert "Deep Research polling" in content
     assert "Poll: #2" in content
+
+
+def test_build_movement_progress_content_omits_verbose_final_report_text_from_polling():
+    verbose_report = (
+        "Final Report: # Federal National Mortgage Association (Fannie Mae) - Recent Risk & Regulatory Signals "
+        "## 1. Executive Transitions Detailed report body with many sections and citations."
+    )
+
+    content = build_movement_progress_content(
+        {
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "industry_override": "financial_services",
+        },
+        [
+            {
+                "stage": "running_deep_research",
+                "message": "Polling Deep Research.",
+                "status": "in_progress",
+                "citation_count": 33,
+                "poll_count": 31,
+                "activity_log": [
+                    "Searching issuer newsroom",
+                    "Checking leadership update sources",
+                ],
+                "latest_text": verbose_report,
+            }
+        ],
+    )
+
+    assert "Deep Research polling" in content
+    assert "Poll: #31 | Sources found: 33" in content
+    assert "Searching issuer newsroom" in content
+    assert "Checking leadership update sources" in content
+    assert "Latest update:" not in content
+    assert "Final Report:" not in content
+    assert "## 1. Executive Transitions" not in content

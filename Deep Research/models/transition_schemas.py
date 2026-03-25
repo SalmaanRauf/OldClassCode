@@ -61,7 +61,17 @@ class TransitionPersonResolution(BaseModel):
     matched_name: Optional[str] = Field(None, description="Resolved person display name")
     matched_title: Optional[str] = Field(None, description="Resolved current title")
     match_source: Optional[str] = Field(None, description="Winning evidence source")
+    match_scope: Optional[str] = Field(None, description="Whether the match tied to the source or destination account")
+    linked_account_id: Optional[str] = Field(None, description="Resolved linked account identifier for the matched person")
     direct_person_evidence: bool = Field(False, description="Whether direct person-level evidence exists")
+    match_diagnostics: List[str] = Field(
+        default_factory=list,
+        description="Human-readable explanation of why the match succeeded or failed",
+    )
+    candidate_suggestions: List[str] = Field(
+        default_factory=list,
+        description="Top candidate suggestions when exact matching is not available",
+    )
 
 
 class AccountResolution(BaseModel):
@@ -106,6 +116,10 @@ class TransitionPreflight(BaseModel):
     )
     inferred_industry: str = Field("general", description="Industry prompt family selected for research")
     suggested_research_prompt: str = Field("", description="Generated research prompt preview")
+    review_diagnostics: List[str] = Field(
+        default_factory=list,
+        description="Review-surface diagnostics explaining unresolved person or account context",
+    )
 
 
 class TransitionOpportunityCard(BaseModel):

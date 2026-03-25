@@ -226,6 +226,37 @@ def test_build_movement_preflight_review_shows_move_context_and_prompt_actions()
     assert payload["view_prompt_action"]["payload"] == {"run_id": "run-123", "mode": "movement"}
 
 
+def test_build_movement_preflight_review_surfaces_match_and_review_diagnostics():
+    preflight = _preflight()
+    preflight.person_resolution.match_status = "candidate"
+    preflight.person_resolution.match_diagnostics = [
+        "No exact account-scoped match. Closest candidate is Jennifer A Brady via from key buyers (score 0.96)."
+    ]
+    preflight.person_resolution.candidate_suggestions = [
+        "Jennifer A Brady (Senior Director of Technology Risk; from key buyers; score 0.96)"
+    ]
+    preflight.review_diagnostics = [
+        "Source account lookup did not resolve cleanly for Capital One; using raw company text."
+    ]
+
+    payload = build_movement_preflight_review(
+        _request(),
+        preflight,
+        MovementPromptPackage(
+            industry_key="financial_services",
+            system_prompt="FS prompt",
+            user_prompt="Generated move prompt.",
+        ),
+        run_id="run-123",
+    )
+
+    content = payload["content"]
+    assert "Match diagnostics" in content
+    assert "Closest candidate is Jennifer A Brady" in content
+    assert "Candidate suggestions" in content
+    assert "Review diagnostics" in content
+
+
 def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_detail_content():
     movement_rows = [_movement(index, with_proof=(index == 0)) for index in range(12)]
     where_to_act = [

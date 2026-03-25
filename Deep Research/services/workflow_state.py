@@ -49,6 +49,10 @@ class WorkflowRunContext(BaseModel):
     mode: WorkflowMode = Field(..., description="Workflow mode")
     request: Dict[str, Any] = Field(default_factory=dict, description="Serialized request model")
     preflight: Optional[Dict[str, Any]] = Field(default=None, description="Serialized reviewed preflight")
+    actioning_context: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Serialized reviewed actioning context when available",
+    )
     prompt_package: Optional[Dict[str, Any]] = Field(default=None, description="Serialized prompt package")
     prompt_override: Optional[str] = Field(default=None, description="Latest edited prompt override")
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -66,6 +70,7 @@ def create_workflow_run(
     mode: WorkflowMode,
     request: Dict[str, Any],
     preflight: Optional[Dict[str, Any]] = None,
+    actioning_context: Optional[Dict[str, Any]] = None,
     prompt_package: Optional[Dict[str, Any]] = None,
     prompt_override: Optional[str] = None,
     status: WorkflowRunStatus = WorkflowRunStatus.PREFLIGHT_PENDING,
@@ -75,6 +80,7 @@ def create_workflow_run(
         mode=mode,
         request=dict(request or {}),
         preflight=dict(preflight or {}) or None,
+        actioning_context=dict(actioning_context or {}) or None,
         prompt_package=dict(prompt_package or {}) or None,
         prompt_override=prompt_override,
         status=status,

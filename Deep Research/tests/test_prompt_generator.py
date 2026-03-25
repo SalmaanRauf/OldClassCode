@@ -21,10 +21,13 @@ def test_prompt_generator_fallback_includes_company_scope_guardrail():
 
     prompt = generator._fallback_template(params)
 
-    assert "Anchor findings to Capital One only; exclude unrelated peer-company personnel moves." in prompt
+    assert (
+        "Anchor findings to Capital One and directly related entities; exclude unrelated peer-company noise unless needed for comparison."
+        in prompt
+    )
 
 
-def test_prompt_generator_fallback_omits_scope_guardrail_for_non_fs_sector():
+def test_prompt_generator_fallback_includes_scope_guardrail_for_non_fs_sector():
     generator = PromptGenerator()
     params = ResearchParameters(
         sector="defense",
@@ -36,4 +39,7 @@ def test_prompt_generator_fallback_omits_scope_guardrail_for_non_fs_sector():
 
     prompt = generator._fallback_template(params)
 
-    assert "exclude unrelated peer-company personnel moves" not in prompt
+    assert (
+        "Anchor findings to Hanwha and directly related entities; exclude unrelated peer-company noise unless needed for comparison."
+        in prompt
+    )
