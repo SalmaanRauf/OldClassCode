@@ -437,3 +437,66 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
     assert detail["source_title"] == "Scenario input + ProConnect preflight"
     assert detail["source_url"] is None
     assert detail["person_detail"]["match_scope"] == "from"
+
+
+def test_build_movement_brief_payload_named_mover_uses_list_evidence_when_counts_are_sparse():
+    payload = build_movement_brief_payload(
+        _brief([], []),
+        request=_request(),
+        preflight=_preflight(),
+        named_mover_context={
+            "person_profile": {
+                "direct_person_evidence": True,
+                "relationship_owner": "Bernadette Norrington",
+                "project_count": 0,
+                "win_count": 1,
+                "projects": [
+                    {"name": "Technology Controls Refresh"},
+                    {"name": "Cyber Risk Remediation"},
+                    {"name": "Identity Access Uplift"},
+                ],
+                "matched_person": {
+                    "name": "Jennifer Brady",
+                    "title": "Senior Director of Technology Risk",
+                    "company_scope": "from",
+                    "projects": [
+                        {"name": "Technology Controls Refresh"},
+                        {"name": "Cyber Risk Remediation"},
+                        {"name": "Identity Access Uplift"},
+                    ],
+                    "closeWonOpps": [
+                        {"name": "IA Co-source"},
+                        {"name": "Controls Testing"},
+                    ],
+                },
+            },
+            "from_company_context": {
+                "account_team": {
+                    "account_executive": {"name": "Bernadette Norrington"},
+                },
+                "relationship_network": {
+                    "connected_colleagues": {"items": [{"name": "Bernadette Norrington"}]},
+                    "protiviti_alumni": {"items": []},
+                },
+                "top_key_buyers": [
+                    {
+                        "name": "Jennifer Brady",
+                        "wins_5y": 2,
+                    }
+                ],
+            },
+            "to_company_context": {
+                "relationship_network": {
+                    "connected_colleagues": {"items": []},
+                    "protiviti_alumni": {"items": []},
+                }
+            },
+        },
+        footer_actions=[
+            {"name": "movement_new_scan", "label": "Start New Scan", "payload": {"mode": "movement"}},
+        ],
+    )
+
+    assert payload["movement_rows"][0]["project_count"] == 3
+    assert payload["movement_rows"][0]["win_count"] == 2
+    assert payload["footer_actions"][0]["label"] == "Start New Scan"

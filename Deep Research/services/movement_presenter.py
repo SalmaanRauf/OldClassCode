@@ -158,6 +158,7 @@ def build_movement_brief_payload(
     person_details_by_name: Optional[Dict[str, Dict[str, Any]]] = None,
     row_action_context_by_row_id: Optional[Dict[str, Dict[str, Any]]] = None,
     row_action_context_by_person_name: Optional[Dict[str, Dict[str, Any]]] = None,
+    footer_actions: Optional[List[Dict[str, Any]]] = None,
     title: str = "People Movement Brief",
     subtitle: str = "Executive and buyer movement with leverage, proof, and next actions.",
 ) -> Dict[str, Any]:
@@ -216,6 +217,7 @@ def build_movement_brief_payload(
         "movement_rows": row_payloads,
         "row_details_by_id": row_details_by_id,
         "where_to_act": [_build_action_payload(action) for action in visible_actions],
+        "footer_actions": list(footer_actions or []),
         "takeaway": brief.takeaway,
         "section_order": [
             "move_summary",
@@ -426,21 +428,46 @@ def _build_named_mover_board_row(
     relationship_network = _clean_dict(scope_context.get("relationship_network"))
     connected_colleagues = _clean_list(_clean_dict(relationship_network.get("connected_colleagues")).get("items"))
     alumni = _clean_list(_clean_dict(relationship_network.get("protiviti_alumni")).get("items"))
+    scope_key_buyer_match = _find_named_mover_scope_record(
+        person_name=preflight.person_resolution.matched_name or request.person_name,
+        scope_context=scope_context,
+    )
 
-    project_count = _first_positive_int(
+    project_count = _max_positive_int(
         person_profile.get("project_count"),
         matched_person.get("project_count"),
         matched_person.get("projectCount"),
+        len(_clean_list(person_profile.get("projects"))),
+        len(_clean_list(matched_person.get("projects"))),
+        _max_positive_int(
+            scope_key_buyer_match.get("project_count"),
+            scope_key_buyer_match.get("projectCount"),
+            scope_key_buyer_match.get("numberOfProjects"),
+        ),
     )
-    win_count = _first_positive_int(
+    win_count = _max_positive_int(
         person_profile.get("win_count"),
         matched_person.get("win_count"),
         matched_person.get("winCount"),
+        len(_clean_list(person_profile.get("closeWonOpps"))),
+        len(_clean_list(person_profile.get("closeWonOpportunities"))),
+        len(_clean_list(matched_person.get("closeWonOpps"))),
+        len(_clean_list(matched_person.get("closeWonOpportunities"))),
+        _max_positive_int(
+            scope_key_buyer_match.get("win_count"),
+            scope_key_buyer_match.get("winCount"),
+            scope_key_buyer_match.get("wins_5y"),
+            scope_key_buyer_match.get("numberOfWins"),
+        ),
+        len(_clean_list(scope_key_buyer_match.get("close_won_opportunities"))),
+        len(_clean_list(scope_key_buyer_match.get("closeWonOpps"))),
     )
     relationship_owner = _first_non_empty_text(
         person_profile.get("relationship_owner"),
         matched_person.get("relationship_owner"),
         matched_person.get("relationshipOwner"),
+        scope_key_buyer_match.get("relationship_owner"),
+        scope_key_buyer_match.get("relationshipOwner"),
         _clean_dict(account_team.get("account_executive")).get("name"),
         _clean_dict(account_team.get("account_mdd")).get("name"),
         _clean_dict(account_team.get("account_pmo")).get("name"),
@@ -567,6 +594,21 @@ def _normalize_secondary_controls(controls: List[Dict[str, Any]]) -> List[Dict[s
     return normalized
 
 
+def _find_named_mover_scope_record(*, person_name: str, scope_context: Dict[str, Any]) -> Dict[str, Any]:
+    normalized_person = _normalize_person_name(person_name)
+    candidate_lists = [
+        _clean_list(scope_context.get("top_key_buyers")),
+        _clean_list(_clean_dict(scope_context.get("key_buyers")).get("items")),
+    ]
+    for candidates in candidate_lists:
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            if _normalize_person_name(candidate.get("name") or "") == normalized_person:
+                return candidate
+    return {}
+
+
 def _clean_dict(value: Any) -> Dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
@@ -625,6 +667,13 @@ def _first_positive_int(*values: Any) -> int:
         if parsed > 0:
             return parsed
     return 0
+
+
+def _max_positive_int(*values: Any) -> int:
+    best = 0
+    for value in values:
+        best = max(best, _first_positive_int(value))
+    return best
 
 
 def _infer_named_mover_category(new_role: str) -> str:
