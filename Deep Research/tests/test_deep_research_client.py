@@ -7,7 +7,12 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from services.deep_research_client import DeepResearchClient, DeepResearchCitation, DeepResearchReport
+from services.deep_research_client import (
+    DEEP_RESEARCH_POLL_INTERVAL_SECONDS,
+    DeepResearchClient,
+    DeepResearchCitation,
+    DeepResearchReport,
+)
 
 
 def _client() -> DeepResearchClient:
@@ -300,3 +305,7 @@ def test_build_run_query_keeps_prompt_budget_reasonable():
     run_query = client._build_run_query(query)
 
     assert len(run_query) < 5000
+
+
+def test_default_poll_interval_is_40_seconds():
+    assert DEEP_RESEARCH_POLL_INTERVAL_SECONDS == 40.0

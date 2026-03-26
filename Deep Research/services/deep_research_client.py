@@ -22,7 +22,7 @@ from services.runtime_policy import get_runtime_policy
 
 
 logger = logging.getLogger(__name__)
-DEEP_RESEARCH_POLL_INTERVAL_SECONDS = 15.0
+DEEP_RESEARCH_POLL_INTERVAL_SECONDS = 40.0
 
 
 @dataclass
