@@ -1814,6 +1814,13 @@ async def present_movement_brief(result, *, run_id: str) -> None:
         footer_actions=footer_actions,
     )
     payload["session_id"] = getattr(getattr(chainlit_context, "session", None), "id", None)
+    logger.info(
+        "Presenting movement brief run_id=%s rows=%s footer_actions=%s session_id_present=%s",
+        run_id,
+        len(payload.get("movement_rows") or []),
+        len(payload.get("footer_actions") or []),
+        bool(payload.get("session_id")),
+    )
     brief_element = cl.CustomElement(
         name="MovementBrief",
         display="inline",
@@ -1821,10 +1828,15 @@ async def present_movement_brief(result, *, run_id: str) -> None:
         props=payload,
     )
     _ensure_chainlit_files_root()
+    actions = [
+        cl.Action(name=item["name"], label=item["label"], payload=item.get("payload", {}))
+        for item in footer_actions
+    ]
     try:
         await cl.Message(
             content="",
             elements=[brief_element],
+            actions=actions,
         ).send()
     except Exception as exc:
         logger.exception("Movement brief custom element render failed: %s", exc)

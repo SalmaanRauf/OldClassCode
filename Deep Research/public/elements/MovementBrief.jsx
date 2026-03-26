@@ -481,31 +481,17 @@ export default function MovementBrief() {
     };
 
     const invokeFooterAction = async (action) => {
-        if (!action || !action.name || !data.session_id) {
+        if (!action || !action.name || typeof callAction !== "function") {
             return;
         }
         const key = actionKey(action);
         setPendingActionKey(key);
         setActionError("");
         try {
-            const response = await fetch(buildActionEndpoint(), {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                credentials: "same-origin",
-                body: JSON.stringify({
-                    sessionId: data.session_id,
-                    action: {
-                        name: action.name,
-                        label: action.label,
-                        payload: action.payload || {},
-                    },
-                }),
+            await callAction({
+                name: action.name,
+                payload: action.payload || {},
             });
-            if (!response.ok) {
-                throw new Error(`Action request failed with status ${response.status}`);
-            }
         } catch (error) {
             console.error("Movement brief footer action failed", error);
             setActionError("Action failed. Check the terminal logs and try again.");
@@ -776,7 +762,7 @@ export default function MovementBrief() {
                             <div className="movement-brief__footer-actions">
                                 {footerActions.map((action) => {
                                     const key = actionKey(action);
-                                    const disabled = !data.session_id || pendingActionKey === key;
+                                    const disabled = typeof callAction !== "function" || pendingActionKey === key;
                                     return (
                                         <button
                                             key={key}
@@ -899,10 +885,4 @@ function renderPersonDetail(personDetail) {
 
 function actionKey(action) {
     return `${action?.name || ""}:${JSON.stringify(action?.payload || {})}`;
-}
-
-function buildActionEndpoint() {
-    const rootPath = document.querySelector('meta[property="og:root_path"]')?.getAttribute("content") || "";
-    const trimmedRoot = rootPath.endsWith("/") ? rootPath.slice(0, -1) : rootPath;
-    return `${trimmedRoot}/project/action`;
 }
