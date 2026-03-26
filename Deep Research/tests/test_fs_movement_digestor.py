@@ -38,6 +38,26 @@ class _FakeKernel:
         return _FakeChat(self._payload)
 
 
+class _SequenceChat:
+    def __init__(self, payloads: list[dict]):
+        self._payloads = list(payloads)
+        self.calls = 0
+
+    async def get_chat_message_content(self, **kwargs):
+        payload = self._payloads[self.calls]
+        self.calls += 1
+        return _FakeResult(json.dumps(payload))
+
+
+class _SequenceKernel:
+    def __init__(self, payloads: list[dict]):
+        self.chat = _SequenceChat(payloads)
+
+    def get_service(self, name: str):
+        assert name == "atlas"
+        return self.chat
+
+
 def _trigger() -> BDTrigger:
     return BDTrigger(
         sector="Financial Services",
@@ -228,3 +248,81 @@ async def test_digest_normalizes_categories_dedupes_rows_and_keeps_partial_role_
         ("Priscilla Almodovar", "EXEC"),
     ]
     assert rows[1].previous_role == ""
+
+
+@pytest.mark.asyncio
+async def test_digest_unions_rows_across_general_exec_and_buyer_passes():
+    kernel = _SequenceKernel([
+        {
+            "movement_records": [
+                {
+                    "person_name": "Priscilla Almodovar",
+                    "target_company": "Fannie Mae",
+                    "previous_role": "Chief Executive Officer",
+                    "new_role": "Departed",
+                    "movement_type": "Departure",
+                    "category": "EXEC",
+                    "company_context": "leadership_change",
+                    "evidence_quote": "Priscilla Almodovar stepped down as CEO.",
+                    "source_url": "https://example.com/priscilla",
+                    "source_title": "CEO transition",
+                }
+            ]
+        },
+        {
+            "movement_records": [
+                {
+                    "person_name": "Peter Akwaboah",
+                    "target_company": "Federal National Mortgage Association (Fannie Mae)",
+                    "previous_role": "Chief Operating Officer",
+                    "new_role": "Acting Chief Executive Officer",
+                    "movement_type": "Interim CEO appointment",
+                    "category": "EXEC",
+                    "company_context": "leadership_change",
+                    "evidence_quote": "Peter Akwaboah became Acting CEO.",
+                    "source_url": "https://example.com/akwaboah",
+                    "source_title": "Acting CEO announcement",
+                }
+            ]
+        },
+        {
+            "movement_records": [
+                {
+                    "person_name": "Thomas Klein",
+                    "target_company": "Fannie Mae",
+                    "previous_role": "Enterprise Deputy General Counsel",
+                    "new_role": "Acting General Counsel",
+                    "movement_type": "Promotion",
+                    "category": "BUYER",
+                    "company_context": "internal",
+                    "evidence_quote": "Thomas Klein was elevated to Acting General Counsel.",
+                    "source_url": "https://example.com/klein",
+                    "source_title": "Legal leadership update",
+                }
+            ]
+        },
+    ])
+    digestor = FSMovementDigestor(kernel=kernel)
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.EXEC.TRANSITION", "FS.BUYER.MOVEMENT"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find executive and buyer movement at Fannie Mae.",
+        ),
+        deep_research_markdown="Movement notes here.",
+        target_company_aliases=["Fannie Mae", "Federal National Mortgage Association (Fannie Mae)"],
+    )
+
+    assert [(row.person_name, row.category) for row in rows] == [
+        ("Priscilla Almodovar", "EXEC"),
+        ("Peter Akwaboah", "EXEC"),
+        ("Thomas Klein", "BUYER"),
+    ]
+    assert diagnostics["movements_returned"] == 3
+    assert diagnostics["pass_results"] == [
+        {"focus": "general", "count": 1},
+        {"focus": "executive", "count": 1},
+        {"focus": "buyer", "count": 1},
+    ]

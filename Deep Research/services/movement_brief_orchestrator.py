@@ -243,7 +243,7 @@ class MovementBriefOrchestrator:
             target_company_aliases=self._target_company_aliases(request, preflight),
         )
         logger.info(
-            "Movement rows prepared run_id=%s extracted=%s retained=%s named_mover_present=%s",
+            "Movement rows prepared run_id=%s extracted=%s retained=%s named_mover_present=%s pass_results=%s rows=%s",
             reviewed_run_id,
             movement_diagnostics.get("movements_returned"),
             len(movement_rows),
@@ -255,6 +255,15 @@ class MovementBriefOrchestrator:
                 }
                 for row in movement_rows
             ),
+            movement_diagnostics.get("pass_results"),
+            [
+                {
+                    "person": row.person_name,
+                    "category": row.category,
+                    "movement_type": row.movement_type,
+                }
+                for row in movement_rows[:25]
+            ],
         )
         executive_count = len([row for row in movement_rows if getattr(row, "category", "") == "EXEC"])
         buyer_count = len([row for row in movement_rows if getattr(row, "category", "") == "BUYER"])
@@ -316,9 +325,10 @@ class MovementBriefOrchestrator:
             run_id=reviewed_run_id,
         )
         logger.info(
-            "Movement ProConnect enrichment summary run_id=%s rows=%s top=%s",
+            "Movement ProConnect enrichment summary run_id=%s rows=%s matched=%s top=%s",
             reviewed_run_id,
             len(ranked_rows),
+            len([item for item in ranked_rows if item.get("person_match_status") == "matched"]),
             [
                 {
                     "person": getattr(item.get("movement"), "person_name", ""),

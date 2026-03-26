@@ -438,6 +438,74 @@ def test_live_client_path_falls_back_to_same_first_last_name_within_account():
     assert enriched[0]["known"] is True
 
 
+def test_live_client_path_falls_back_to_org_chart_people_when_search_and_key_buyers_miss():
+    class OrgChartFallbackClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return super().search_prospects(search_text)
+            if search_text == "John Roscoe":
+                return {"success": True, "status_code": 200, "data": {"value": []}}
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One Financial Corporation",
+                    "zoomInfoAccountId": "zi-cap-one",
+                    "keyBuyers": [],
+                },
+            }
+
+        def get_org_chart(self, zoom_info_account_id, department, sfdc_job_function, page=None, size=None):
+            assert zoom_info_account_id == "zi-cap-one"
+            if department == "C-Suite" and sfdc_job_function == "Executive":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "employees": [
+                            {
+                                "id": "contact-roscoe",
+                                "name": "John Roscoe",
+                                "title": "Co-President",
+                                "department": "C-Suite",
+                                "location": "Washington, DC, United States",
+                                "linkedinUrl": "https://linkedin.com/in/john-roscoe",
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"employees": []}}
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-roscoe":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "ContactId": "contact-roscoe",
+                        "FirstName": "John",
+                        "LastName": "Roscoe",
+                        "Title": "Co-President",
+                        "Location": "Washington, DC, United States",
+                        "LinkedInUrl": "https://linkedin.com/in/john-roscoe",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    client = OrgChartFallbackClient()
+    service = ProConnectMovementService(client=client)
+
+    enriched = service.deep_enrich_movements([_row("John Roscoe")], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["person_detail"]["title"] == "Co-President"
+    assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/john-roscoe"
+
+
 def test_person_loader_takes_precedence_over_live_client_support():
     class GuardedClient(_FakeLiveClient):
         def search_prospects(self, search_text):

@@ -22,6 +22,7 @@ from services.runtime_policy import get_runtime_policy
 
 
 logger = logging.getLogger(__name__)
+DEEP_RESEARCH_POLL_INTERVAL_SECONDS = 15.0
 
 
 @dataclass
@@ -753,8 +754,8 @@ class DeepResearchClient:
                 if "ASSISTANT" not in error_msg:  # Don't spam known enum errors
                     logger.warning(f"Polling error: {error_msg[:100]}")
             
-            # Poll every 1.5 seconds
-            await asyncio.sleep(1.5)
+            # Poll at a slower cadence to reduce UI churn and log noise during long runs.
+            await asyncio.sleep(DEEP_RESEARCH_POLL_INTERVAL_SECONDS)
 
         # Check completion status
         if run.status != "completed":

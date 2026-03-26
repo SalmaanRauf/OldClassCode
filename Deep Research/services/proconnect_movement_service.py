@@ -11,10 +11,13 @@ from scripts.proconnect_client import ProConnectClient
 from scripts.proconnect_lookup_logic import (
     exact_name_equals,
     full_person_name,
+    get_zoom_info_account_id,
     resolve_company_and_account,
     same_first_last_name,
 )
 from scripts.proconnect_stakeholder_payload import (
+    build_people_candidates_for_account,
+    collect_org_chart_people,
     extract_person_detail_candidate,
     extract_person_search_candidates,
     merge_person_candidates,
@@ -37,6 +40,8 @@ class ProConnectMovementService:
         self._company_account_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         self._person_payload_cache: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
         self._person_detail_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+        self._account_people_cache: Dict[str, List[Dict[str, Any]]] = {}
+        self._account_people_warnings_cache: Dict[str, List[str]] = {}
         if person_loader is not None:
             self.person_loader = person_loader
         elif client is not None:
@@ -147,13 +152,19 @@ class ProConnectMovementService:
         )
 
         logger.info(
-            "ProConnect movement lookup matched person=%s company=%s account_id=%s projects=%s wins=%s owner=%s",
+            "ProConnect movement lookup matched person=%s company=%s account_id=%s projects=%s wins=%s owner=%s raw_project_count=%s raw_win_count=%s projects_list=%s wins_list=%s",
             person_name,
             target_company,
             account_id,
             self._project_count(payload),
             self._win_count(payload),
             self._relationship_owner(payload),
+            payload.get("projectCount") or payload.get("project_count") or payload.get("numberOfProjects"),
+            payload.get("winCount") or payload.get("win_count") or payload.get("numberOfWins") or payload.get("wins"),
+            len(payload.get("projects") or []) if isinstance(payload.get("projects"), list) else 0,
+            len(payload.get("closeWonOpps") or payload.get("closeWonOpportunities") or [])
+            if isinstance(payload.get("closeWonOpps") or payload.get("closeWonOpportunities"), list)
+            else 0,
         )
         self._person_payload_cache[cache_key] = payload
         return payload
@@ -176,6 +187,8 @@ class ProConnectMovementService:
     ) -> Optional[Dict[str, Any]]:
         exact_candidates: List[Dict[str, Any]] = []
         fallback_candidates: List[Dict[str, Any]] = []
+        search_exact_count = 0
+        search_fallback_count = 0
 
         search_response = self.client.search_prospects(person_name)
         if search_response.get("success"):
@@ -192,8 +205,10 @@ class ProConnectMovementService:
                     continue
                 if name_matches_exact:
                     exact_candidates.append(candidate)
+                    search_exact_count += 1
                 else:
                     fallback_candidates.append(candidate)
+                    search_fallback_count += 1
 
         key_buyer_exact_matches = self._matching_records_from_account(
             person_name,
@@ -211,6 +226,37 @@ class ProConnectMovementService:
             )
             fallback_candidates.extend(key_buyer_fallback_matches)
 
+        account_people = self._build_account_people_pool(account, account_id=account_id)
+        account_people_exact_matches = self._matching_records_from_account(
+            person_name,
+            account_people,
+            allow_first_last=False,
+        )
+        if account_people_exact_matches:
+            exact_candidates.extend(account_people_exact_matches)
+
+        account_people_fallback_matches: List[Dict[str, Any]] = []
+        if not exact_candidates:
+            account_people_fallback_matches = self._matching_records_from_account(
+                person_name,
+                account_people,
+                allow_first_last=True,
+            )
+            fallback_candidates.extend(account_people_fallback_matches)
+
+        logger.info(
+            "ProConnect movement candidate pool person=%s account_id=%s search_exact=%s search_fallback=%s key_buyer_exact=%s key_buyer_fallback=%s account_people_exact=%s account_people_fallback=%s org_warnings=%s",
+            person_name,
+            account_id,
+            search_exact_count,
+            search_fallback_count,
+            len(key_buyer_exact_matches),
+            len(key_buyer_fallback_matches) if 'key_buyer_fallback_matches' in locals() else 0,
+            len(account_people_exact_matches),
+            len(account_people_fallback_matches),
+            len(self._account_people_warnings_cache.get(account_id, [])),
+        )
+
         candidates_to_merge = exact_candidates or fallback_candidates
         if not candidates_to_merge:
             return None
@@ -223,6 +269,31 @@ class ProConnectMovementService:
                 title_hints=[],
             )
         return selected
+
+    def _build_account_people_pool(self, account: Dict[str, Any], *, account_id: str) -> List[Dict[str, Any]]:
+        cache_key = account_id or self._cache_key(str(account.get("name") or ""))
+        if cache_key in self._account_people_cache:
+            return self._account_people_cache[cache_key]
+
+        org_chart_people: List[Dict[str, Any]] = []
+        warnings: List[str] = []
+        if self.client:
+            _, org_chart_people, warnings = collect_org_chart_people(
+                client=self.client,
+                zoom_info_account_id=get_zoom_info_account_id(account),
+                department_hint=None,
+            )
+
+        people = build_people_candidates_for_account(
+            account=account,
+            company_scope="to",
+            account_id=account_id,
+            org_chart_people=org_chart_people,
+            probe_payloads=[],
+        )
+        self._account_people_cache[cache_key] = people
+        self._account_people_warnings_cache[cache_key] = warnings
+        return people
 
     def _matching_records_from_account(
         self,

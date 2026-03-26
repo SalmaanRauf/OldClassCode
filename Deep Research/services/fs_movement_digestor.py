@@ -21,6 +21,21 @@ PROMPT_PATH = Path(__file__).parent.parent / "sk_functions" / "BD_FS_Movement_Di
 class FSMovementDigestor:
     """Normalizes executive and buyer movement rows for movement-led briefs."""
 
+    PASS_PLAN = (
+        (
+            "general",
+            "Capture all confirmed executive and buyer movements tied to the target company.",
+        ),
+        (
+            "executive",
+            "Focus on executive, board, CEO, president, co-president, C-suite, chair, and leadership transitions. Prefer EXEC rows and do not omit confirmed leadership moves.",
+        ),
+        (
+            "buyer",
+            "Focus on buyer-center moves in audit, finance, risk, compliance, legal, data, security, technology, controls, and operations. Prefer BUYER rows and do not omit confirmed buyer-side changes.",
+        ),
+    )
+
     def __init__(self, kernel=None, exec_settings=None):
         self._kernel = kernel
         self._exec_settings = exec_settings
@@ -66,29 +81,59 @@ class FSMovementDigestor:
 
         try:
             await self._ensure_kernel()
-            prompt = self._render_prompt(trigger, deep_research_markdown, max_rows=max_rows)
-
-            history = create_chat_history()
-            history.add_user_message(prompt)
             chat = self._kernel.get_service("atlas")
-            result = await chat.get_chat_message_content(
-                chat_history=history,
-                settings=self._exec_settings,
-                kernel=self._kernel,
-            )
-            raw_response = str(result)
-            diagnostics["raw_response_text"] = raw_response
+            combined_rows: List[MovementRecord] = []
+            raw_responses: List[str] = []
+            pass_results: List[Dict[str, Any]] = []
 
-            payload = json.loads(self._extract_json(raw_response))
-            movements = self._coerce_movements(
-                payload.get("movement_records", []),
-                trigger=trigger,
-                max_rows=max_rows,
-                target_company_aliases=target_company_aliases,
-            )
+            for focus, focus_instruction in self.PASS_PLAN:
+                prompt = self._render_prompt(
+                    trigger,
+                    deep_research_markdown,
+                    max_rows=max_rows,
+                    focus_instruction=focus_instruction,
+                )
+                history = create_chat_history()
+                history.add_user_message(prompt)
+                try:
+                    result = await chat.get_chat_message_content(
+                        chat_history=history,
+                        settings=self._exec_settings,
+                        kernel=self._kernel,
+                    )
+                    raw_response = str(result)
+                    raw_responses.append(raw_response)
+                    payload = json.loads(self._extract_json(raw_response))
+                    rows = self._coerce_movements(
+                        payload.get("movement_records", []),
+                        trigger=trigger,
+                        max_rows=max_rows,
+                        target_company_aliases=target_company_aliases,
+                    )
+                    combined_rows.extend(rows)
+                    pass_results.append({"focus": focus, "count": len(rows)})
+                except Exception as exc:
+                    pass_results.append(
+                        {
+                            "focus": focus,
+                            "count": 0,
+                            "error_type": type(exc).__name__,
+                            "error_message": str(exc),
+                        }
+                    )
+
+            diagnostics["raw_response_text"] = "\n\n".join(raw_responses).strip()
+            diagnostics["pass_results"] = pass_results
+            movements = self._dedupe_rows(combined_rows, max_rows=max_rows)
             diagnostics["movements_returned"] = len(movements)
-            diagnostics["status"] = "Succeeded"
-            diagnostics["parse_outcome"] = "json_parsed_with_movement_records"
+            diagnostics["status"] = "Succeeded" if movements else "Failed"
+            diagnostics["parse_outcome"] = (
+                "json_parsed_multi_pass_movement_records"
+                if movements
+                else "multi_pass_no_movement_records"
+            )
+            if not movements:
+                diagnostics["reason"] = "Movement digest passes returned no valid movement rows."
             return movements, diagnostics
 
         except json.JSONDecodeError as exc:
@@ -108,7 +153,14 @@ class FSMovementDigestor:
         finally:
             diagnostics["duration_ms"] = (perf_counter() - start) * 1000
 
-    def _render_prompt(self, trigger: BDTrigger, markdown: str, max_rows: int) -> str:
+    def _render_prompt(
+        self,
+        trigger: BDTrigger,
+        markdown: str,
+        max_rows: int,
+        *,
+        focus_instruction: str = "",
+    ) -> str:
         template = self._load_prompt()
         trigger_parts = [f"Sector: {trigger.sector}"]
         if trigger.company_focus:
@@ -123,7 +175,10 @@ class FSMovementDigestor:
         prompt = template.replace("{{$trigger_summary}}", "; ".join(trigger_parts))
         prompt = prompt.replace("{{$current_date_iso}}", datetime.now().date().isoformat())
         prompt = prompt.replace("{{$max_rows}}", str(max_rows))
-        return prompt.replace("{{$deep_research_markdown}}", markdown)
+        prompt = prompt.replace("{{$deep_research_markdown}}", markdown)
+        if focus_instruction:
+            prompt = f"{prompt}\n\nAdditional extraction focus:\n- {focus_instruction}\n"
+        return prompt
 
     def _coerce_movements(
         self,
@@ -219,6 +274,26 @@ class FSMovementDigestor:
         if start >= 0 and end > start:
             return cleaned[start:end]
         return cleaned
+
+    def _dedupe_rows(self, rows: List[MovementRecord], *, max_rows: int) -> List[MovementRecord]:
+        deduped_rows: Dict[Tuple[str, str, str, str], Tuple[int, int, MovementRecord]] = {}
+        for row in rows:
+            dedupe_key = self._movement_dedupe_key(row)
+            candidate_score = self._row_information_score(row)
+            existing = deduped_rows.get(dedupe_key)
+            if existing is None:
+                deduped_rows[dedupe_key] = (len(deduped_rows), candidate_score, row)
+                continue
+            original_index, existing_score, existing_row = existing
+            if candidate_score > existing_score:
+                deduped_rows[dedupe_key] = (original_index, candidate_score, row)
+            else:
+                deduped_rows[dedupe_key] = (original_index, existing_score, existing_row)
+
+        return [
+            item[2]
+            for item in sorted(deduped_rows.values(), key=lambda payload: payload[0])
+        ][:max_rows]
 
     @staticmethod
     def _normalize_company(value: Optional[str]) -> str:
