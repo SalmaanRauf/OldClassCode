@@ -275,6 +275,169 @@ def test_live_client_path_exact_matches_person_and_hydrates_detail_once():
     assert client.endpoint_calls == ["/api/prospects/contact-123"]
 
 
+def test_live_client_path_prefers_richer_key_buyer_counts_over_sparse_search_counts():
+    class RicherKeyBuyerClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return super().search_prospects(search_text)
+            if search_text == "Sarah Chen":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-123",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One Financial Corporation",
+                                    "name": "Sarah Chen",
+                                    "title": "VP, Model Risk",
+                                    "projectCount": 0,
+                                    "winCount": 1,
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One Financial Corporation",
+                    "keyBuyers": [
+                        {
+                            "firstName": "Sarah",
+                            "lastName": "Chen",
+                            "title": "VP, Model Risk",
+                            "projectCount": 4,
+                            "projects": [
+                                {"name": "Model Risk Refresh"},
+                                {"name": "Controls Review"},
+                            ],
+                            "closeWonOpps": [
+                                {"name": "Model Risk Refresh"},
+                                {"name": "Controls Review"},
+                                {"name": "Audit Uplift"},
+                            ],
+                            "relationshipOwner": "Ben L",
+                        }
+                    ],
+                },
+            }
+
+    client = RicherKeyBuyerClient()
+    service = ProConnectMovementService(client=client)
+
+    enriched = service.deep_enrich_movements([_row("Sarah Chen")], max_rows=5)
+
+    assert enriched[0]["project_count"] == 4
+    assert enriched[0]["win_count"] == 3
+
+
+def test_live_client_path_recovers_account_scoped_projects_and_wins_when_person_payload_is_sparse():
+    class AccountScopedEvidenceClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return super().search_prospects(search_text)
+            if search_text == "Sarah Chen":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-123",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One Financial Corporation",
+                                    "name": "Sarah Chen",
+                                    "title": "VP, Model Risk",
+                                    "projectCount": 0,
+                                    "winCount": 0,
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One Financial Corporation",
+                    "keyBuyers": [
+                        {
+                            "firstName": "Sarah",
+                            "lastName": "Chen",
+                            "title": "VP, Model Risk",
+                            "relationshipOwner": "Ben L",
+                        }
+                    ],
+                    "project": [
+                        {"projectId": "p1", "name": "Model Risk Refresh", "primaryKeyBuyer": "Sarah Chen"},
+                        {"projectId": "p2", "name": "Controls Review", "primaryKeyBuyer": "Sarah Chen"},
+                    ],
+                    "allOpportunity": [
+                        {"opportunityId": "o1", "name": "Audit Uplift", "primaryKeyBuyer": "Sarah Chen", "opportunityStage": "Closed - Won"},
+                        {"opportunityId": "o2", "name": "RCSA Refresh", "primaryKeyBuyer": "Sarah Chen", "opportunityStage": "Closed - Won"},
+                    ],
+                },
+            }
+
+    client = AccountScopedEvidenceClient()
+    service = ProConnectMovementService(client=client)
+
+    enriched = service.deep_enrich_movements([_row("Sarah Chen")], max_rows=5)
+
+    assert enriched[0]["known"] is True
+    assert enriched[0]["worked_with"] is True
+    assert enriched[0]["project_count"] == 2
+    assert enriched[0]["win_count"] == 2
+    assert enriched[0]["relationship_owner"] == "Ben L"
+
+
+def test_live_client_path_falls_back_to_same_first_last_name_within_account():
+    class FirstLastFallbackClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return super().search_prospects(search_text)
+            if search_text == "Sarah Chen":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-123",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One Financial Corporation",
+                                    "name": "Sarah M. Chen",
+                                    "title": "VP, Model Risk",
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+    client = FirstLastFallbackClient()
+    service = ProConnectMovementService(client=client)
+
+    enriched = service.deep_enrich_movements([_row("Sarah Chen")], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["known"] is True
+
+
 def test_person_loader_takes_precedence_over_live_client_support():
     class GuardedClient(_FakeLiveClient):
         def search_prospects(self, search_text):

@@ -3,13 +3,17 @@ Deterministic ranking for enriched movement rows.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 
 class MovementRanker:
     """Rank enriched movement rows for the main brief."""
 
-    def rank(self, enriched_rows: List[Dict[str, Any]], max_rows: int = 10) -> List[Dict[str, Any]]:
+    def rank(
+        self,
+        enriched_rows: List[Dict[str, Any]],
+        max_rows: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
         ranked: List[Dict[str, Any]] = []
         for item in enriched_rows:
             score = self._score(item)
@@ -22,6 +26,8 @@ class MovementRanker:
             )
 
         ranked.sort(key=lambda item: item["rank_score"], reverse=True)
+        if max_rows is None:
+            return ranked
         return ranked[:max_rows]
 
     def _score(self, item: Dict[str, Any]) -> float:

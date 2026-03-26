@@ -575,7 +575,7 @@ def _format_movement_evidence(result: Any) -> str:
         lines.append("No movement rows were retained for this run.")
         return "\n".join(lines).strip()
 
-    for index, row in enumerate(movement_rows[:6], start=1):
+    for index, row in enumerate(movement_rows, start=1):
         source_title = _normalize_text(getattr(getattr(row, "evidence", None), "source_title", "") or "")
         source_url = _normalize_text(getattr(getattr(row, "evidence", None), "source_url", "") or "")
         if source_url.startswith("internal://"):

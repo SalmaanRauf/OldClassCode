@@ -297,12 +297,12 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
     )
 
     assert payload["table_columns"] == MOVEMENT_TABLE_COLUMNS
-    assert len(payload["movement_rows"]) == 10
+    assert len(payload["movement_rows"]) == 12
     assert len(payload["where_to_act"]) == 3
-    assert payload["stats"]["visible_rows"] == 10
+    assert payload["stats"]["visible_rows"] == 12
     assert payload["stats"]["actions"] == 3
-    assert payload["stats"]["exec_rows"] == 5
-    assert payload["stats"]["buyer_rows"] == 5
+    assert payload["stats"]["exec_rows"] == 6
+    assert payload["stats"]["buyer_rows"] == 6
     assert payload["signal_summary"] == [
         "Account pressure is concentrated in governance and operating model change.",
         "People movement is strongest at the target account.",
@@ -360,7 +360,7 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
     assert payload["where_to_act"][0]["relationship_owner"] == "Ben L."
 
 
-def test_build_movement_brief_payload_keeps_only_top_ten_rows_and_three_actions():
+def test_build_movement_brief_payload_keeps_all_rows_and_three_actions():
     movement_rows = [_movement(index) for index in range(12)]
     where_to_act = [
         MovementAction(
@@ -379,11 +379,11 @@ def test_build_movement_brief_payload_keeps_only_top_ten_rows_and_three_actions(
         preflight=_preflight(),
     )
 
-    assert len(payload["movement_rows"]) == 10
-    assert len(payload["row_details_by_id"]) == 10
+    assert len(payload["movement_rows"]) == 12
+    assert len(payload["row_details_by_id"]) == 12
     assert len(payload["where_to_act"]) == 3
     assert len(payload["destination_account_opportunity_context"]) == 1
-    assert payload["movement_rows"][-1]["row_id"] == "movement-row-10"
+    assert payload["movement_rows"][-1]["row_id"] == "movement-row-12"
     assert payload["where_to_act"][-1]["person_name"] == "Person 3"
 
 

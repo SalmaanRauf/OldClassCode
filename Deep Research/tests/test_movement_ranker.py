@@ -53,7 +53,26 @@ def test_ranker_orders_rows_by_combined_leverage_and_role_priority():
     assert ranked[0]["rank_score"] > ranked[1]["rank_score"]
 
 
-def test_ranker_limits_main_rows_to_top_ten():
+def test_ranker_keeps_all_rows_by_default():
+    ranker = MovementRanker()
+    enriched_rows = [
+        {
+            "movement": _row(f"Person {idx}"),
+            "known": True,
+            "worked_with": idx % 2 == 0,
+            "project_count": idx,
+            "win_count": 0,
+            "relationship_owner": "Owner",
+        }
+        for idx in range(12)
+    ]
+
+    ranked = ranker.rank(enriched_rows)
+
+    assert len(ranked) == 12
+
+
+def test_ranker_honors_explicit_row_cap_when_requested():
     ranker = MovementRanker()
     enriched_rows = [
         {

@@ -1469,13 +1469,47 @@ def merge_person_candidates(
         for key, value in candidate.items():
             if key == "_source":
                 continue
-            if present(merged.get(key)) == "present":
+            if not should_replace_person_field(
+                key=key,
+                current_value=merged.get(key),
+                candidate_value=value,
+            ):
                 continue
-            if present(value) == "present":
-                merged[key] = value
+            merged[key] = value
 
     merged["_source"] = selected_source
     return merged
+
+
+def should_replace_person_field(key: str, current_value: Any, candidate_value: Any) -> bool:
+    if present(candidate_value) != "present":
+        return False
+    if present(current_value) != "present":
+        return True
+
+    normalized_key = normalize_text(key).replace(" ", "")
+    if normalized_key in {
+        "projectcount",
+        "project_count",
+        "numberofprojects",
+        "numberofproject",
+        "wincount",
+        "win_count",
+        "numberofwins",
+        "wins",
+    }:
+        current_int = to_int(current_value)
+        candidate_int = to_int(candidate_value)
+        if candidate_int is None:
+            return False
+        if current_int is None:
+            return True
+        return candidate_int > current_int
+
+    if normalized_key in {"projects", "closewonopps", "closewonopportunities", "connections"}:
+        return len(to_list_dicts(candidate_value)) > len(to_list_dicts(current_value))
+
+    return False
 
 
 def candidate_sort_key(candidate: Dict[str, Any], title_hints: List[str]) -> Tuple[int, int, float, int, int, int, str]:
@@ -1535,6 +1569,81 @@ def title_matches_hints(candidate_title: Any, title_hints: List[str]) -> bool:
         if candidate_norm in hint_norm or hint_norm in candidate_norm:
             return True
     return False
+
+
+def _person_reference_ids(matched: Dict[str, Any]) -> set[str]:
+    ids = set()
+    for key in ["id", "contactId", "personId", "prospectId", "primaryKeyBuyerId", "buyerId"]:
+        value = first_non_empty(matched, [key])
+        text = str(value or "").strip()
+        if text:
+            ids.add(text)
+    return ids
+
+
+def _record_matches_person_reference(record: Dict[str, Any], person_name: str, person_ids: set[str]) -> bool:
+    for key in ["primaryKeyBuyer", "buyer", "buyerName", "primaryKeyBuyerName"]:
+        candidate_name = first_non_empty(record, [key])
+        if not candidate_name:
+            continue
+        if exact_name_equals(person_name, candidate_name) or same_first_last_name(person_name, candidate_name):
+            return True
+    candidate_id = first_non_empty(record, ["primaryKeyBuyerId", "buyerId", "contactId", "id", "personId"])
+    if candidate_id and str(candidate_id).strip() in person_ids:
+        return True
+    candidate_name = full_person_name(record) or first_non_empty(record, ["name", "fullName"])
+    if candidate_name and (exact_name_equals(person_name, candidate_name) or same_first_last_name(person_name, candidate_name)):
+        return True
+    return False
+
+
+def _matching_key_buyer_record(
+    account: Optional[Dict[str, Any]],
+    person_name: str,
+    person_ids: set[str],
+) -> Dict[str, Any]:
+    if not isinstance(account, dict):
+        return {}
+    for buyer in to_list_dicts(account.get("keyBuyers")):
+        if _record_matches_person_reference(buyer, person_name, person_ids):
+            return buyer
+    return {}
+
+
+def _matching_account_projects(
+    account: Optional[Dict[str, Any]],
+    person_name: str,
+    person_ids: set[str],
+) -> List[Dict[str, Any]]:
+    if not isinstance(account, dict):
+        return []
+    return [
+        project
+        for project in to_list_dicts(account.get("project"))
+        if _record_matches_person_reference(project, person_name, person_ids)
+    ]
+
+
+def _matching_closed_won_opportunities(
+    account: Optional[Dict[str, Any]],
+    person_name: str,
+    person_ids: set[str],
+) -> List[Dict[str, Any]]:
+    if not isinstance(account, dict):
+        return []
+
+    wins: List[Dict[str, Any]] = []
+    for bucket in ["allOpportunity", "openOpportunity"]:
+        for opportunity in to_list_dicts(account.get(bucket)):
+            if not _record_matches_person_reference(opportunity, person_name, person_ids):
+                continue
+            stage = normalize_text(str(first_non_empty(opportunity, ["opportunityStage", "stage"]) or ""))
+            if stage in {"closed won", "closed - won"}:
+                wins.append(opportunity)
+    return dedupe_simple_records(
+        wins,
+        keys=["opportunityId", "opportunityKey", "name", "primaryKeyBuyer", "primaryKeyBuyerId"],
+    )
 
 
 def build_person_profile_transition(
@@ -1602,17 +1711,52 @@ def build_person_profile_transition(
     if not matched:
         return profile
 
+    matched_name = full_person_name(matched)
+    person_ids = _person_reference_ids(matched)
+    scoped_account = (
+        from_account
+        if person_resolution.get("match_scope") == "from"
+        else to_account
+        if person_resolution.get("match_scope") == "to"
+        else from_account or to_account
+    )
+    key_buyer_match = _matching_key_buyer_record(scoped_account, matched_name, person_ids)
+    scoped_projects = _matching_account_projects(scoped_account, matched_name, person_ids)
+    scoped_wins = _matching_closed_won_opportunities(scoped_account, matched_name, person_ids)
+
+    project_count = max(
+        to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])) or 0,
+        len(to_list_dicts(first_non_empty(matched, ["projects"]))),
+        to_int(first_non_empty(key_buyer_match, ["projectCount", "project_count", "numberOfProjects"])) or 0,
+        len(to_list_dicts(first_non_empty(key_buyer_match, ["projects"]))),
+        len(scoped_projects),
+    )
+    win_count = max(
+        to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
+        len(to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"]))),
+        to_int(first_non_empty(key_buyer_match, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
+        len(to_list_dicts(first_non_empty(key_buyer_match, ["closeWonOpps", "closeWonOpportunities"]))),
+        len(scoped_wins),
+    )
+
     profile["matched_person"] = {
-        "name": full_person_name(matched),
+        "name": matched_name,
         "title": first_non_empty(matched, ["title"]),
         "source": person_resolution.get("match_source"),
         "company_scope": person_resolution.get("match_scope"),
         "linked_account_id": matched.get("linked_account_id"),
-        "relationship_owner": first_non_empty(matched, ["relationshipOwner", "relationship_owner"]),
-        "project_count": to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])),
-        "win_count": (
-            to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"]))
-            or len(to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"])))
+        "relationship_owner": first_non_empty(
+            matched,
+            ["relationshipOwner", "relationship_owner"],
+        )
+        or first_non_empty(key_buyer_match, ["relationshipOwner", "relationship_owner"]),
+        "project_count": project_count,
+        "win_count": win_count,
+        "projects": first_non_empty(matched, ["projects"]) or first_non_empty(key_buyer_match, ["projects"]) or scoped_projects,
+        "closeWonOpps": (
+            first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"])
+            or first_non_empty(key_buyer_match, ["closeWonOpps", "closeWonOpportunities"])
+            or scoped_wins
         ),
         "score": 1.0,
     }
@@ -1634,17 +1778,12 @@ def build_person_profile_transition(
     profile["last_updated"] = first_non_empty(matched, ["lastUpdated", "modifiedDate"])
     profile["past_job_experience"] = to_list(first_non_empty(matched, ["pastJobExperience", "pastJobs"]))
     profile["education"] = to_list(first_non_empty(matched, ["education", "educationList"]))
-    profile["relationship_owner"] = first_non_empty(matched, ["relationshipOwner", "relationship_owner"])
-    profile["project_count"] = (
-        to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"]))
-        or len(to_list_dicts(first_non_empty(matched, ["projects"])))
-        or 0
-    )
-    profile["win_count"] = (
-        to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"]))
-        or len(to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"])))
-        or 0
-    )
+    profile["relationship_owner"] = first_non_empty(
+        matched,
+        ["relationshipOwner", "relationship_owner"],
+    ) or first_non_empty(key_buyer_match, ["relationshipOwner", "relationship_owner"])
+    profile["project_count"] = project_count
+    profile["win_count"] = win_count
 
     if not any(
         [

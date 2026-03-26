@@ -130,14 +130,15 @@ def test_movement_brief_caps_visible_rows_and_actions():
         for index in range(4)
     ]
 
-    with pytest.raises(ValidationError):
-        MovementBrief(
-            executive_summary="Summary",
-            signal_summary=["Pressure on controls"],
-            movement_rows=rows,
-            where_to_act=actions[:3],
-            takeaway="Takeaway",
-        )
+    brief = MovementBrief(
+        executive_summary="Summary",
+        signal_summary=["Pressure on controls"],
+        movement_rows=rows,
+        where_to_act=actions[:3],
+        takeaway="Takeaway",
+    )
+
+    assert len(brief.movement_rows) == 11
 
     with pytest.raises(ValidationError):
         MovementBrief(

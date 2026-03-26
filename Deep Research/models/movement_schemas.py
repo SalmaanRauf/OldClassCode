@@ -141,7 +141,6 @@ class MovementBrief(BaseModel):
     signal_summary: List[str] = Field(default_factory=list, description="Account-level pressure summary")
     movement_rows: List[MovementRecord] = Field(
         default_factory=list,
-        max_length=10,
         description="Visible movement table rows",
     )
     where_to_act: List[MovementAction] = Field(

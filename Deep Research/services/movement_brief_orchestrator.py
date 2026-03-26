@@ -292,10 +292,13 @@ class MovementBriefOrchestrator:
             proconnect_service=proconnect_service,
             include_person_detail=False,
         )
-        ranked_rows = self.ranker.rank(light_enriched_rows, max_rows=10)
+        ranked_rows = self.ranker.rank(light_enriched_rows)
 
         ranked_movements = [row["movement"] for row in ranked_rows]
-        deep_enriched_rows = proconnect_service.deep_enrich_movements(ranked_movements, max_rows=10)
+        deep_enriched_rows = proconnect_service.deep_enrich_movements(
+            ranked_movements,
+            max_rows=len(ranked_movements),
+        )
         deep_enriched_rows = self._refresh_named_mover_enrichment(
             deep_enriched_rows,
             request=request,
@@ -309,7 +312,7 @@ class MovementBriefOrchestrator:
             stage=WorkflowStage.PROCONNECT_ENRICHMENT.value,
             message="Movement leverage enriched in ProConnect.",
             status="complete",
-            visible_row_count=len(ranked_rows[:10]),
+            visible_row_count=len(ranked_rows),
             run_id=reviewed_run_id,
         )
         logger.info(

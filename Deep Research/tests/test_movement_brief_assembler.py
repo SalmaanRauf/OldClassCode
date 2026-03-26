@@ -98,7 +98,7 @@ def _preflight() -> TransitionPreflight:
     )
 
 
-def test_assemble_brief_caps_rows_and_actions_and_attaches_proof_packets():
+def test_assemble_brief_keeps_all_ranked_rows_and_attaches_proof_packets():
     assembler = MovementBriefAssembler()
     signal_evidence = [
         SignalEvidence(
@@ -163,7 +163,7 @@ def test_assemble_brief_caps_rows_and_actions_and_attaches_proof_packets():
     assert "planning scenario" in brief.executive_summary.lower()
     assert "Jennifer Brady is moving from Capital One to Fannie Mae as Chief Information Officer" in brief.executive_summary
     assert len(brief.signal_summary) == 2
-    assert len(brief.movement_rows) == 10
+    assert len(brief.movement_rows) == 12
     assert len(brief.where_to_act) == 3
     assert brief.where_to_act[0].person_name == "Person 0"
     assert brief.where_to_act[0].action_posture == "Immediate Re-engagement"

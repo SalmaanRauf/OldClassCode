@@ -171,7 +171,6 @@ def build_movement_brief_payload(
     )
     if scenario_row is not None:
         visible_rows = [scenario_row, *visible_rows]
-    visible_rows = visible_rows[:10]
     visible_actions = list(brief.where_to_act[:3])
     row_payloads: List[Dict[str, Any]] = []
     row_details_by_id: Dict[str, Dict[str, Any]] = {}

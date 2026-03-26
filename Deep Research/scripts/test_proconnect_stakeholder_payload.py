@@ -17,6 +17,7 @@ from proconnect_stakeholder_payload import (  # noqa: E402
     build_opportunities_section,
     build_person_profile_transition,
     build_projects_section,
+    merge_person_candidates,
     probe_additional_endpoints,
     resolve_person_transition,
     run_stakeholder_case,
@@ -262,6 +263,70 @@ def test_build_person_profile_transition_includes_last_updated_metadata() -> Non
     )
 
     assert profile["last_updated"] == "2024-09-17"
+
+
+def test_build_person_profile_transition_recovers_project_and_win_counts_from_account_scope() -> None:
+    warnings: list[str] = []
+    profile = build_person_profile_transition(
+        person_requested="Jennifer Brady",
+        person_resolution={
+            "status": "matched",
+            "match_source": "from_key_buyers",
+            "match_scope": "from",
+            "matched": {
+                "name": "Jennifer Brady",
+                "title": "Senior Director of Technology Risk",
+                "titleSalesforce": "Senior Director of Technology Risk",
+                "relationshipOwner": "Bernadette Norrington",
+                "projectCount": 0,
+                "winCount": 0,
+            },
+        },
+        candidate_people=[],
+        to_account=sample_account(),
+        from_account=sample_account(),
+        warnings=warnings,
+    )
+
+    assert profile["project_count"] == 1
+    assert profile["win_count"] == 3
+
+
+def test_merge_person_candidates_prefers_richer_relationship_counts_over_zero_placeholders() -> None:
+    merged = merge_person_candidates(
+        candidates=[
+            {
+                "name": "Jennifer Brady",
+                "projectCount": 0,
+                "winCount": 1,
+                "projects": [],
+                "closeWonOpps": [{"name": "Legacy Win"}],
+                "_source": "person_search",
+            },
+            {
+                "name": "Jennifer Brady",
+                "projectCount": 4,
+                "winCount": 3,
+                "projects": [{"name": "Project 1"}, {"name": "Project 2"}],
+                "closeWonOpps": [{"name": "Win 1"}, {"name": "Win 2"}, {"name": "Win 3"}],
+                "_source": "from_key_buyers",
+            },
+        ],
+        selected={
+            "name": "Jennifer Brady",
+            "projectCount": 0,
+            "winCount": 1,
+            "projects": [],
+            "closeWonOpps": [{"name": "Legacy Win"}],
+            "_source": "person_search",
+        },
+        title_hints=[],
+    )
+
+    assert merged["projectCount"] == 4
+    assert merged["winCount"] == 3
+    assert len(merged["projects"]) == 2
+    assert len(merged["closeWonOpps"]) == 3
 
 
 def test_resolve_person_transition_merges_sparse_key_buyer_with_richer_person_search() -> None:

@@ -53,7 +53,7 @@ class MovementBriefAssembler:
         ordered_rows = self._order_ranked_rows(ranked_rows)
         visible_rows = [
             self._attach_enrichment(item, credential_packets)
-            for item in ordered_rows[:10]
+            for item in ordered_rows
         ]
         signal_summary = self._build_signal_summary(trigger, signal_evidence, deep_research_summary)
         where_to_act = self._build_actions(trigger, ordered_rows, credential_packets)
