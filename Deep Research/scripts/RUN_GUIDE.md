@@ -51,19 +51,75 @@ Do not paste placeholder text like `<FANNIE_MAE_ACCOUNT_ID>`.
 py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --to-account-id "REAL_FANNIE_MAE_ACCOUNT_ID" --department "C-Suite" --token-file ".\token.txt"
 ```
 
-## 5) Run the scenario batch
+## 5) Run the focused ProConnect validation battery
+
+Use this when you want to validate ProConnect extraction outside the Deep Research or movement-brief flow.
+
+### 5a) Jennifer anchored stakeholder run
+
+This is the primary test for the current named-mover issue.
+
+```powershell
+py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --to-account-id "00130000000BYUIAA4" --department "C-Suite" --token-file ".\token.txt"
+```
+
+### 5b) Quick person-resolution checks on Fannie Mae
+
+Use this to prove whether ProConnect can resolve the person at all before you inspect richer stakeholder payload fields.
+
+```powershell
+$quickChecks = @(
+  @{ Person="Cissy Yang"; Dept="Finance" },
+  @{ Person="Jason Dandridge"; Dept="Operations" },
+  @{ Person="Nancy Jardini"; Dept="Legal" },
+  @{ Person="Danielle McCoy"; Dept="Legal" }
+)
+
+foreach ($t in $quickChecks) {
+  Write-Host "`n=== QUICK CHECK: $($t.Person) ===" -ForegroundColor Cyan
+  py .\proconnect_company_person_test.py --company "Fannie Mae" --person $t.Person --department $t.Dept --token-file ".\token.txt"
+}
+```
+
+### 5c) Full rich-payload checks for all target people
+
+Use this to inspect the full transition-style payload for Jennifer Brady, Cissy Yang, Jason Dandridge, Nancy Jardini, and Danielle McCoy.
+
+```powershell
+$fullChecks = @(
+  @{ Person="Jennifer Brady"; Dept="C-Suite" },
+  @{ Person="Cissy Yang"; Dept="Finance" },
+  @{ Person="Jason Dandridge"; Dept="Operations" },
+  @{ Person="Nancy Jardini"; Dept="Legal" },
+  @{ Person="Danielle McCoy"; Dept="Legal" }
+)
+
+foreach ($t in $fullChecks) {
+  Write-Host "`n=== FULL CHECK: $($t.Person) ===" -ForegroundColor Yellow
+  py .\proconnect_stakeholder_test.py `
+    --person $t.Person `
+    --from-company "Capital One" `
+    --from-account-id "00130000000BYU2AAO" `
+    --to-company "Fannie Mae" `
+    --to-account-id "00130000000BYUIAA4" `
+    --department $t.Dept `
+    --token-file ".\token.txt"
+}
+```
+
+## 6) Run the scenario batch
 
 ```powershell
 py .\proconnect_scenario_runner.py --payload-type stakeholder --scenarios-file ".\proconnect_stakeholder_scenarios.sample.json" --token-file ".\token.txt"
 ```
 
-## 6) List the newest artifacts
+## 7) List the newest artifacts
 
 ```powershell
 Get-ChildItem .\output\proconnect_runs | Sort-Object LastWriteTime -Descending | Select-Object -First 10 Name,LastWriteTime
 ```
 
-## 7) Print the latest transition artifact summary
+## 8) Print the latest transition artifact summary
 
 Paste this whole block as-is:
 
@@ -138,7 +194,76 @@ $j.http_calls | Select-Object -First 10 endpoint,status_code,error,elapsed_ms | 
 $j.http_calls | Select-Object -Last 10 endpoint,status_code,error,elapsed_ms | Format-Table -AutoSize
 ```
 
-## 8) Print the latest scenario artifact summary
+## 9) Print a compact stakeholder summary for the latest ProConnect runs
+
+Use this after the focused validation battery to compare person extraction quality across the newest stakeholder artifacts.
+
+```powershell
+Get-ChildItem .\output\proconnect_runs\proconnect_stakeholder_*.json |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 8 |
+  ForEach-Object {
+    $j = Get-Content $_.FullName -Raw | ConvertFrom-Json
+    $p = $j.transition_payload.person_profile
+    $m = $p.matched_person
+
+    [PSCustomObject]@{
+      file               = $_.Name
+      person             = $p.person_requested
+      match_status       = $p.match_status
+      match_source       = $m.source
+      match_scope        = $m.company_scope
+      relationship_owner = if ($p.relationship_owner) { $p.relationship_owner } else { $m.relationship_owner }
+      project_count      = $p.project_count
+      win_count          = $p.win_count
+      matched_projects   = @($m.projects).Count
+      matched_wins       = @($m.closeWonOpps).Count
+      project_names      = (@($m.projects | Select-Object -First 5 -ExpandProperty name) -join '; ')
+      win_names          = (@($m.closeWonOpps | Select-Object -First 5 -ExpandProperty name) -join '; ')
+    }
+  } | Format-Table -Wrap -AutoSize
+```
+
+## 10) Print the latest Jennifer artifact in detail
+
+Use this to inspect whether the standalone ProConnect harness itself is producing the wrong Jennifer Brady counts.
+
+```powershell
+$latest = Get-ChildItem .\output\proconnect_runs\proconnect_stakeholder_*.json |
+  Sort-Object LastWriteTime -Descending |
+  Select-Object -First 1
+
+$j = Get-Content $latest.FullName -Raw | ConvertFrom-Json
+
+"FILE: $($latest.Name)"
+"`nPERSON PROFILE:"
+$j.transition_payload.person_profile | Format-List
+
+"`nMATCHED PERSON:"
+$j.transition_payload.person_profile.matched_person | Format-List
+
+"`nMATCHED PROJECTS:"
+$j.transition_payload.person_profile.matched_person.projects |
+  Select-Object -First 10 projectId,id,name,primaryKeyBuyer,primaryKeyBuyerId |
+  Format-Table -Wrap -AutoSize
+
+"`nMATCHED WINS:"
+$j.transition_payload.person_profile.matched_person.closeWonOpps |
+  Select-Object -First 10 opportunityId,id,name,opportunityStage,primaryKeyBuyer,primaryKeyBuyerId |
+  Format-Table -Wrap -AutoSize
+
+"`nHTTP ROUTES OF INTEREST:"
+$j.http_calls |
+  Where-Object {
+    $_.endpoint -like "/api/prospects*" -or
+    $_.endpoint -like "/api/Intent*" -or
+    $_.endpoint -like "/api/Scoop*"
+  } |
+  Select-Object endpoint,status_code,error,elapsed_ms |
+  Format-Table -Wrap -AutoSize
+```
+
+## 11) Print the latest scenario artifact summary
 
 Paste this whole block as-is:
 
@@ -166,7 +291,7 @@ $j.scenario_results | ForEach-Object {
 } | Format-Table -Wrap -AutoSize
 ```
 
-## 9) Only if needed: capture one HAR and inspect the real routes
+## 12) Only if needed: capture one HAR and inspect the real routes
 
 The current harness already uses the discovered real routes:
 
@@ -211,7 +336,7 @@ The inspector now also accepts common Windows mistakes like `.har.txt`, so if th
 
 Send back the full output. The important sections are `INTERESTING ROUTES` and `HTML SHELL ROUTES`.
 
-## 10) Optional sanity run for a known non-match
+## 13) Optional sanity run for a known non-match
 
 ```powershell
 py .\proconnect_stakeholder_test.py --person "Jenna Jerry" --from-company "Capital One" --to-company "American Express" --department "C-Suite" --token-file ".\token.txt"
