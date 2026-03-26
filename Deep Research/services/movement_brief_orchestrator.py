@@ -171,6 +171,12 @@ class MovementBriefOrchestrator:
                 request.person_name,
                 request.to_company,
             )
+        self._log_named_mover_context(
+            request=request,
+            preflight=preflight,
+            actioning_context=actioning_context,
+            run_id=reviewed_run_id,
+        )
         trigger = build_movement_trigger(request)
         trigger.company_focus = (
             str(preflight.to_account.company_name or "").strip()
@@ -520,11 +526,16 @@ class MovementBriefOrchestrator:
             if callable(build_actioning_context):
                 actioning_context = await asyncio.to_thread(build_actioning_context, transition_request)
         logger.info(
-            "Movement preflight resolved person=%s source_resolved=%s destination_resolved=%s match_status=%s",
+            "Movement preflight resolved person=%s source_resolved=%s destination_resolved=%s match_status=%s warm_path=%s source_prior_work=%s destination_prior_work=%s source_key_buyers=%s destination_key_buyers=%s",
             request.person_name,
             preflight.from_account.resolved,
             preflight.to_account.resolved,
             preflight.person_resolution.match_status,
+            preflight.quick_indicators.warm_intro_path_available,
+            preflight.quick_indicators.source_worked_before,
+            preflight.quick_indicators.destination_worked_before,
+            preflight.quick_indicators.source_key_buyer_count,
+            preflight.quick_indicators.destination_key_buyer_count,
         )
         await self._emit(
             progress_cb,
@@ -699,6 +710,50 @@ class MovementBriefOrchestrator:
             )
 
         return refreshed
+
+    def _log_named_mover_context(
+        self,
+        *,
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+        actioning_context: Dict[str, Any],
+        run_id: Optional[str],
+    ) -> None:
+        person_profile = actioning_context.get("person_profile") if isinstance(actioning_context, dict) else {}
+        person_profile = person_profile if isinstance(person_profile, dict) else {}
+        matched_person = person_profile.get("matched_person") if isinstance(person_profile.get("matched_person"), dict) else {}
+        from_context = actioning_context.get("from_company_context") if isinstance(actioning_context, dict) else {}
+        from_context = from_context if isinstance(from_context, dict) else {}
+        top_key_buyers = from_context.get("top_key_buyers") if isinstance(from_context.get("top_key_buyers"), list) else []
+        matched_key_buyer = next(
+            (
+                item for item in top_key_buyers
+                if isinstance(item, dict)
+                and self._normalize_person_name(item.get("name") or "") == self._normalize_person_name(request.person_name)
+            ),
+            {},
+        )
+        logger.info(
+            "Named mover context run_id=%s requested=%s matched=%s source=%s scope=%s direct=%s profile_projects=%s profile_wins=%s matched_projects=%s matched_wins=%s matched_project_list=%s matched_win_list=%s matched_project_names=%s matched_win_names=%s key_buyer_projects=%s key_buyer_wins=%s relationship_owner=%s evidence_basis=%s",
+            run_id,
+            request.person_name,
+            preflight.person_resolution.matched_name,
+            preflight.person_resolution.match_source,
+            preflight.person_resolution.match_scope,
+            bool(person_profile.get("direct_person_evidence")),
+            person_profile.get("project_count"),
+            person_profile.get("win_count"),
+            matched_person.get("project_count"),
+            matched_person.get("win_count"),
+            len(matched_person.get("projects") or []) if isinstance(matched_person.get("projects"), list) else 0,
+            len(matched_person.get("closeWonOpps") or []) if isinstance(matched_person.get("closeWonOpps"), list) else 0,
+            [self._normalized_text(item.get("name")) for item in self._as_list(matched_person.get("projects"))[:5]],
+            [self._normalized_text(item.get("name")) for item in self._as_list(matched_person.get("closeWonOpps"))[:5]],
+            matched_key_buyer.get("projectCount") or matched_key_buyer.get("project_count") or matched_key_buyer.get("numberOfProjects"),
+            matched_key_buyer.get("winCount") or matched_key_buyer.get("wins_5y") or matched_key_buyer.get("numberOfWins"),
+            person_profile.get("relationship_owner") or matched_person.get("relationship_owner"),
+            person_profile.get("evidence_basis"),
+        )
 
     def _build_named_mover_actioning_enrichment(
         self,

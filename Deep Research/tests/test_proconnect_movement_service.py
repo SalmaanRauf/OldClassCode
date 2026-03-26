@@ -527,3 +527,65 @@ def test_person_loader_takes_precedence_over_live_client_support():
     assert enriched[0]["person_match_status"] == "matched"
     assert enriched[0]["person_detail"]["title"] == "VP, Model Risk"
     assert enriched[0]["person_detail"]["location"] == "McLean, VA, United States"
+
+
+def test_live_client_path_tries_parenthetical_alias_variant_for_person_search():
+    class AliasClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return super().search_prospects(search_text)
+            if search_text == "Thomas (Tom) Klein":
+                return {"success": True, "status_code": 200, "data": {"value": []}}
+            if search_text == "Tom Klein":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-456",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One Financial Corporation",
+                                    "name": "Tom Klein",
+                                    "title": "Acting General Counsel",
+                                    "relationshipOwner": "Germaal Ross",
+                                    "projectCount": 2,
+                                    "closeWonOpps": [{"name": "Legal Controls"}],
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-456":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "ContactId": "contact-456",
+                        "FirstName": "Tom",
+                        "LastName": "Klein",
+                        "Title": "Acting General Counsel",
+                        "RelationshipOwner": "Germaal Ross",
+                    },
+                }
+            return super().get_endpoint(
+                endpoint,
+                params=params,
+                retry_on_5xx=retry_on_5xx,
+                retry_delay_seconds=retry_delay_seconds,
+                stop_on_auth=stop_on_auth,
+            )
+
+    client = AliasClient()
+    service = ProConnectMovementService(client=client)
+    row = _row("Thomas (Tom) Klein")
+
+    enriched = service.deep_enrich_movements([row], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["relationship_owner"] == "Germaal Ross"
+    assert enriched[0]["project_count"] == 2

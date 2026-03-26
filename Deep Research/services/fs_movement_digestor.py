@@ -5,7 +5,8 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
+import unicodedata
+from datetime import date, datetime
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Tuple
@@ -165,6 +166,8 @@ class FSMovementDigestor:
         trigger_parts = [f"Sector: {trigger.sector}"]
         if trigger.company_focus:
             trigger_parts.append(f"Company: {trigger.company_focus}")
+        if trigger.time_window_days:
+            trigger_parts.append(f"Lookback: {int(trigger.time_window_days)} days")
         if trigger.geography:
             trigger_parts.append(f"Geography: {trigger.geography}")
         if trigger.signals:
@@ -208,6 +211,7 @@ class FSMovementDigestor:
             movement_type = str(entry.get("movement_type") or "").strip()
             category = self._normalize_category(entry.get("category"))
             company_context = str(entry.get("company_context") or "").strip()
+            effective_date = self._normalize_effective_date(entry.get("effective_date"))
             evidence_quote = str(entry.get("evidence_quote") or "").strip()
             source_url = str(entry.get("source_url") or "").strip()
 
@@ -219,6 +223,8 @@ class FSMovementDigestor:
                 continue
             if not evidence_quote or not source_url:
                 continue
+            if effective_date and not self._date_within_lookback(effective_date, trigger.time_window_days):
+                continue
 
             row = MovementRecord(
                 person_name=person_name,
@@ -228,6 +234,7 @@ class FSMovementDigestor:
                 movement_type=movement_type,
                 category=category,
                 company_context=company_context,
+                effective_date=effective_date,
                 evidence=MovementEvidence(
                     evidence_quote=evidence_quote,
                     source_url=source_url,
@@ -297,7 +304,18 @@ class FSMovementDigestor:
 
     @staticmethod
     def _normalize_company(value: Optional[str]) -> str:
-        normalized = re.sub(r"[\s,.-]+", " ", (value or "").strip().lower())
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        aliases = re.findall(r"\(([^)]*)\)", text)
+        for alias in aliases:
+            alias_text = alias.strip()
+            if alias_text:
+                text = alias_text
+                break
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        normalized = re.sub(r"[\s,.-]+", " ", text.lower())
         return normalized.strip()
 
     @staticmethod
@@ -312,10 +330,10 @@ class FSMovementDigestor:
     @classmethod
     def _movement_dedupe_key(cls, row: MovementRecord) -> Tuple[str, str, str, str]:
         return (
-            cls._normalize_company(row.person_name),
-            cls._normalize_company(row.previous_role),
-            cls._normalize_company(row.new_role),
-            cls._normalize_company(row.evidence.source_url),
+            cls._normalize_person_identity(row.person_name),
+            cls._normalize_company(row.category),
+            cls._normalize_company(row.target_company),
+            cls._movement_anchor(row),
         )
 
     @staticmethod
@@ -326,7 +344,70 @@ class FSMovementDigestor:
         score += 1 if row.evidence.source_title else 0
         score += 1 if row.evidence.source_marker else 0
         score += 1 if row.evidence.corroborated else 0
+        score += 1 if row.effective_date else 0
         return score
+
+    @classmethod
+    def _movement_anchor(cls, row: MovementRecord) -> str:
+        if row.effective_date:
+            return f"date:{row.effective_date}"
+
+        movement_type = cls._normalize_role_identity(row.movement_type)
+        previous_role = cls._normalize_role_identity(row.previous_role)
+        new_role = cls._normalize_role_identity(row.new_role)
+        evidence_quote = cls._normalize_role_identity(row.evidence.evidence_quote)
+        departure_markers = (
+            "departure",
+            "departed",
+            "stepped down",
+            "stepped",
+            "fired",
+            "ousted",
+            "termination",
+            "terminated",
+            "replaced",
+            "role elimination",
+            "eliminated",
+        )
+        if any(marker in movement_type for marker in departure_markers) or any(
+            marker in new_role for marker in departure_markers
+        ):
+            return f"departure:{previous_role or movement_type or evidence_quote[:96]}"
+        return f"move:{new_role or previous_role or movement_type or evidence_quote[:96]}"
+
+    @staticmethod
+    def _normalize_role_identity(value: Optional[str]) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = text.lower()
+        replacements = {
+            "chief executive officer": "ceo",
+            "chief operating officer": "coo",
+            "chief financial officer": "cfo",
+            "chief information officer": "cio",
+            "chief audit executive": "cae",
+            "general counsel": "general counsel",
+            "chief legal officer": "general counsel",
+            "president and chief executive officer": "ceo president",
+            "chief executive officer and president": "ceo president",
+            "co president": "copresident",
+            "co-president": "copresident",
+            "chairman of the board": "chairman board",
+            "vice chairman of the board": "vice chairman board",
+        }
+        for source, target in replacements.items():
+            text = text.replace(source, target)
+        text = re.sub(r"[^\w\s]", " ", text)
+        tokens = [
+            token
+            for token in re.split(r"\s+", text)
+            if token
+            and token not in {"and", "of", "the", "a", "an", "also", "retaining", "duties", "role", "n", "na"}
+        ]
+        return " ".join(sorted(dict.fromkeys(tokens)))
 
     @classmethod
     def _company_aliases(cls, values: List[Optional[str]]) -> set[str]:
@@ -363,6 +444,47 @@ class FSMovementDigestor:
                             if stripped:
                                 aliases.add(stripped)
         return aliases
+
+    @staticmethod
+    def _normalize_person_identity(value: Optional[str]) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return ""
+        inner_aliases = re.findall(r"\(([^)]*)\)", text)
+        if inner_aliases:
+            for alias in inner_aliases:
+                alias_text = alias.strip()
+                if alias_text and len(alias_text.split()) >= 2:
+                    text = alias_text
+                    break
+        text = re.sub(r"\([^)]*\)", "", text).strip() if "(" in text and ")" in text else text
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = re.sub(r"[^\w\s]", " ", text.lower())
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _normalize_effective_date(value: Any) -> Optional[str]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%B %d, %Y", "%b %d, %Y", "%Y-%m", "%B %Y", "%b %Y"):
+            try:
+                parsed = datetime.strptime(text, fmt)
+                if fmt in {"%Y-%m", "%B %Y", "%b %Y"}:
+                    parsed = parsed.replace(day=1)
+                return parsed.date().isoformat()
+            except ValueError:
+                continue
+        return None
+
+    @staticmethod
+    def _date_within_lookback(effective_date: str, lookback_days: int) -> bool:
+        try:
+            movement_date = date.fromisoformat(effective_date)
+        except ValueError:
+            return True
+        return (date.today() - movement_date).days <= int(lookback_days or 0)
 
     def _fallback_prompt(self) -> str:
         return (

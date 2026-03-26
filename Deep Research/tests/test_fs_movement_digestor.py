@@ -326,3 +326,112 @@ async def test_digest_unions_rows_across_general_exec_and_buyer_passes():
         {"focus": "executive", "count": 1},
         {"focus": "buyer", "count": 1},
     ]
+
+
+@pytest.mark.asyncio
+async def test_digest_dedupes_same_person_same_source_even_if_role_text_varies():
+    trigger = BDTrigger(
+        sector="Financial Services",
+        signals=["FS.EXEC.TRANSITION"],
+        company_focus="Fannie Mae",
+        user_prompt_context="Find executive movement at Fannie Mae.",
+        time_window_days=180,
+    )
+    digestor = FSMovementDigestor(
+        kernel=_FakeKernel(
+            {
+                "movement_records": [
+                    {
+                        "person_name": "Priscilla Almodóvar",
+                        "target_company": "Fannie Mae",
+                        "previous_role": "CEO and President",
+                        "new_role": "Stepped down",
+                        "movement_type": "Departure",
+                        "category": "EXEC",
+                        "company_context": "internal",
+                        "effective_date": "2025-10-22",
+                        "evidence_quote": "Priscilla Almodóvar stepped down in October 2025.",
+                        "source_url": "https://example.com/fannie-leadership",
+                        "source_title": "Leadership update",
+                    },
+                    {
+                        "person_name": "Priscilla Almodóvar",
+                        "target_company": "Federal National Mortgage Association (Fannie Mae)",
+                        "previous_role": "President and Chief Executive Officer",
+                        "new_role": "Departed",
+                        "movement_type": "CEO Departure",
+                        "category": "EXEC",
+                        "company_context": "internal",
+                        "effective_date": "2025-10-22",
+                        "evidence_quote": "Priscilla Almodóvar stepped down in October 2025.",
+                        "source_url": "https://example.com/fannie-leadership",
+                        "source_title": "Leadership update",
+                    },
+                ]
+            }
+        )
+    )
+
+    rows, diagnostics = await digestor.digest(
+        trigger=trigger,
+        deep_research_markdown="Movement notes here.",
+        target_company_aliases=["Fannie Mae", "Federal National Mortgage Association (Fannie Mae)"],
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert len(rows) == 1
+    assert rows[0].person_name == "Priscilla Almodóvar"
+
+
+@pytest.mark.asyncio
+async def test_digest_filters_rows_outside_requested_lookback_when_effective_date_is_known():
+    trigger = BDTrigger(
+        sector="Financial Services",
+        signals=["FS.BUYER.MOVEMENT"],
+        company_focus="Fannie Mae",
+        user_prompt_context="Find buyer movement at Fannie Mae.",
+        time_window_days=180,
+    )
+    digestor = FSMovementDigestor(
+        kernel=_FakeKernel(
+            {
+                "movement_records": [
+                    {
+                        "person_name": "Cissy Yang",
+                        "target_company": "Fannie Mae",
+                        "previous_role": "Senior Audit Leader, Credit Suisse",
+                        "new_role": "SVP & Chief Audit Executive",
+                        "movement_type": "Audit Executive Appointment",
+                        "category": "BUYER",
+                        "company_context": "internal",
+                        "effective_date": "2025-09-12",
+                        "evidence_quote": "Cissy Yang was appointed on September 12, 2025.",
+                        "source_url": "https://example.com/cissy-yang",
+                        "source_title": "Leadership update",
+                    },
+                    {
+                        "person_name": "Tom Klein",
+                        "target_company": "Fannie Mae",
+                        "previous_role": "Deputy General Counsel",
+                        "new_role": "Acting General Counsel",
+                        "movement_type": "Promotion/Appointment",
+                        "category": "BUYER",
+                        "company_context": "internal",
+                        "effective_date": "2025-10-24",
+                        "evidence_quote": "Tom Klein was promoted on October 24, 2025.",
+                        "source_url": "https://example.com/tom-klein",
+                        "source_title": "Leadership update",
+                    },
+                ]
+            }
+        )
+    )
+
+    rows, diagnostics = await digestor.digest(
+        trigger=trigger,
+        deep_research_markdown="Movement notes here.",
+        target_company_aliases=["Fannie Mae"],
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert [row.person_name for row in rows] == ["Tom Klein"]

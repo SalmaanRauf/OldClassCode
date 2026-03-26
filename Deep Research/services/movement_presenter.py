@@ -3,6 +3,7 @@ Presentation helpers for the people movement brief workflow.
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,7 @@ from models.transition_schemas import TransitionPreflight
 from services.movement_form_mapper import build_movement_form_props as _build_form_props
 from services.movement_prompt_builder import MovementPromptPackage
 
+logger = logging.getLogger(__name__)
 
 MOVEMENT_TABLE_COLUMNS = [
     "Signal",
@@ -505,6 +507,17 @@ def _build_named_mover_board_row(
     matched_name = _normalize_text(preflight.person_resolution.matched_name or request.person_name)
     matched_title = _normalize_text(preflight.person_resolution.matched_title or "")
     target_company = _normalize_text(preflight.to_account.company_name or request.to_company)
+    logger.info(
+        "Movement presenter named mover row person=%s scope=%s projects=%s wins=%s owner=%s profile_project_names=%s profile_win_names=%s scope_key_buyer=%s",
+        matched_name,
+        match_scope or None,
+        project_count,
+        win_count,
+        relationship_owner or None,
+        [item.get("name") for item in _clean_list(matched_person.get("projects"))[:5] if isinstance(item, dict)],
+        [item.get("name") for item in _clean_list(matched_person.get("closeWonOpps"))[:5] if isinstance(item, dict)],
+        _clean_dict(scope_key_buyer_match).get("name") or None,
+    )
     return MovementRecord(
         person_name=matched_name,
         target_company=target_company,

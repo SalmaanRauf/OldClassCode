@@ -1469,6 +1469,10 @@ def merge_person_candidates(
         for key, value in candidate.items():
             if key == "_source":
                 continue
+            normalized_key = normalize_text(key).replace(" ", "")
+            if normalized_key in {"projects", "closewonopps", "closewonopportunities", "connections"}:
+                merged[key] = _merge_person_list_field(normalized_key, merged.get(key), value)
+                continue
             if not should_replace_person_field(
                 key=key,
                 current_value=merged.get(key),
@@ -1479,6 +1483,26 @@ def merge_person_candidates(
 
     merged["_source"] = selected_source
     return merged
+
+
+def _merge_person_list_field(key: str, current_value: Any, candidate_value: Any) -> List[Dict[str, Any]]:
+    current_items = to_list_dicts(current_value)
+    candidate_items = to_list_dicts(candidate_value)
+    if not current_items:
+        return candidate_items
+    if not candidate_items:
+        return current_items
+    if len(candidate_items) > len(current_items) and len(current_items) <= 1:
+        return candidate_items
+    if len(current_items) > len(candidate_items) and len(candidate_items) <= 1:
+        return current_items
+    if key == "connections":
+        identity_keys = ["name", "employee", "employeeId", "id"]
+    elif key in {"closewonopps", "closewonopportunities"}:
+        identity_keys = ["opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyerId", "primaryKeyBuyer"]
+    else:
+        identity_keys = ["projectId", "id", "name", "primaryKeyBuyerId", "primaryKeyBuyer"]
+    return dedupe_simple_records(current_items + candidate_items, keys=identity_keys)
 
 
 def should_replace_person_field(key: str, current_value: Any, candidate_value: Any) -> bool:
@@ -1723,20 +1747,28 @@ def build_person_profile_transition(
     key_buyer_match = _matching_key_buyer_record(scoped_account, matched_name, person_ids)
     scoped_projects = _matching_account_projects(scoped_account, matched_name, person_ids)
     scoped_wins = _matching_closed_won_opportunities(scoped_account, matched_name, person_ids)
+    merged_projects = dedupe_simple_records(
+        to_list_dicts(first_non_empty(matched, ["projects"]))
+        + to_list_dicts(first_non_empty(key_buyer_match, ["projects"]))
+        + scoped_projects,
+        keys=["projectId", "id", "name", "primaryKeyBuyerId", "primaryKeyBuyer"],
+    )
+    merged_wins = dedupe_simple_records(
+        to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"]))
+        + to_list_dicts(first_non_empty(key_buyer_match, ["closeWonOpps", "closeWonOpportunities"]))
+        + scoped_wins,
+        keys=["opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyerId", "primaryKeyBuyer"],
+    )
 
     project_count = max(
         to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])) or 0,
-        len(to_list_dicts(first_non_empty(matched, ["projects"]))),
+        len(merged_projects),
         to_int(first_non_empty(key_buyer_match, ["projectCount", "project_count", "numberOfProjects"])) or 0,
-        len(to_list_dicts(first_non_empty(key_buyer_match, ["projects"]))),
-        len(scoped_projects),
     )
     win_count = max(
         to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
-        len(to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"]))),
+        len(merged_wins),
         to_int(first_non_empty(key_buyer_match, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
-        len(to_list_dicts(first_non_empty(key_buyer_match, ["closeWonOpps", "closeWonOpportunities"]))),
-        len(scoped_wins),
     )
 
     profile["matched_person"] = {
@@ -1752,12 +1784,8 @@ def build_person_profile_transition(
         or first_non_empty(key_buyer_match, ["relationshipOwner", "relationship_owner"]),
         "project_count": project_count,
         "win_count": win_count,
-        "projects": first_non_empty(matched, ["projects"]) or first_non_empty(key_buyer_match, ["projects"]) or scoped_projects,
-        "closeWonOpps": (
-            first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"])
-            or first_non_empty(key_buyer_match, ["closeWonOpps", "closeWonOpportunities"])
-            or scoped_wins
-        ),
+        "projects": merged_projects,
+        "closeWonOpps": merged_wins,
         "score": 1.0,
     }
 
@@ -3109,13 +3137,73 @@ def dedupe_list(items: List[str]) -> List[str]:
 def dedupe_simple_records(records: List[Dict[str, Any]], keys: List[str]) -> List[Dict[str, Any]]:
     seen = set()
     deduped = []
+    weak_identity_keys = {
+        "primaryKeyBuyerId",
+        "primaryKeyBuyer",
+        "buyerId",
+        "buyer",
+        "buyerName",
+        "primaryKeyBuyerName",
+    }
     for record in records:
-        fingerprint = tuple(str(record.get(key) or "").strip().lower() for key in keys)
-        if fingerprint in seen:
+        strong_fingerprints = [
+            f"{key}:{str(record.get(key) or '').strip().lower()}"
+            for key in keys
+            if key not in weak_identity_keys
+            if str(record.get(key) or "").strip()
+        ]
+        weak_fingerprints = [
+            f"{key}:{str(record.get(key) or '').strip().lower()}"
+            for key in keys
+            if key in weak_identity_keys
+            if str(record.get(key) or "").strip()
+        ]
+        fingerprints = strong_fingerprints or weak_fingerprints
+        if not fingerprints:
+            fallback = normalize_text(json.dumps(record, sort_keys=True, default=str))
+            fingerprints = [f"record:{fallback}"]
+
+        existing_index = next(
+            (idx for idx, item in enumerate(deduped) if any(fingerprint in item["_fingerprints"] for fingerprint in fingerprints)),
+            None,
+        )
+        if existing_index is None:
+            clone = dict(record)
+            clone["_fingerprints"] = set(fingerprints)
+            deduped.append(clone)
+            seen.update(fingerprints)
             continue
-        seen.add(fingerprint)
-        deduped.append(record)
-    return deduped
+
+        merged = dict(deduped[existing_index])
+        for key, value in record.items():
+            if key == "_fingerprints":
+                continue
+            if present(merged.get(key)) == "present" and present(value) != "present":
+                continue
+            if key in {"projects", "closeWonOpps", "closeWonOpportunities", "connections"}:
+                merged[key] = _merge_person_list_field(normalize_text(key).replace(" ", ""), merged.get(key), value)
+                continue
+            current_int = to_int(merged.get(key))
+            candidate_int = to_int(value)
+            normalized_key = normalize_text(key).replace(" ", "")
+            if normalized_key in {
+                "projectcount",
+                "project_count",
+                "numberofprojects",
+                "numberofproject",
+                "wincount",
+                "win_count",
+                "numberofwins",
+                "wins",
+            }:
+                merged[key] = max(current_int or 0, candidate_int or 0)
+                continue
+            if present(merged.get(key)) != "present":
+                merged[key] = value
+        merged["_fingerprints"] = set(merged.get("_fingerprints") or set()).union(fingerprints)
+        deduped[existing_index] = merged
+        seen.update(fingerprints)
+    return [{k: v for k, v in record.items() if k != "_fingerprints"} for record in deduped]
 
 
 def normalize_text(value: str) -> str:

@@ -123,6 +123,10 @@ class MovementRecord(BaseModel):
     movement_type: str = Field(..., description="Movement type, e.g. Promoted or Joined")
     category: MovementCategory = Field(..., description="Movement category")
     company_context: str = Field(..., description="Internal, inbound, outbound, board_integration, etc.")
+    effective_date: Optional[str] = Field(
+        None,
+        description="Best-known effective date for the movement in YYYY-MM-DD form when available",
+    )
     evidence: MovementEvidence = Field(..., description="Primary source-backed evidence")
     leverage: Optional[MovementLeverageSummary] = Field(
         None,

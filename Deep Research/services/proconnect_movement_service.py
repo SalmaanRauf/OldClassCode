@@ -4,6 +4,8 @@ Lightweight two-pass ProConnect enrichment for movement-led workflows.
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from models.movement_schemas import MovementRecord
@@ -152,7 +154,7 @@ class ProConnectMovementService:
         )
 
         logger.info(
-            "ProConnect movement lookup matched person=%s company=%s account_id=%s projects=%s wins=%s owner=%s raw_project_count=%s raw_win_count=%s projects_list=%s wins_list=%s",
+            "ProConnect movement lookup matched person=%s company=%s account_id=%s projects=%s wins=%s owner=%s raw_project_count=%s raw_win_count=%s projects_list=%s wins_list=%s payload_debug=%s",
             person_name,
             target_company,
             account_id,
@@ -165,6 +167,7 @@ class ProConnectMovementService:
             len(payload.get("closeWonOpps") or payload.get("closeWonOpportunities") or [])
             if isinstance(payload.get("closeWonOpps") or payload.get("closeWonOpportunities"), list)
             else 0,
+            self._payload_debug_snapshot(payload),
         )
         self._person_payload_cache[cache_key] = payload
         return payload
@@ -189,13 +192,20 @@ class ProConnectMovementService:
         fallback_candidates: List[Dict[str, Any]] = []
         search_exact_count = 0
         search_fallback_count = 0
+        name_variants = self._person_name_variants(person_name)
 
-        search_response = self.client.search_prospects(person_name)
-        if search_response.get("success"):
+        seen_search_queries: set[str] = set()
+        for variant in name_variants:
+            if variant in seen_search_queries:
+                continue
+            seen_search_queries.add(variant)
+            search_response = self.client.search_prospects(variant)
+            if not search_response.get("success"):
+                continue
             for candidate in extract_person_search_candidates(search_response.get("data")):
                 candidate_name = full_person_name(candidate)
-                name_matches_exact = exact_name_equals(person_name, candidate_name)
-                name_matches_first_last = same_first_last_name(person_name, candidate_name)
+                name_matches_exact = self._matches_name_exact(name_variants, candidate_name)
+                name_matches_first_last = self._matches_name_fallback(name_variants, candidate_name)
                 if not name_matches_exact and not name_matches_first_last:
                     continue
                 candidate_account_id = str(candidate.get("accountId") or "").strip()
@@ -211,7 +221,7 @@ class ProConnectMovementService:
                     search_fallback_count += 1
 
         key_buyer_exact_matches = self._matching_records_from_account(
-            person_name,
+            name_variants,
             account.get("keyBuyers") or [],
             allow_first_last=False,
         )
@@ -220,7 +230,7 @@ class ProConnectMovementService:
 
         if not exact_candidates:
             key_buyer_fallback_matches = self._matching_records_from_account(
-                person_name,
+                name_variants,
                 account.get("keyBuyers") or [],
                 allow_first_last=True,
             )
@@ -228,7 +238,7 @@ class ProConnectMovementService:
 
         account_people = self._build_account_people_pool(account, account_id=account_id)
         account_people_exact_matches = self._matching_records_from_account(
-            person_name,
+            name_variants,
             account_people,
             allow_first_last=False,
         )
@@ -238,15 +248,16 @@ class ProConnectMovementService:
         account_people_fallback_matches: List[Dict[str, Any]] = []
         if not exact_candidates:
             account_people_fallback_matches = self._matching_records_from_account(
-                person_name,
+                name_variants,
                 account_people,
                 allow_first_last=True,
             )
             fallback_candidates.extend(account_people_fallback_matches)
 
         logger.info(
-            "ProConnect movement candidate pool person=%s account_id=%s search_exact=%s search_fallback=%s key_buyer_exact=%s key_buyer_fallback=%s account_people_exact=%s account_people_fallback=%s org_warnings=%s",
+            "ProConnect movement candidate pool person=%s variants=%s account_id=%s search_exact=%s search_fallback=%s key_buyer_exact=%s key_buyer_fallback=%s account_people_exact=%s account_people_fallback=%s org_warnings=%s search_exact_names=%s fallback_names=%s account_people_exact_names=%s",
             person_name,
+            name_variants,
             account_id,
             search_exact_count,
             search_fallback_count,
@@ -255,6 +266,9 @@ class ProConnectMovementService:
             len(account_people_exact_matches),
             len(account_people_fallback_matches),
             len(self._account_people_warnings_cache.get(account_id, [])),
+            self._summarize_candidate_names(exact_candidates),
+            self._summarize_candidate_names(fallback_candidates),
+            self._summarize_candidate_names(account_people_exact_matches),
         )
 
         candidates_to_merge = exact_candidates or fallback_candidates
@@ -297,7 +311,7 @@ class ProConnectMovementService:
 
     def _matching_records_from_account(
         self,
-        person_name: str,
+        person_names: List[str],
         records: List[Any],
         *,
         allow_first_last: bool,
@@ -309,9 +323,9 @@ class ProConnectMovementService:
             candidate_name = full_person_name(item)
             if not candidate_name:
                 continue
-            if exact_name_equals(person_name, candidate_name):
+            if self._matches_name_exact(person_names, candidate_name):
                 pass
-            elif allow_first_last and same_first_last_name(person_name, candidate_name):
+            elif allow_first_last and self._matches_name_fallback(person_names, candidate_name):
                 pass
             else:
                 continue
@@ -426,20 +440,59 @@ class ProConnectMovementService:
     @staticmethod
     def _merge_record_lists(*candidate_lists: Any, identity_keys: Tuple[str, ...]) -> List[Dict[str, Any]]:
         merged: List[Dict[str, Any]] = []
-        seen: set[Tuple[str, ...]] = set()
+        seen: Dict[str, int] = {}
+        weak_identity_keys = {
+            "primaryKeyBuyerId",
+            "primaryKeyBuyer",
+            "buyerId",
+            "buyer",
+            "buyerName",
+            "primaryKeyBuyerName",
+        }
         for candidate_list in candidate_lists:
             if not isinstance(candidate_list, list):
                 continue
             for item in candidate_list:
                 if not isinstance(item, dict):
                     continue
-                identity = tuple(str(item.get(key) or "").strip().lower() for key in identity_keys)
-                if not any(identity):
-                    identity = (str(item),)
-                if identity in seen:
+                strong_fingerprints = [
+                    f"{key}:{str(item.get(key) or '').strip().lower()}"
+                    for key in identity_keys
+                    if key not in weak_identity_keys
+                    if str(item.get(key) or "").strip()
+                ]
+                weak_fingerprints = [
+                    f"{key}:{str(item.get(key) or '').strip().lower()}"
+                    for key in identity_keys
+                    if key in weak_identity_keys
+                    if str(item.get(key) or "").strip()
+                ]
+                fingerprints = strong_fingerprints or weak_fingerprints
+                if not fingerprints:
+                    fingerprints = [f"record:{str(item).strip().lower()}"]
+
+                existing_index = next((seen[fingerprint] for fingerprint in fingerprints if fingerprint in seen), None)
+                if existing_index is None:
+                    merged.append(dict(item))
+                    new_index = len(merged) - 1
+                    for fingerprint in fingerprints:
+                        seen[fingerprint] = new_index
                     continue
-                seen.add(identity)
-                merged.append(dict(item))
+
+                merged_item = dict(merged[existing_index])
+                for key, value in item.items():
+                    if key in {"projects", "closeWonOpps", "closeWonOpportunities", "connections"}:
+                        merged_item[key] = merge_person_candidates(
+                            candidates=[merged_item, {key: value}],
+                            selected=merged_item,
+                            title_hints=[],
+                        ).get(key)
+                        continue
+                    if merged_item.get(key) in (None, "", [], {}) and value not in (None, "", [], {}):
+                        merged_item[key] = value
+                merged[existing_index] = merged_item
+                for fingerprint in fingerprints:
+                    seen[fingerprint] = existing_index
         return merged
 
     def _merge_account_relationship_context(
@@ -505,7 +558,68 @@ class ProConnectMovementService:
             relationship_owner = key_buyer.get("relationshipOwner") or key_buyer.get("relationship_owner")
             if relationship_owner:
                 merged["relationshipOwner"] = relationship_owner
+        merged["_account_project_matches"] = len(account_projects)
+        merged["_account_win_matches"] = len(scoped_wins)
+        logger.info(
+            "ProConnect account-context merge person=%s key_buyer=%s account_project_matches=%s account_win_matches=%s merged_project_count=%s merged_win_count=%s merged_project_names=%s merged_win_names=%s owner=%s",
+            person_name,
+            full_person_name(key_buyer) or key_buyer.get("name") or None,
+            len(account_projects),
+            len(scoped_wins),
+            self._project_count(merged),
+            self._win_count(merged),
+            self._list_names(merged.get("projects")),
+            self._list_names(merged.get("closeWonOpps") or merged.get("closeWonOpportunities")),
+            self._relationship_owner(merged),
+        )
         return merged
+
+    @staticmethod
+    def _person_name_variants(person_name: str) -> List[str]:
+        variants: List[str] = []
+        raw = str(person_name or "").strip()
+        if not raw:
+            return variants
+
+        def _add(value: str) -> None:
+            candidate = " ".join(value.split()).strip()
+            if candidate and candidate not in variants:
+                variants.append(candidate)
+
+        _add(raw)
+        stripped = re.sub(r"\([^)]*\)", "", raw).strip()
+        _add(stripped)
+        stripped_parts = stripped.split()
+        last_name = stripped_parts[-1] if stripped_parts else ""
+        for alias in re.findall(r"\(([^)]*)\)", raw):
+            alias_parts = alias.split()
+            if len(alias_parts) >= 2:
+                _add(alias)
+            elif alias_parts and last_name:
+                _add(f"{alias_parts[0]} {last_name}")
+
+        normalized = unicodedata.normalize("NFKD", raw)
+        ascii_name = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        _add(ascii_name)
+        stripped_ascii = re.sub(r"\([^)]*\)", "", ascii_name).strip()
+        _add(stripped_ascii)
+        stripped_ascii_parts = stripped_ascii.split()
+        last_ascii_name = stripped_ascii_parts[-1] if stripped_ascii_parts else ""
+        for alias in re.findall(r"\(([^)]*)\)", ascii_name):
+            alias_parts = alias.split()
+            if len(alias_parts) >= 2:
+                _add(alias)
+            elif alias_parts and last_ascii_name:
+                _add(f"{alias_parts[0]} {last_ascii_name}")
+        return variants
+
+    @staticmethod
+    def _matches_name_exact(person_names: List[str], candidate_name: str) -> bool:
+        return any(exact_name_equals(name, candidate_name) for name in person_names if name)
+
+    @staticmethod
+    def _matches_name_fallback(person_names: List[str], candidate_name: str) -> bool:
+        return any(same_first_last_name(name, candidate_name) for name in person_names if name)
 
     @staticmethod
     def _project_count(payload: Dict[str, Any]) -> int:
@@ -577,4 +691,61 @@ class ProConnectMovementService:
             "title": str(payload.get("titleExternal") or payload.get("title") or "").strip(),
             "location": str(payload.get("location") or "").strip(),
             "linkedin_url": str(payload.get("linkedinUrl") or payload.get("linkedInUrl") or "").strip(),
+        }
+
+    @staticmethod
+    def _list_names(value: Any, *, limit: int = 6) -> List[str]:
+        if not isinstance(value, list):
+            return []
+        names: List[str] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            employee = item.get("employee") if isinstance(item.get("employee"), dict) else {}
+            name = str(
+                item.get("name")
+                or item.get("opportunity")
+                or item.get("project")
+                or item.get("buyer")
+                or item.get("primaryKeyBuyer")
+                or employee.get("name")
+                or ""
+            ).strip()
+            if name:
+                names.append(name)
+            if len(names) >= limit:
+                break
+        return names
+
+    @classmethod
+    def _summarize_candidate_names(cls, candidates: List[Dict[str, Any]], *, limit: int = 6) -> List[str]:
+        summary: List[str] = []
+        for candidate in candidates[:limit]:
+            name = full_person_name(candidate) or str(candidate.get("name") or candidate.get("fullName") or "").strip()
+            source = str(candidate.get("_source") or "").strip()
+            account_id = str(candidate.get("accountId") or candidate.get("linked_account_id") or "").strip()
+            bits = [name] if name else []
+            if source:
+                bits.append(f"source={source}")
+            if account_id:
+                bits.append(f"account={account_id}")
+            if bits:
+                summary.append(" | ".join(bits))
+        return summary
+
+    @classmethod
+    def _payload_debug_snapshot(cls, payload: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "name": str(payload.get("name") or "").strip() or None,
+            "title": str(payload.get("titleExternal") or payload.get("title") or "").strip() or None,
+            "source": str(payload.get("_source") or "").strip() or None,
+            "account_id": str(payload.get("accountId") or payload.get("linked_account_id") or "").strip() or None,
+            "relationship_owner": cls._relationship_owner(payload),
+            "project_count": cls._project_count(payload),
+            "win_count": cls._win_count(payload),
+            "project_names": cls._list_names(payload.get("projects")),
+            "win_names": cls._list_names(payload.get("closeWonOpps") or payload.get("closeWonOpportunities")),
+            "connection_names": cls._list_names(payload.get("connections")),
+            "account_project_matches": payload.get("_account_project_matches"),
+            "account_win_matches": payload.get("_account_win_matches"),
         }

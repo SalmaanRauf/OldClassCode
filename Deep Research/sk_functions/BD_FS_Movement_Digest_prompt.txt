@@ -18,6 +18,8 @@ Extract a strict JSON inventory of executive and buyer movement rows from the De
 4. Do not fabricate titles, companies, movement types, quotes, or URLs.
 5. Preserve each row's short evidence quote and canonical source URL.
 6. Categories must be `EXEC` or `BUYER`.
+7. Apply the stated lookback window strictly when dates are available. Exclude moves whose effective date falls outside the requested window.
+8. Return `effective_date` in `YYYY-MM-DD` form when the source supports it. If only month/year is known, use the first day of that month. If no date is stated, return `null`.
 
 # Output Contract
 Return ONLY valid JSON:
@@ -31,6 +33,7 @@ Return ONLY valid JSON:
       "movement_type": "string",
       "category": "EXEC | BUYER",
       "company_context": "string",
+      "effective_date": "YYYY-MM-DD or null",
       "evidence_quote": "string",
       "source_url": "https://...",
       "source_title": "string or null",
