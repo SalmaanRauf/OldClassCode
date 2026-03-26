@@ -390,6 +390,40 @@ const BRIEF_STYLES = `
     margin: 0;
   }
 
+  .movement-brief__footer-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+  }
+
+  .movement-brief__footer-button {
+    min-height: 2.9rem;
+    border: 1px solid #ccb99c;
+    border-radius: 999px;
+    background: #ffffff;
+    color: #24364a;
+    padding: 0.7rem 1rem;
+    font-size: 0.92rem;
+    font-weight: 700;
+    cursor: pointer;
+  }
+
+  .movement-brief__footer-button:hover:not(:disabled) {
+    background: #f5eee2;
+  }
+
+  .movement-brief__footer-button:disabled {
+    opacity: 0.65;
+    cursor: wait;
+  }
+
+  .movement-brief__footer-error {
+    margin: 0.85rem 0 0 0;
+    color: #b42318;
+    font-size: 0.92rem;
+    line-height: 1.5;
+  }
+
   @media (max-width: 960px) {
     .movement-brief__header-layout,
     .movement-brief__move-grid,
@@ -430,6 +464,8 @@ function postureVariant(posture) {
 
 export default function MovementBrief() {
     const [expandedRowId, setExpandedRowId] = useState(null);
+    const [pendingActionKey, setPendingActionKey] = useState("");
+    const [actionError, setActionError] = useState("");
     const data = typeof props === "object" && props ? props : {};
     const rows = safeList(data.movement_rows);
     const detailsById = data.row_details_by_id || {};
@@ -438,9 +474,44 @@ export default function MovementBrief() {
     const moveSummary = data.move_summary || {};
     const signalSummary = safeList(data.signal_summary);
     const destinationOpportunityContext = safeList(data.destination_account_opportunity_context);
+    const footerActions = safeList(data.footer_actions);
 
     const toggleExpanded = (rowId) => {
         setExpandedRowId((current) => (current === rowId ? null : rowId));
+    };
+
+    const invokeFooterAction = async (action) => {
+        if (!action || !action.name || !data.session_id) {
+            return;
+        }
+        const key = actionKey(action);
+        setPendingActionKey(key);
+        setActionError("");
+        try {
+            const response = await fetch(buildActionEndpoint(), {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                credentials: "same-origin",
+                body: JSON.stringify({
+                    sessionId: data.session_id,
+                    action: {
+                        name: action.name,
+                        label: action.label,
+                        payload: action.payload || {},
+                    },
+                }),
+            });
+            if (!response.ok) {
+                throw new Error(`Action request failed with status ${response.status}`);
+            }
+        } catch (error) {
+            console.error("Movement brief footer action failed", error);
+            setActionError("Action failed. Check the terminal logs and try again.");
+        } finally {
+            setPendingActionKey("");
+        }
     };
 
     return (
@@ -699,6 +770,29 @@ export default function MovementBrief() {
                     <SectionCard title="Takeaway">
                         <p className="movement-brief__takeaway">{data.takeaway || "No takeaway available."}</p>
                     </SectionCard>
+
+                    {footerActions.length ? (
+                        <SectionCard title="Open Supporting Movement Artifacts Or Launch Another Movement Scan">
+                            <div className="movement-brief__footer-actions">
+                                {footerActions.map((action) => {
+                                    const key = actionKey(action);
+                                    const disabled = !data.session_id || pendingActionKey === key;
+                                    return (
+                                        <button
+                                            key={key}
+                                            type="button"
+                                            className="movement-brief__footer-button"
+                                            disabled={disabled}
+                                            onClick={() => invokeFooterAction(action)}
+                                        >
+                                            {pendingActionKey === key ? "Opening..." : action.label}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                            {actionError ? <p className="movement-brief__footer-error">{actionError}</p> : null}
+                        </SectionCard>
+                    ) : null}
                 </main>
             </div>
         </section>
@@ -801,4 +895,14 @@ function renderPersonDetail(personDetail) {
     if (personDetail.location) pieces.push(`Location: ${personDetail.location}`);
     if (personDetail.linkedin_url) pieces.push(`LinkedIn: ${personDetail.linkedin_url}`);
     return pieces.join("\n");
+}
+
+function actionKey(action) {
+    return `${action?.name || ""}:${JSON.stringify(action?.payload || {})}`;
+}
+
+function buildActionEndpoint() {
+    const rootPath = document.querySelector('meta[property="og:root_path"]')?.getAttribute("content") || "";
+    const trimmedRoot = rootPath.endsWith("/") ? rootPath.slice(0, -1) : rootPath;
+    return `${trimmedRoot}/project/action`;
 }

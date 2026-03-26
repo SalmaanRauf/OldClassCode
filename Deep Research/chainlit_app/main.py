@@ -15,6 +15,7 @@ import chainlit as cl
 import asyncio
 from typing import Dict, Any, Optional, List
 import os
+from chainlit.context import context as chainlit_context
 from agents.bing_data_extraction_agent import BingDataExtractionAgent
 from agents.analyst_agent import AnalystAgent
 from services.conversation_manager import ConversationContext, QueryRouter, AnalysisBlob, QueryType, conversation_manager
@@ -1796,6 +1797,13 @@ async def present_transition_brief(brief, *, run_id: str):
 
 async def present_movement_brief(result, *, run_id: str) -> None:
     """Render the compact movement brief surface."""
+    footer_actions = [
+        {
+            "name": ACTION_START_NEW_MOVEMENT_SCAN,
+            "label": "Start New Scan",
+            "payload": {"mode": "movement"},
+        }
+    ] + build_movement_artifact_actions(run_id=run_id)
     payload = build_movement_brief_payload(
         result.movement_brief,
         request=result.request,
@@ -1803,7 +1811,9 @@ async def present_movement_brief(result, *, run_id: str) -> None:
         named_mover_context=getattr(result, "actioning_context", {}) or {},
         person_details_by_name=build_movement_person_details_by_name(result),
         row_action_context_by_person_name=build_movement_row_action_context_by_person_name(result),
+        footer_actions=footer_actions,
     )
+    payload["session_id"] = getattr(getattr(chainlit_context, "session", None), "id", None)
     brief_element = cl.CustomElement(
         name="MovementBrief",
         display="inline",
@@ -1823,21 +1833,14 @@ async def present_movement_brief(result, *, run_id: str) -> None:
         await cl.Message(
             "Interactive movement brief rendering failed, so a markdown fallback view is shown instead."
         ).send()
-
-    actions = [
-        cl.Action(
-            name=ACTION_START_NEW_MOVEMENT_SCAN,
-            label="Start New Scan",
-            payload={"mode": "movement"},
-        )
-    ] + [
-        cl.Action(name=item["name"], label=item["label"], payload=item.get("payload", {}))
-        for item in build_movement_artifact_actions(run_id=run_id)
-    ]
-    await cl.Message(
-        content="Open the supporting movement artifacts or launch another movement scan:",
-        actions=actions,
-    ).send()
+        actions = [
+            cl.Action(name=item["name"], label=item["label"], payload=item.get("payload", {}))
+            for item in footer_actions
+        ]
+        await cl.Message(
+            content="Open the supporting movement artifacts or launch another movement scan:",
+            actions=actions,
+        ).send()
 
 
 async def generate_research_prompt(params_dict: dict):
