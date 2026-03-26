@@ -74,6 +74,10 @@ from services.transition_brief_formatter import (
 )
 from services.element_response_utils import extract_element_response_payload
 from services.review_flow import run_review_action_loop
+from services.chainlit_render_utils import (
+    build_movement_brief_fallback_markdown,
+    ensure_chainlit_files_directory,
+)
 from services.transition_presenter import (
     ACTION_ADJUST_TRANSITION,
     ACTION_EDIT_PROMPT,
@@ -118,6 +122,16 @@ from services.workflow_state import (
 
 setup_logging(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _ensure_chainlit_files_root() -> None:
+    """Create Chainlit's files root defensively before sending custom elements."""
+    try:
+        from chainlit.config import FILES_DIRECTORY
+
+        ensure_chainlit_files_directory(FILES_DIRECTORY)
+    except Exception as exc:
+        logger.warning("Unable to ensure Chainlit files directory: %s", exc)
 DEEP_RESEARCH_SESSION_KEY = "deep_research_mode"
 INDUSTRY_PROMPT_SESSION_KEY = "industry_prompt"
 RESEARCH_PARAMS_SESSION_KEY = "research_params"
@@ -1492,6 +1506,7 @@ async def show_research_form():
     from services.prompt_loader import PromptLoader
     loader = PromptLoader()
     industries = loader.get_available_industries()
+    _ensure_chainlit_files_root()
     
     # Build sector options for the form
     sectors = [
@@ -1571,6 +1586,7 @@ async def show_transition_form():
 
     loader = PromptLoader()
     industries = loader.get_available_industries()
+    _ensure_chainlit_files_root()
     industry_options = [
         {"value": key, "label": meta["display_name"]}
         for key, meta in industries.items()
@@ -1622,6 +1638,7 @@ async def show_movement_form():
 
     loader = PromptLoader()
     industries = loader.get_available_industries()
+    _ensure_chainlit_files_root()
     industry_options = [
         {"value": key, "label": meta["display_name"]}
         for key, meta in industries.items()
@@ -1793,10 +1810,19 @@ async def present_movement_brief(result, *, run_id: str) -> None:
         size="large",
         props=payload,
     )
-    await cl.Message(
-        content="",
-        elements=[brief_element],
-    ).send()
+    _ensure_chainlit_files_root()
+    try:
+        await cl.Message(
+            content="",
+            elements=[brief_element],
+        ).send()
+    except Exception as exc:
+        logger.exception("Movement brief custom element render failed: %s", exc)
+        fallback_content = build_movement_brief_fallback_markdown(payload)
+        await cl.Message(content=fallback_content).send()
+        await cl.Message(
+            "Interactive movement brief rendering failed, so a markdown fallback view is shown instead."
+        ).send()
 
     actions = [
         cl.Action(
