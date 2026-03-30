@@ -195,7 +195,7 @@ def run_stakeholder_case(
     to_account_id = str(to_account.get("id") or "")
     from_account_id = str((from_account or {}).get("id") or "")
 
-    to_org_chart_items, to_org_chart_people, to_org_warnings = collect_org_chart_people(
+    to_org_chart_items, to_org_chart_people, to_org_warnings, to_org_chart_diagnostics = collect_org_chart_people_with_diagnostics(
         client=client,
         zoom_info_account_id=get_zoom_info_account_id(to_account),
         department_hint=department_hint,
@@ -448,6 +448,8 @@ def run_stakeholder_case(
         transition_payload=transition_payload,
         probe_payloads=to_probe_payloads + from_probe_payloads,
     )
+    transition_payload["provenance"]["org_chart_diagnostics"] = to_org_chart_diagnostics
+    transition_payload["provenance"]["person_detail_diagnostics"] = person_resolution.get("detail_diagnostics") or {}
     transition_payload["confidence"] = build_transition_confidence(
         transition_payload=transition_payload,
     )
@@ -1763,11 +1765,13 @@ def build_person_profile_transition(
     project_count = max(
         to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])) or 0,
         len(merged_projects),
+        len(scoped_projects),
         to_int(first_non_empty(key_buyer_match, ["projectCount", "project_count", "numberOfProjects"])) or 0,
     )
     win_count = max(
         to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
         len(merged_wins),
+        len(scoped_wins),
         to_int(first_non_empty(key_buyer_match, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
     )
 
@@ -1812,6 +1816,20 @@ def build_person_profile_transition(
     ) or first_non_empty(key_buyer_match, ["relationshipOwner", "relationship_owner"])
     profile["project_count"] = project_count
     profile["win_count"] = win_count
+
+    detail_diagnostics = person_resolution.get("detail_diagnostics") if isinstance(person_resolution, dict) else None
+    if (
+        project_count == 0
+        and win_count == 0
+        and isinstance(detail_diagnostics, dict)
+        and (
+            to_int(detail_diagnostics.get("max_observed_project_count")) or 0
+            or to_int(detail_diagnostics.get("max_observed_win_count")) or 0
+        )
+    ):
+        warnings.append(
+            "Matched person ended with zero leverage counts despite richer person-detail evidence; check detail diagnostics."
+        )
 
     if not any(
         [
@@ -1994,11 +2012,33 @@ def collect_org_chart_people(
     zoom_info_account_id: Optional[str],
     department_hint: Optional[str],
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
+    items, people, warnings, _diagnostics = collect_org_chart_people_with_diagnostics(
+        client=client,
+        zoom_info_account_id=zoom_info_account_id,
+        department_hint=department_hint,
+    )
+    return items, people, warnings
+
+
+def collect_org_chart_people_with_diagnostics(
+    client: ProConnectClient,
+    zoom_info_account_id: Optional[str],
+    department_hint: Optional[str],
+) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str], Dict[str, Any]]:
     if not zoom_info_account_id:
-        return [], [], ["Missing zoomInfoAccountId; org chart unavailable."]
+        return [], [], ["Missing zoomInfoAccountId; org chart unavailable."], {
+            "raw_successful_employee_count": 0,
+            "deduped_employee_count": 0,
+            "successful_department_calls": 0,
+            "failed_department_calls": 0,
+            "successful_department_job_functions": [],
+        }
 
     warnings: List[str] = []
     people: List[Dict[str, Any]] = []
+    successful_department_calls = 0
+    failed_department_calls = 0
+    successful_department_job_functions: List[Dict[str, Any]] = []
 
     executive_response = client.get_org_chart(
         zoom_info_account_id=zoom_info_account_id,
@@ -2009,12 +2049,22 @@ def collect_org_chart_people(
     )
     if executive_response.get("success"):
         employees = extract_employees(executive_response.get("data"))
+        successful_department_calls += 1
+        if employees:
+            successful_department_job_functions.append(
+                {
+                    "department": "C-Suite",
+                    "job_function": "Executive",
+                    "employee_count": len(employees),
+                }
+            )
         for employee in employees:
             employee["_source"] = "org_chart_executive"
             if not employee.get("department"):
                 employee["department"] = "C-Suite"
             people.append(employee)
     else:
+        failed_department_calls += 1
         warnings.append(
             f"Org chart executive lookup failed with status {executive_response.get('status_code')}."
         )
@@ -2036,17 +2086,27 @@ def collect_org_chart_people(
             )
             if response.get("success"):
                 employees = extract_employees(response.get("data"))
+                successful_department_calls += 1
+                if employees:
+                    successful_department_job_functions.append(
+                        {
+                            "department": department,
+                            "job_function": job_function,
+                            "employee_count": len(employees),
+                        }
+                    )
                 for employee in employees:
                     employee["_source"] = "org_chart_department"
                     if not employee.get("department"):
                         employee["department"] = department
                     people.append(employee)
             else:
+                failed_department_calls += 1
                 warnings.append(
                     f"Org chart {department}/{job_function} failed with status {response.get('status_code')}."
                 )
 
-    deduped_people = dedupe_transition_people(people)
+    deduped_people = dedupe_org_chart_people(people)
     for person in deduped_people:
         person.setdefault("_source", "org_chart")
 
@@ -2063,8 +2123,26 @@ def collect_org_chart_people(
             }
         )
 
-    deduped_items = dedupe_simple_records(items, keys=["category_or_department", "executive_name", "title"])
-    return deduped_items, deduped_people, warnings
+    deduped_items: List[Dict[str, Any]] = []
+    seen_item_keys = set()
+    for item in items:
+        item_key = (
+            normalize_text(str(item.get("category_or_department") or "")),
+            normalize_text(str(item.get("executive_name") or "")),
+            normalize_text(str(item.get("title") or "")),
+        )
+        if item_key in seen_item_keys:
+            continue
+        seen_item_keys.add(item_key)
+        deduped_items.append(item)
+    diagnostics = {
+        "raw_successful_employee_count": len(people),
+        "deduped_employee_count": len(deduped_people),
+        "successful_department_calls": successful_department_calls,
+        "failed_department_calls": failed_department_calls,
+        "successful_department_job_functions": successful_department_job_functions,
+    }
+    return deduped_items, deduped_people, warnings, diagnostics
 
 
 def probe_additional_endpoints(
@@ -2164,7 +2242,11 @@ def enrich_person_resolution_from_prospect_detail(
         warnings.append("Person detail lookup returned HTML instead of JSON.")
         return person_resolution
 
-    detail_candidate = extract_person_detail_candidate(response.get("data"))
+    detail_candidate, detail_diagnostics = select_person_detail_candidate(
+        payload=response.get("data"),
+        person_name=person_name,
+        matched_person=matched,
+    )
     if not detail_candidate:
         return person_resolution
 
@@ -2180,6 +2262,7 @@ def enrich_person_resolution_from_prospect_detail(
 
     result = dict(person_resolution)
     result["matched"] = enriched
+    result["detail_diagnostics"] = detail_diagnostics
     return result
 
 
@@ -2223,52 +2306,138 @@ def select_person_detail_prospect_id(
 
 
 def extract_person_detail_candidate(payload: Any) -> Optional[Dict[str, Any]]:
-    candidate_nodes: List[Dict[str, Any]] = []
-    if isinstance(payload, dict):
-        candidate_nodes.append(payload)
-        document = payload.get("document")
-        if isinstance(document, dict):
-            candidate_nodes.append(document)
-    elif isinstance(payload, list):
-        candidate_nodes.extend(to_list_dicts(payload))
+    candidate, _diagnostics = select_person_detail_candidate(
+        payload=payload,
+        person_name=None,
+        matched_person=None,
+    )
+    return candidate
 
-    for node in candidate_nodes:
-        record = parse_person_like_record(node)
+
+def select_person_detail_candidate(
+    payload: Any,
+    person_name: Optional[str],
+    matched_person: Optional[Dict[str, Any]],
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    matched_ids = _person_reference_ids(matched_person or {})
+    matched_account_id = str(first_non_empty(matched_person or {}, ["linked_account_id", "accountId", "sfdcAccountId"]) or "")
+
+    candidates: List[Dict[str, Any]] = []
+    for path, node in iter_dict_nodes_with_paths(payload):
+        merged_node = merge_person_detail_node(node)
+        record = parse_person_like_record(merged_node)
         if not record:
             continue
-        external_view_raw = node.get("externalProspectView")
-        if not isinstance(external_view_raw, dict):
-            external_view_raw = node.get("ExternalProspectView")
-        external_view = external_view_raw if isinstance(external_view_raw, dict) else {}
-        supplemental = {
-            "titleExternal": first_non_empty(external_view, ["title"]),
-            "phone": first_non_empty(external_view, ["phone"]),
-            "education": first_non_empty(external_view, ["education"]),
-            "linkedinUrl": first_non_empty(external_view, ["linkedinUrl", "linkedInUrl"]),
-            "emailAddress": first_non_empty(external_view, ["emailAddress", "email"]),
-            "location": first_non_empty(external_view, ["location"]),
-            "photoUrl": first_non_empty(external_view, ["photoUrl"]),
-        }
-        record = merge_person_candidates(
-            candidates=[record, supplemental],
-            selected=record,
-            title_hints=[],
+        record["id"] = first_non_empty(merged_node, ["contactId", "id", "prospectId", "personId"]) or record.get("id")
+        record["accountId"] = first_non_empty(merged_node, ["accountId", "sfdcAccountId"])
+        record["_source"] = "person_detail"
+
+        candidate_name = full_person_name(record)
+        project_count = max(
+            to_int(first_non_empty(record, ["projectCount", "project_count", "numberOfProjects"])) or 0,
+            len(to_list_dicts(first_non_empty(record, ["projects"]))),
         )
-        record["id"] = first_non_empty(node, ["contactId", "id", "prospectId", "personId"]) or record.get("id")
-        record["accountId"] = first_non_empty(node, ["accountId", "sfdcAccountId"])
-        record["_source"] = "person_detail"
-        return record
+        win_count = max(
+            to_int(first_non_empty(record, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
+            len(to_list_dicts(first_non_empty(record, ["closeWonOpps", "closeWonOpportunities"]))),
+        )
+        contact_fields = sum(
+            1
+            for value in [
+                first_non_empty(record, ["emailAddress", "email"]),
+                first_non_empty(record, ["linkedinUrl", "linkedInUrl"]),
+                first_non_empty(record, ["phone"]),
+            ]
+            if present(value) == "present"
+        )
+        education_present = 1 if present(first_non_empty(record, ["education", "educationList"])) == "present" else 0
+        location_present = 1 if present(first_non_empty(record, ["location"])) == "present" else 0
+        relationship_owner_present = 1 if present(first_non_empty(record, ["relationshipOwner", "relationship_owner"])) == "present" else 0
+        exact_name = bool(person_name and exact_name_equals(person_name, candidate_name))
+        same_name = bool(person_name and same_first_last_name(person_name, candidate_name))
+        id_match = bool(record.get("id") and str(record.get("id")) in matched_ids)
+        account_match = bool(matched_account_id and str(record.get("accountId") or "") == matched_account_id)
+        depth = path.count(".") + path.count("[")
+        richness_score = (
+            (1000 if id_match else 0)
+            + (700 if account_match else 0)
+            + (600 if exact_name else 0)
+            + (300 if same_name else 0)
+            + (project_count * 50)
+            + (win_count * 50)
+            + (relationship_owner_present * 20)
+            + (contact_fields * 10)
+            + (education_present * 5)
+            + (location_present * 5)
+        )
+        candidates.append(
+            {
+                "path": path,
+                "record": record,
+                "project_count": project_count,
+                "win_count": win_count,
+                "exact_name": exact_name,
+                "same_name": same_name,
+                "id_match": id_match,
+                "account_match": account_match,
+                "contact_fields": contact_fields,
+                "education_present": education_present,
+                "location_present": location_present,
+                "relationship_owner_present": relationship_owner_present,
+                "depth": depth,
+                "richness_score": richness_score,
+            }
+        )
 
-    for node in iter_dict_nodes(payload):
-        record = parse_person_like_record(node)
-        if not record:
-            continue
-        record["id"] = first_non_empty(node, ["contactId", "id", "prospectId", "personId"]) or record.get("id")
-        record["accountId"] = first_non_empty(node, ["accountId", "sfdcAccountId"])
-        record["_source"] = "person_detail"
-        return record
+    if not candidates:
+        return None, {
+            "candidate_count": 0,
+            "selected_path": None,
+            "selected_richness_score": 0,
+            "selected_project_count": 0,
+            "selected_win_count": 0,
+            "richer_nodes_skipped": False,
+            "selection_reason": "no_person_like_candidates",
+            "max_observed_project_count": 0,
+            "max_observed_win_count": 0,
+        }
 
-    return None
+    selected_meta = sorted(
+        candidates,
+        key=lambda item: (
+            item["id_match"],
+            item["account_match"],
+            item["exact_name"],
+            item["same_name"],
+            item["project_count"],
+            item["win_count"],
+            item["relationship_owner_present"],
+            item["contact_fields"],
+            item["education_present"],
+            item["location_present"],
+            item["richness_score"],
+            -item["depth"],
+        ),
+        reverse=True,
+    )[0]
+
+    richer_nodes_skipped = any(
+        (item["project_count"] > selected_meta["project_count"] or item["win_count"] > selected_meta["win_count"])
+        and item["path"] != selected_meta["path"]
+        for item in candidates
+    )
+    diagnostics = {
+        "candidate_count": len(candidates),
+        "selected_path": selected_meta["path"],
+        "selected_richness_score": selected_meta["richness_score"],
+        "selected_project_count": selected_meta["project_count"],
+        "selected_win_count": selected_meta["win_count"],
+        "richer_nodes_skipped": richer_nodes_skipped,
+        "selection_reason": _person_detail_selection_reason(selected_meta),
+        "max_observed_project_count": max(item["project_count"] for item in candidates),
+        "max_observed_win_count": max(item["win_count"] for item in candidates),
+    }
+    return selected_meta["record"], diagnostics
 
 
 def extract_person_search_candidates(payload: Any) -> List[Dict[str, Any]]:
@@ -2329,6 +2498,31 @@ def extract_probe_people(probe_payloads: List[Dict[str, Any]]) -> List[Dict[str,
             people.append(record)
 
     return dedupe_transition_people(people)
+
+
+def dedupe_org_chart_people(people: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    seen = set()
+    deduped: List[Dict[str, Any]] = []
+    for person in people:
+        if not isinstance(person, dict):
+            continue
+        stable_id = str(first_non_empty(person, ["id", "contactId", "personId", "employeeId"]) or "").strip()
+        if stable_id:
+            key = ("id", stable_id.lower())
+        else:
+            key = (
+                "fallback",
+                normalize_text(full_person_name(person)),
+                normalize_text(str(person.get("title") or "")),
+                normalize_text(
+                    str(person.get("department") or person.get("sfdcJobFunction") or person.get("function") or "")
+                ),
+            )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(person)
+    return deduped
 
 
 def build_transition_provenance(
@@ -2917,6 +3111,65 @@ def iter_dict_nodes(value: Any) -> Iterable[Dict[str, Any]]:
         elif isinstance(current, list):
             for child in current:
                 stack.append(child)
+
+
+def iter_dict_nodes_with_paths(value: Any) -> Iterable[Tuple[str, Dict[str, Any]]]:
+    stack: List[Tuple[str, Any]] = [("root", value)]
+    while stack:
+        path, current = stack.pop()
+        if isinstance(current, dict):
+            yield path, current
+            for key, child in current.items():
+                stack.append((f"{path}.{key}", child))
+        elif isinstance(current, list):
+            for index, child in enumerate(current):
+                stack.append((f"{path}[{index}]", child))
+
+
+def merge_person_detail_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    merged = dict(node)
+    external_view_raw = node.get("externalProspectView")
+    if not isinstance(external_view_raw, dict):
+        external_view_raw = node.get("ExternalProspectView")
+    external_view = external_view_raw if isinstance(external_view_raw, dict) else {}
+    supplemental = {
+        "titleExternal": first_non_empty(external_view, ["title"]),
+        "phone": first_non_empty(external_view, ["phone"]),
+        "education": first_non_empty(external_view, ["education"]),
+        "linkedinUrl": first_non_empty(external_view, ["linkedinUrl", "linkedInUrl"]),
+        "emailAddress": first_non_empty(external_view, ["emailAddress", "email"]),
+        "location": first_non_empty(external_view, ["location"]),
+        "photoUrl": first_non_empty(external_view, ["photoUrl"]),
+    }
+    for key, value in supplemental.items():
+        if present(value) == "present" and present(merged.get(key)) != "present":
+            merged[key] = value
+    return merged
+
+
+def _person_detail_selection_reason(selected_meta: Dict[str, Any]) -> str:
+    reasons: List[str] = []
+    if selected_meta.get("id_match"):
+        reasons.append("id_match")
+    if selected_meta.get("account_match"):
+        reasons.append("account_match")
+    if selected_meta.get("exact_name"):
+        reasons.append("exact_name")
+    elif selected_meta.get("same_name"):
+        reasons.append("same_first_last")
+    if selected_meta.get("project_count"):
+        reasons.append("projects")
+    if selected_meta.get("win_count"):
+        reasons.append("wins")
+    if selected_meta.get("relationship_owner_present"):
+        reasons.append("relationship_owner")
+    if selected_meta.get("contact_fields"):
+        reasons.append("contact_fields")
+    if selected_meta.get("education_present"):
+        reasons.append("education")
+    if selected_meta.get("location_present"):
+        reasons.append("location")
+    return ",".join(reasons) if reasons else "richest_candidate"
 
 
 def parse_person_like_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:

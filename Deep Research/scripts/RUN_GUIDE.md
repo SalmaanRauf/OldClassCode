@@ -13,6 +13,7 @@ Make sure these files are the latest versions before you run anything:
 - `proconnect_stakeholder_test.py`
 - `proconnect_scenario_runner.py`
 - `proconnect_stakeholder_scenarios.sample.json`
+- `proconnect_validation_battery.ps1`
 
 ## 1) Go to the test folder
 
@@ -26,7 +27,31 @@ cd C:\Users\salrau01\prcttry
 Set-Content -Path .\token.txt -Value 'PASTE_RAW_JWT_HERE' -NoNewline
 ```
 
-## 3) Run the primary demo scenario
+## 3) Fast path: run the full validation battery script
+
+This runs the primary Jennifer checks, the quick person checks, the full rich-payload checks, the scenario runner, and then prints the newest artifacts.
+
+It does not create or modify `token.txt`; you still do that manually first.
+
+```powershell
+.\proconnect_validation_battery.ps1 -TokenFile .\token.txt
+```
+
+Useful switches:
+
+- `-SkipDynamicResolutionDemo`
+- `-SkipAnchoredJennifer`
+- `-SkipQuickChecks`
+- `-SkipFullChecks`
+- `-SkipScenarioRunner`
+
+Example:
+
+```powershell
+.\proconnect_validation_battery.ps1 -TokenFile .\token.txt -SkipDynamicResolutionDemo
+```
+
+## 4) Run the primary demo scenario manually
 
 ```powershell
 py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --department "C-Suite" --token-file ".\token.txt"
@@ -42,7 +67,7 @@ Expected result for this patch:
 - the `HTTP (last 10)` block should now include `/api/Intent`, `/api/Scoop`, and `/api/prospects/{id}`
 - warnings about `/api/taggedrelationships`, `/api/relationshiplead`, or `/api/userHistory` returning ProConnect HTML should be gone on the latest files
 
-## 4) Only if needed: rerun with a real destination account override
+## 5) Only if needed: rerun with a real destination account override
 
 Use this only if you know the real Fannie Mae account id value.
 Do not paste placeholder text like `<FANNIE_MAE_ACCOUNT_ID>`.
@@ -51,7 +76,7 @@ Do not paste placeholder text like `<FANNIE_MAE_ACCOUNT_ID>`.
 py .\proconnect_stakeholder_test.py --person "Jennifer Brady" --from-company "Capital One" --from-account-id "00130000000BYU2AAO" --to-company "Fannie Mae" --to-account-id "REAL_FANNIE_MAE_ACCOUNT_ID" --department "C-Suite" --token-file ".\token.txt"
 ```
 
-## 5) Run the focused ProConnect validation battery
+## 6) Run the focused ProConnect validation battery manually
 
 Use this when you want to validate ProConnect extraction outside the Deep Research or movement-brief flow.
 
@@ -107,19 +132,19 @@ foreach ($t in $fullChecks) {
 }
 ```
 
-## 6) Run the scenario batch
+## 7) Run the scenario batch
 
 ```powershell
 py .\proconnect_scenario_runner.py --payload-type stakeholder --scenarios-file ".\proconnect_stakeholder_scenarios.sample.json" --token-file ".\token.txt"
 ```
 
-## 7) List the newest artifacts
+## 8) List the newest artifacts
 
 ```powershell
 Get-ChildItem .\output\proconnect_runs | Sort-Object LastWriteTime -Descending | Select-Object -First 10 Name,LastWriteTime
 ```
 
-## 8) Print the latest transition artifact summary
+## 9) Print the latest transition artifact summary
 
 Paste this whole block as-is:
 
@@ -194,7 +219,7 @@ $j.http_calls | Select-Object -First 10 endpoint,status_code,error,elapsed_ms | 
 $j.http_calls | Select-Object -Last 10 endpoint,status_code,error,elapsed_ms | Format-Table -AutoSize
 ```
 
-## 9) Print a compact stakeholder summary for the latest ProConnect runs
+## 10) Print a compact stakeholder summary for the latest ProConnect runs
 
 Use this after the focused validation battery to compare person extraction quality across the newest stakeholder artifacts.
 
@@ -224,7 +249,7 @@ Get-ChildItem .\output\proconnect_runs\proconnect_stakeholder_*.json |
   } | Format-Table -Wrap -AutoSize
 ```
 
-## 10) Print the latest Jennifer artifact in detail
+## 11) Print the latest Jennifer artifact in detail
 
 Use this to inspect whether the standalone ProConnect harness itself is producing the wrong Jennifer Brady counts.
 

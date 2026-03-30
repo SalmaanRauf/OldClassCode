@@ -8,7 +8,12 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from scripts.proconnect_stakeholder_payload import build_person_profile_transition  # noqa: E402
+import scripts.proconnect_stakeholder_payload as stakeholder_payload  # noqa: E402
+from scripts.proconnect_stakeholder_payload import (  # noqa: E402
+    build_person_profile_transition,
+    collect_org_chart_people,
+    enrich_person_resolution_from_prospect_detail,
+)
 
 
 def test_build_person_profile_transition_unions_projects_and_wins_from_multiple_sources() -> None:
@@ -77,3 +82,136 @@ def test_build_person_profile_transition_unions_projects_and_wins_from_multiple_
     assert len(profile["matched_person"]["projects"]) == 3
     assert len(profile["matched_person"]["closeWonOpps"]) == 3
     assert profile["relationship_owner"] == "Bernadette Norrington"
+
+
+def test_collect_org_chart_people_preserves_distinct_people_with_different_ids(monkeypatch) -> None:
+    monkeypatch.setattr(
+        stakeholder_payload,
+        "DEPARTMENT_TO_SFDC_FUNCTIONS",
+        {
+            "Finance": ["Compliance"],
+            "Legal": ["Compliance"],
+        },
+    )
+
+    class FakeClient:
+        def get_org_chart(self, zoom_info_account_id, department, sfdc_job_function, page=None, size=None):
+            del zoom_info_account_id, page, size
+            if department == "Finance" and sfdc_job_function == "Compliance":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "employees": [
+                            {
+                                "id": "finance-1",
+                                "firstName": "Alex",
+                                "lastName": "Morgan",
+                                "title": "Director, Compliance",
+                            }
+                        ]
+                    },
+                }
+            if department == "Legal" and sfdc_job_function == "Compliance":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "employees": [
+                            {
+                                "id": "legal-1",
+                                "firstName": "Alex",
+                                "lastName": "Morgan",
+                                "title": "Director, Compliance",
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"employees": []}}
+
+    items, people, warnings = collect_org_chart_people(
+        client=FakeClient(),
+        zoom_info_account_id="72074644",
+        department_hint="Finance",
+    )
+
+    assert warnings == []
+    assert len(people) == 2
+    assert len(items) == 2
+    assert {item["category_or_department"] for item in items} == {"Finance", "Legal"}
+
+
+def test_enrich_person_resolution_from_prospect_detail_prefers_richer_nested_candidate() -> None:
+    class FakeClient:
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            del params, retry_on_5xx, retry_delay_seconds, stop_on_auth
+            assert endpoint == "/api/prospects/contact-42"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "contactId": "contact-42",
+                    "name": "Danielle McCoy",
+                    "title": "Senior Vice President, Deputy General Counsel and Deputy Corporate Secretary",
+                    "location": "Washington, DC, United States",
+                    "details": {
+                        "contactId": "contact-42",
+                        "accountId": "001-to",
+                        "name": "Danielle McCoy",
+                        "title": "Senior Vice President, Deputy General Counsel and Deputy Corporate Secretary",
+                        "location": "Washington, DC, United States",
+                        "relationshipOwner": "Germaal Ross",
+                        "projectCount": 2,
+                        "winCount": 1,
+                        "projects": [
+                            {"projectId": "p-1", "name": "Legal Controls Modernization"},
+                            {"projectId": "p-2", "name": "Deputy GC Advisory"},
+                        ],
+                        "closeWonOpps": [
+                            {"opportunityId": "w-1", "name": "Controls Review"}
+                        ],
+                    },
+                },
+            }
+
+    matched = {
+        "id": "contact-42",
+        "contactId": "contact-42",
+        "name": "Danielle McCoy",
+        "title": "Senior Vice President, Deputy General Counsel and Deputy Corporate Secretary",
+        "_source": "to_org_chart_department",
+        "_company_scope": "to",
+        "linked_account_id": "001-to",
+        "linked_company_name": "Federal National Mortgage Association (Fannie Mae)",
+    }
+    person_resolution = {
+        "status": "matched",
+        "match_source": "to_org_chart_department",
+        "match_scope": "to",
+        "match_strategy": "exact_name_to_account",
+        "matched": matched,
+    }
+
+    warnings: list[str] = []
+    enriched_resolution = enrich_person_resolution_from_prospect_detail(
+        client=FakeClient(),
+        person_name="Danielle McCoy",
+        person_resolution=person_resolution,
+        candidate_people=[matched],
+        warnings=warnings,
+    )
+    profile = build_person_profile_transition(
+        person_requested="Danielle McCoy",
+        person_resolution=enriched_resolution,
+        candidate_people=[enriched_resolution["matched"]],
+        to_account={},
+        from_account=None,
+        warnings=warnings,
+    )
+
+    assert warnings == []
+    assert profile["project_count"] == 2
+    assert profile["win_count"] == 1
+    assert len(profile["matched_person"]["projects"]) == 2
+    assert len(profile["matched_person"]["closeWonOpps"]) == 1
+    assert profile["relationship_owner"] == "Germaal Ross"

@@ -331,6 +331,9 @@ def execute_scenario(
             extra_headers=extra_headers,
         )
 
+    if payload_type == "stakeholder":
+        result = apply_stakeholder_evidence_expectations(scenario=scenario, result=result)
+
     expected_status = scenario.get("expected_status")
     expected_value = str(expected_status).upper() if expected_status else None
     actual_value = str(result.get("status") or "FAIL").upper()
@@ -342,6 +345,115 @@ def execute_scenario(
     result["status_match"] = status_match
     result["unexpected_failure"] = unexpected_failure
     return result
+
+
+def apply_stakeholder_evidence_expectations(
+    scenario: Dict[str, Any],
+    result: Dict[str, Any],
+) -> Dict[str, Any]:
+    expectation_keys = [
+        "expected_org_chart_min",
+        "expected_project_count_min",
+        "expected_win_count_min",
+        "expected_match_source_in",
+        "expected_matched_name",
+        "forbid_matched_names",
+    ]
+    if not any(key in scenario for key in expectation_keys):
+        return result
+
+    checks = list(result.get("checks") or [])
+    warnings = list(result.get("warnings") or [])
+    errors = list(result.get("errors") or [])
+    transition_payload = result.get("transition_payload") or {}
+    person_profile = transition_payload.get("person_profile") or {}
+    matched_person = person_profile.get("matched_person") or {}
+    person_resolution = result.get("person_resolution") or {}
+
+    violations: List[str] = []
+    org_chart_items = (((transition_payload.get("to_company_context") or {}).get("org_chart") or {}).get("items") or [])
+    matched_name = str(
+        matched_person.get("name")
+        or ((person_resolution.get("matched_person") or {}).get("name"))
+        or ""
+    ).strip()
+    match_source = str(person_resolution.get("match_source") or "").strip()
+    project_count = max(
+        _to_int(person_profile.get("project_count")) or 0,
+        _to_int(matched_person.get("project_count")) or 0,
+    )
+    win_count = max(
+        _to_int(person_profile.get("win_count")) or 0,
+        _to_int(matched_person.get("win_count")) or 0,
+    )
+
+    expected_org_chart_min = _to_int(scenario.get("expected_org_chart_min"))
+    if expected_org_chart_min is not None and len(org_chart_items) < expected_org_chart_min:
+        violations.append(
+            f"expected_org_chart_min={expected_org_chart_min} but observed {len(org_chart_items)}"
+        )
+
+    expected_project_count_min = _to_int(scenario.get("expected_project_count_min"))
+    if expected_project_count_min is not None and project_count < expected_project_count_min:
+        violations.append(
+            f"expected_project_count_min={expected_project_count_min} but observed {project_count}"
+        )
+
+    expected_win_count_min = _to_int(scenario.get("expected_win_count_min"))
+    if expected_win_count_min is not None and win_count < expected_win_count_min:
+        violations.append(
+            f"expected_win_count_min={expected_win_count_min} but observed {win_count}"
+        )
+
+    expected_match_sources = scenario.get("expected_match_source_in")
+    if isinstance(expected_match_sources, list):
+        allowed_sources = [str(item).strip() for item in expected_match_sources if str(item).strip()]
+        if allowed_sources and match_source not in allowed_sources:
+            violations.append(
+                f"expected_match_source_in={allowed_sources} but observed '{match_source or 'missing'}'"
+            )
+
+    expected_matched_name = scenario.get("expected_matched_name")
+    if expected_matched_name and _normalize_name(matched_name) != _normalize_name(str(expected_matched_name)):
+        violations.append(
+            f"expected_matched_name='{expected_matched_name}' but observed '{matched_name or 'missing'}'"
+        )
+
+    forbid_matched_names = scenario.get("forbid_matched_names")
+    if isinstance(forbid_matched_names, list):
+        forbidden = {_normalize_name(str(item)) for item in forbid_matched_names if str(item).strip()}
+        if _normalize_name(matched_name) in forbidden:
+            violations.append(f"forbid_matched_names matched forbidden value '{matched_name}'")
+
+    checks.append(
+        {
+            "check": "Evidence expectations",
+            "status": "FAIL" if violations else "PASS",
+            "http": "-",
+            "details": " | ".join(violations) if violations else "Evidence expectations satisfied.",
+        }
+    )
+    errors.extend(violations)
+    result["checks"] = checks
+    result["warnings"] = warnings
+    result["errors"] = errors
+    result["status"] = derive_status(checks=checks, errors=errors, warnings=warnings)
+    return result
+
+
+def _normalize_name(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+
+def _to_int(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def derive_status(checks: List[Dict[str, Any]], errors: List[str], warnings: List[str]) -> str:

@@ -166,6 +166,7 @@ def resolve_person_tiered(
             "executive_team": 0,
             "department_people": 0,
             "department_calls": 0,
+            "person_search_candidates": 0,
         },
         "warnings": [],
     }
@@ -230,6 +231,54 @@ def resolve_person_tiered(
         output["status"] = "matched"
         output["match_source"] = "department_sweep"
         output["matched_person"] = dept_match
+        return output
+
+    account_id = str(account.get("id") or "").strip()
+    if not account_id:
+        return output
+
+    person_search_response = client.search_prospects(person_name)
+    if not person_search_response.get("success"):
+        output["warnings"].append(
+            f"Person search fallback failed with status {person_search_response.get('status_code')}."
+        )
+        return output
+
+    person_candidates = extract_person_candidates(person_search_response.get("data"))
+    output["checked"]["person_search_candidates"] = len(person_candidates)
+
+    exact_account_matches = [
+        candidate
+        for candidate in person_candidates
+        if str(candidate.get("accountId") or "").strip() == account_id
+        and exact_name_equals(person_name, full_person_name(candidate))
+    ]
+    if not exact_account_matches:
+        return output
+
+    selected = sorted(
+        exact_account_matches,
+        key=lambda candidate: (
+            1 if exact_name_equals(person_name, full_person_name(candidate)) else 0,
+            1 if same_first_last_name(person_name, full_person_name(candidate)) else 0,
+            name_match_score(person_name, full_person_name(candidate)),
+        ),
+        reverse=True,
+    )[0]
+
+    output["status"] = "matched"
+    output["match_source"] = "person_search"
+    output["matched_person"] = {
+        "id": first_non_empty(selected, ["contactId", "id"]),
+        "name": full_person_name(selected),
+        "title": selected.get("title"),
+        "department": selected.get("department") or selected.get("function"),
+        "sfdcJobFunction": selected.get("sfdcJobFunction"),
+        "linkedinUrl": selected.get("linkedinUrl"),
+        "emailAddress": selected.get("emailAddress"),
+        "score": 1.0,
+        "accountId": selected.get("accountId"),
+    }
 
     return output
 
@@ -328,6 +377,38 @@ def extract_account_candidates(payload: Any) -> List[Dict[str, Any]]:
     return candidates
 
 
+def extract_person_candidates(payload: Any) -> List[Dict[str, Any]]:
+    candidates: List[Dict[str, Any]] = []
+    if not isinstance(payload, dict):
+        return candidates
+
+    for item in payload.get("value") or []:
+        if not isinstance(item, dict):
+            continue
+        document = item.get("document") if isinstance(item.get("document"), dict) else item
+        if not isinstance(document, dict):
+            continue
+        name = first_non_empty(document, ["name", "contactName", "fullName"])
+        if not name:
+            continue
+        candidates.append(
+            {
+                "contactId": first_non_empty(document, ["contactId", "id"]),
+                "accountId": first_non_empty(document, ["accountId", "sfdcAccountId"]),
+                "name": name,
+                "firstName": first_non_empty(document, ["firstName"]),
+                "lastName": first_non_empty(document, ["lastName"]),
+                "title": first_non_empty(document, ["title"]),
+                "department": first_non_empty(document, ["department", "function"]),
+                "function": first_non_empty(document, ["function"]),
+                "sfdcJobFunction": first_non_empty(document, ["sfdcJobFunction"]),
+                "linkedinUrl": first_non_empty(document, ["linkedinUrl", "linkedInUrl"]),
+                "emailAddress": first_non_empty(document, ["emailAddress", "email"]),
+            }
+        )
+    return candidates
+
+
 def extract_employees(payload: Any) -> List[Dict[str, Any]]:
     if not isinstance(payload, dict):
         return []
@@ -377,7 +458,7 @@ def match_person_in_people(person_name: str, people: Iterable[Any]) -> Optional[
         if isinstance(item, dict):
             records.append(item)
 
-    return _best_person_match(person_name, records, ["name", "firstName", "lastName"])
+    return _best_person_match(person_name, records, ["name"])
 
 
 def dedupe_people(people: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -399,16 +480,43 @@ def dedupe_people(people: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
 def _best_person_match(person_name: str, records: List[Dict[str, Any]], keys: List[str]) -> Optional[Dict[str, Any]]:
     best_score = 0.0
     best_record: Optional[Dict[str, Any]] = None
+    best_option = ""
+    best_exact = False
+    best_first_last = False
+    best_last_name = False
 
     for record in records:
         options = _record_name_options(record, keys)
         for option in options:
             score = name_match_score(person_name, option)
-            if score > best_score:
+            exact = exact_name_equals(person_name, option)
+            first_last = same_first_last_name(person_name, option)
+            last_name = same_last_name(person_name, option)
+            rank = (
+                1 if exact else 0,
+                1 if first_last else 0,
+                1 if last_name else 0,
+                score,
+            )
+            best_rank = (
+                1 if best_exact else 0,
+                1 if best_first_last else 0,
+                1 if best_last_name else 0,
+                best_score,
+            )
+            if rank > best_rank:
                 best_score = score
                 best_record = record
+                best_option = option
+                best_exact = exact
+                best_first_last = first_last
+                best_last_name = last_name
 
-    if best_record is None or best_score < 0.72:
+    if best_record is None:
+        return None
+    if best_exact or best_first_last:
+        pass
+    elif best_score < 0.72 or not best_last_name:
         return None
 
     normalized = {
@@ -419,7 +527,7 @@ def _best_person_match(person_name: str, records: List[Dict[str, Any]], keys: Li
         "sfdcJobFunction": best_record.get("sfdcJobFunction") or best_record.get("sfdcJobFunction"),
         "linkedinUrl": best_record.get("linkedinUrl"),
         "emailAddress": best_record.get("emailAddress"),
-        "score": round(best_score, 4),
+        "score": round(best_score if best_option else 0.0, 4),
     }
     return normalized
 
@@ -500,6 +608,23 @@ def same_first_last_name(left: str, right: str) -> bool:
     left_key = first_last_name_key(left)
     right_key = first_last_name_key(right)
     return bool(left_key[0] and left_key == right_key)
+
+
+def same_last_name(left: str, right: str) -> bool:
+    left_key = first_last_name_key(left)
+    right_key = first_last_name_key(right)
+    return bool(left_key[1] and right_key[1] and left_key[1] == right_key[1])
+
+
+def first_non_empty(payload: Dict[str, Any], keys: List[str]) -> Any:
+    for key in keys:
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
 
 
 def find_exact_person_match(person_name: str, people: Iterable[Any]) -> Optional[Dict[str, Any]]:
