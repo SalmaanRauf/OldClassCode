@@ -170,7 +170,7 @@ def test_assemble_brief_keeps_all_ranked_rows_and_attaches_proof_packets():
     assert "0 projects, 2 wins" in brief.where_to_act[0].likely_play
     assert brief.where_to_act[0].relationship_owner == "Ben L"
     assert "Relationship owner: Ben L." in brief.where_to_act[0].why_now
-    assert "Leverage: known relationship, delivery history." in brief.where_to_act[0].why_now
+    assert "Leverage: known in ProConnect, delivery history." in brief.where_to_act[0].why_now
     assert "Credential proof: Existing delivery with adjacent team." in brief.where_to_act[0].why_now
     assert brief.movement_rows[0].leverage is not None
     assert brief.movement_rows[0].credentials_proof is not None
@@ -245,6 +245,37 @@ def test_assemble_brief_uses_credential_proof_to_raise_action_priority():
 
     assert brief.where_to_act[0].person_name == "Person 1"
     assert "Credential proof: Matched credentials: AI Governance Transformation." in brief.where_to_act[0].why_now
+
+
+def test_assemble_brief_describes_known_person_without_implying_relationship_history():
+    assembler = MovementBriefAssembler()
+
+    brief = assembler.assemble(
+        request=_request(),
+        preflight=_preflight(),
+        trigger=_trigger(),
+        deep_research_summary="Capital One is under governance pressure.",
+        signal_evidence=[],
+        ranked_rows=[
+            {
+                "movement": _movement(0),
+                "known": True,
+                "worked_with": False,
+                "project_count": 0,
+                "win_count": 0,
+                "relationship_owner": None,
+                "person_match_status": "matched",
+                "rank_score": 10,
+                "action_posture": "Expansion Opportunity",
+            }
+        ],
+        deep_enriched_rows=[],
+        credential_packets={},
+        derived_opportunities=[],
+    )
+
+    assert "known in proconnect" in brief.where_to_act[0].why_now.lower()
+    assert "known relationship" not in brief.where_to_act[0].why_now.lower()
 
 
 def test_assemble_brief_keeps_cover_summary_compact_when_deep_research_summary_is_verbose_report():

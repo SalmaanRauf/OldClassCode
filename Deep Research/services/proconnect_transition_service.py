@@ -339,7 +339,9 @@ class ProConnectTransitionService:
             )
 
         if not profile.get("direct_person_evidence"):
-            diagnostics.append("Direct person-level evidence is unavailable; treat the named mover as planning context only.")
+            diagnostics.append(
+                "Direct person-level leverage is unavailable; the named mover is identity-confirmed in ProConnect but leverage-light."
+            )
 
         if warnings:
             diagnostics.extend(warnings[:2])

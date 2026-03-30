@@ -686,6 +686,220 @@ async def test_orchestrator_reuses_named_mover_scope_for_row_leverage() -> None:
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_marks_named_mover_as_known_when_exact_proconnect_match_has_no_delivery_history() -> None:
+    preflight = TransitionPreflight(
+        request=TransitionRequest(
+            person_name="Jason Dandridge",
+            from_company="Capital One",
+            to_company="Fannie Mae",
+            new_role="Senior Vice President",
+            synthetic_scenario=True,
+        ),
+        person_resolution=TransitionPersonResolution(
+            requested_name="Jason Dandridge",
+            match_status="matched",
+            matched_name="Jason Dandridge",
+            matched_title="Senior Vice President",
+            match_source="person_search",
+            match_scope="to",
+            linked_account_id="00130000000BYUIAA4",
+            direct_person_evidence=False,
+        ),
+        from_account=AccountResolution(company_name="Capital One", resolved=True, account_id="00130000000BYU2AAO"),
+        to_account=AccountResolution(company_name="Fannie Mae", resolved=True, account_id="00130000000BYUIAA4"),
+        quick_indicators=QuickRelationshipIndicators(
+            warm_intro_path_available=False,
+            source_worked_before=False,
+            destination_worked_before=False,
+            source_key_buyer_count=0,
+            destination_key_buyer_count=0,
+            source_connected_colleague_count=0,
+            destination_connected_colleague_count=0,
+        ),
+        opportunity_hypotheses=[],
+        inferred_industry="financial_services",
+        suggested_research_prompt="Investigate movement.",
+    )
+    assembled = {}
+
+    class FakeTransitionService:
+        def load_transition_case(self, request, **kwargs):
+            return {"transition_payload": {"stub": True}}
+
+        def build_preflight(self, request, *, transition_case=None):
+            return preflight
+
+        def build_actioning_context(self, request, *, transition_case=None):
+            return {
+                "person_profile": {
+                    "match_status": "matched",
+                    "matched_person": {
+                        "name": "Jason Dandridge",
+                        "title": "Senior Vice President",
+                        "source": "person_search",
+                        "company_scope": "to",
+                        "linked_account_id": "00130000000BYUIAA4",
+                    },
+                    "relationship_owner": None,
+                    "project_count": 0,
+                    "win_count": 0,
+                    "claim_policy_note": "No direct person-level evidence found; use account-level claim with caution.",
+                    "direct_person_evidence": False,
+                },
+                "from_company_context": {
+                    "relationship_network": {
+                        "connected_colleagues": {"items": []},
+                        "protiviti_alumni": {"items": []},
+                    },
+                },
+                "to_company_context": {
+                    "relationship_network": {
+                        "connected_colleagues": {"items": []},
+                        "protiviti_alumni": {"items": []},
+                    },
+                },
+            }
+
+    class FakePromptBuilder:
+        def build(self, request, preflight_arg):
+            return MovementPromptPackage(
+                industry_key="financial_services",
+                system_prompt="FS prompt + overlay",
+                user_prompt="Generated move prompt.",
+            )
+
+    class FakeFSSignalDigestor:
+        async def digest(self, **kwargs):
+            return ([], {"status": "Succeeded"}, [])
+
+    class FakeMovementDigestor:
+        async def digest(self, **kwargs):
+            return (
+                [
+                    MovementRecord(
+                        person_name="Jason Dandridge",
+                        target_company="Fannie Mae",
+                        previous_role="Senior Executive, Capital One",
+                        new_role="Senior Vice President",
+                        movement_type="External Hire",
+                        category="BUYER",
+                        company_context="inbound",
+                        evidence=MovementEvidence(
+                            evidence_quote="Jason Dandridge joined in a senior role.",
+                            source_url="https://example.com/jason",
+                            source_title="Leadership update",
+                        ),
+                    )
+                ],
+                {"status": "Succeeded", "movements_returned": 1},
+            )
+
+    class FakeProConnectService:
+        def light_enrich_movements(self, movement_rows):
+            return [
+                {
+                    "movement": movement_rows[0],
+                    "known": False,
+                    "worked_with": False,
+                    "project_count": 0,
+                    "win_count": 0,
+                    "relationship_owner": None,
+                    "person_match_status": "no_match",
+                }
+            ]
+
+        def deep_enrich_movements(self, movement_rows, *, max_rows=10):
+            return [
+                {
+                    "movement": movement_rows[0],
+                    "known": False,
+                    "worked_with": False,
+                    "project_count": 0,
+                    "win_count": 0,
+                    "relationship_owner": None,
+                    "person_match_status": "no_match",
+                    "person_detail": {},
+                }
+            ]
+
+        def enrich_movement(self, row, *, company_hint=None, include_person_detail=False):
+            return {
+                "movement": row,
+                "known": False,
+                "worked_with": False,
+                "project_count": 0,
+                "win_count": 0,
+                "relationship_owner": None,
+                "person_match_status": "no_match",
+                "person_detail": {"name": row.person_name} if include_person_detail else {},
+            }
+
+    class FakeRanker:
+        def rank(self, enriched_rows, max_rows=10):
+            return [{**enriched_rows[0], "rank_score": 10, "action_posture": "Expansion Opportunity"}]
+
+    class FakeOpportunityDeriver:
+        def derive(self, **kwargs):
+            return []
+
+    class FakeCredentialsLookupRunner:
+        async def run(self, opportunities, *, sector, max_opportunities=3):
+            return SimpleNamespace(
+                results={},
+                diagnostics={},
+                batch_diagnostics=None,
+                status_counts={"Matched": 0, "No Match": 0, "Lookup Failed": 0},
+                lookups_executed_count=0,
+            )
+
+    class FakeMovementCredentialsService:
+        def build_proof_packets(self, derived_opportunities, lookup_results):
+            return {}
+
+    class CapturingAssembler:
+        def assemble(self, **kwargs):
+            assembled.update(kwargs)
+            return MovementBrief(
+                executive_summary="Move summary text.",
+                signal_summary=[],
+                movement_rows=kwargs["movement_rows"],
+                where_to_act=[],
+                takeaway="Takeaway",
+            )
+
+    orchestrator = MovementBriefOrchestrator(
+        transition_service=FakeTransitionService(),
+        prompt_builder=FakePromptBuilder(),
+        fs_signal_evidence_digestor=FakeFSSignalDigestor(),
+        movement_digestor=FakeMovementDigestor(),
+        proconnect_service=FakeProConnectService(),
+        ranker=FakeRanker(),
+        opportunity_deriver=FakeOpportunityDeriver(),
+        credentials_lookup_runner=FakeCredentialsLookupRunner(),
+        credentials_service=FakeMovementCredentialsService(),
+        assembler=CapturingAssembler(),
+    )
+
+    await orchestrator.run(
+        MovementBriefRequest(
+            person_name="Jason Dandridge",
+            from_company="Capital One",
+            to_company="Fannie Mae",
+            new_role="Senior Vice President",
+            lookback_days=180,
+            synthetic_scenario=True,
+        ),
+        deep_research_output="### Executive Summary\nMovement notes here.",
+    )
+
+    assert assembled["ranked_rows"][0]["known"] is True
+    assert assembled["ranked_rows"][0]["worked_with"] is False
+    assert assembled["ranked_rows"][0]["project_count"] == 0
+    assert assembled["ranked_rows"][0]["win_count"] == 0
+    assert assembled["deep_enriched_rows"][0]["person_match_status"] == "matched"
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_applies_bounded_brief_synthesis_to_cover_fields() -> None:
     preflight = _preflight()
 

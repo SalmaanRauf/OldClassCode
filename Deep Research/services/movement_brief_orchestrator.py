@@ -803,29 +803,16 @@ class MovementBriefOrchestrator:
             self._as_dict(account_team.get("account_pmo")).get("name"),
         )
 
-        scope_worked_before = (
-            preflight.quick_indicators.source_worked_before
-            if match_scope == "from"
-            else preflight.quick_indicators.destination_worked_before
-            if match_scope == "to"
-            else (
-                preflight.quick_indicators.source_worked_before
-                or preflight.quick_indicators.destination_worked_before
-            )
-        )
+        person_match_status = self._normalized_text(
+            preflight.person_resolution.match_status
+            or person_profile.get("match_status")
+            or matched_person.get("match_status")
+        ).lower()
+        exact_proconnect_match = person_match_status == "matched"
 
-        known = bool(
-            person_profile.get("direct_person_evidence")
-            or preflight.quick_indicators.warm_intro_path_available
-            or project_count > 0
-            or win_count > 0
-            or relationship_owner
-            or connected_colleagues
-            or alumni
-        )
-        worked_with = bool(project_count > 0 or win_count > 0 or scope_worked_before)
-
-        person_match_status = self._normalized_text(preflight.person_resolution.match_status) or None
+        known = exact_proconnect_match
+        worked_with = bool(project_count > 0 or win_count > 0)
+        person_match_status = person_match_status or None
         person_detail: Dict[str, Any] = {}
         if include_person_detail:
             person_detail = {
@@ -923,16 +910,8 @@ class MovementBriefOrchestrator:
         preflight: TransitionPreflight,
     ) -> Dict[str, Any]:
         merged = dict(original)
-        fallback_known = bool(
-            preflight.person_resolution.direct_person_evidence
-            or preflight.quick_indicators.warm_intro_path_available
-            or preflight.quick_indicators.source_worked_before
-            or preflight.quick_indicators.destination_worked_before
-        )
-        fallback_worked_with = bool(
-            preflight.quick_indicators.source_worked_before
-            or preflight.quick_indicators.destination_worked_before
-        )
+        fallback_known = preflight.person_resolution.match_status == "matched"
+        fallback_worked_with = False
 
         for candidate in (replacement or {}, canonical or {}):
             if not candidate:

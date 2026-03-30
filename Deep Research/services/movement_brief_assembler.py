@@ -216,7 +216,7 @@ class MovementBriefAssembler:
         if known or worked_with:
             leverage_suffix = []
             if known:
-                leverage_suffix.append("known relationship")
+                leverage_suffix.append("known in ProConnect")
             if worked_with:
                 leverage_suffix.append("delivery history")
             why_now = f"{why_now} Leverage: {', '.join(leverage_suffix)}."

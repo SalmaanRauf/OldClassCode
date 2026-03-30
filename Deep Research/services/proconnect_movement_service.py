@@ -93,7 +93,7 @@ class ProConnectMovementService:
         matched = bool(payload)
         project_count = self._project_count(payload)
         win_count = self._win_count(payload)
-        known = matched and self._has_relationship_evidence(payload, project_count=project_count, win_count=win_count)
+        known = matched
         worked_with = project_count > 0 or win_count > 0
         enrichment = {
             "movement": row,

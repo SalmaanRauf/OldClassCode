@@ -605,7 +605,7 @@ def _format_movement_evidence(result: Any) -> str:
         if leverage:
             leverage_bits = []
             if getattr(leverage, "known", False):
-                leverage_bits.append("known relationship")
+                leverage_bits.append("known in ProConnect")
             if getattr(leverage, "worked_with", False):
                 leverage_bits.append(
                     f"worked with ({getattr(leverage, 'project_count', 0)} projects, {getattr(leverage, 'win_count', 0)} wins)"

@@ -215,6 +215,28 @@ def test_worked_with_is_conservative_when_only_relationship_exists():
     assert enriched[0]["win_count"] == 0
 
 
+def test_light_enrichment_marks_exact_matched_person_as_known_without_delivery_history():
+    def loader(name: str, company: str):
+        return {
+            "name": name,
+            "title": "Senior Vice President",
+            "location": "Washington, DC, United States",
+            "linkedinUrl": "https://linkedin.com/in/jason-dandridge",
+            "projects": [],
+            "primaryKeyBuyerOf": [],
+        }
+
+    service = ProConnectMovementService(person_loader=loader)
+
+    enriched = service.light_enrich_movements([_row("Jason Dandridge")])
+
+    assert enriched[0]["known"] is True
+    assert enriched[0]["worked_with"] is False
+    assert enriched[0]["project_count"] == 0
+    assert enriched[0]["win_count"] == 0
+    assert enriched[0]["person_match_status"] == "matched"
+
+
 def test_light_enrichment_uses_close_won_and_snake_case_relationship_owner_fields():
     def loader(name: str, company: str):
         return {
