@@ -23,6 +23,14 @@ from services.runtime_policy import get_runtime_policy
 
 logger = logging.getLogger(__name__)
 DEEP_RESEARCH_POLL_INTERVAL_SECONDS = 40.0
+DEEP_RESEARCH_MAX_RETRY_ATTEMPTS = 1
+
+
+class _RetryableDeepResearchRunError(RuntimeError):
+    def __init__(self, status: str, error_details: Any) -> None:
+        self.status = status
+        self.error_details = error_details
+        super().__init__(f"Deep Research run incomplete: {status}")
 
 
 @dataclass
@@ -625,175 +633,42 @@ class DeepResearchClient:
         
         assert self._client and self._agent_id
 
-        logger.info("Deep Research run started", extra={"query": query, "industry": self._industry})
-        run_query = self._build_run_query(query)
-
-        thread = await self._client.agents.threads.create()
-        await self._client.agents.messages.create(
-            thread_id=thread.id,
-            role=MessageRole.USER,
-            content=run_query,
-        )
-
-        # Start the run
-        try:
-            run = await self._client.agents.runs.create(
-                thread_id=thread.id,
-                agent_id=self._agent_id,
-            )
-        except AzureError as exc:
-            logger.exception("Deep Research run failed to start: %s", exc)
-            error_msg = str(exc)
-            if "unsupported_tool" in error_msg.lower():
-                raise RuntimeError(
-                    "Deep Research tool not supported in this configuration. "
-                    "Common causes:\n"
-                    "  1. Resource region mismatch (must all be in West US or Norway East)\n"
-                    "  2. o3-deep-research model not deployed in the same region as AI Project\n"
-                    "  3. gpt-4o model not deployed in the same region\n"
-                    "  4. Bing connection not properly linked to AI Project\n"
-                    f"Azure error: {error_msg}"
-                ) from exc
-            raise
-
-        # Pseudo-streaming: poll for messages while run is in progress
-        printed_message_ids: Set[str] = set()
-        processed_step_ids: Set[str] = set()
-        all_citations: Set[str] = set()
-        all_activity: List[str] = []  # Track all activity for display
-        last_status = None
-        poll_count = 0
-
-        while run.status in ["queued", "in_progress", "requires_action"]:
-            poll_count += 1
-            
-            # Log status changes
-            if run.status != last_status:
-                logger.info(f"Run status: {run.status}")
-                last_status = run.status
-            
-            # Show periodic progress
-            if poll_count % 5 == 0:
-                logger.debug(f"Poll #{poll_count} | Messages tracked: {len(printed_message_ids)} | Citations: {len(all_citations)}")
-            
-            # Fetch and process steps (like demo_run.py)
+        attempt = 0
+        live_progress_enabled = True
+        while True:
+            attempt += 1
             try:
-                steps = self._client.agents.runs.list_steps(thread_id=thread.id, run_id=run.id)
-                
-                # Handle different response formats
-                steps_list = []
-                async for step in steps:
-                    steps_list.append(step)
-                
-                # Sort chronologically
-                sorted_steps = sorted(steps_list, key=lambda x: getattr(x, 'created_at', 0))
-                
-                for step in sorted_steps:
-                    step_id = getattr(step, 'id', None)
-                    if step_id and step_id not in processed_step_ids:
-                        # Extract step details
-                        step_info = self._extract_step_info(step)
-                        if step_info:
-                            all_activity.append(step_info)
-                            logger.info(f"Step: {step_info}")
-                        processed_step_ids.add(step_id)
-                        
-            except Exception as e:
-                # Steps API may not be available in all SDK versions
-                logger.debug(f"Could not fetch steps: {e}")
-            
-            try:
-                # Fetch messages (iterate directly, don't await AsyncItemPaged)
-                messages = self._client.agents.messages.list(
-                    thread_id=thread.id,
-                    order="asc",
-                    limit=100
+                report = await self._run_once(
+                    query,
+                    progress_callback=progress_callback if live_progress_enabled else None,
+                    live_progress_enabled=live_progress_enabled,
+                    attempt=attempt,
                 )
-                
-                # Process new messages
-                async for msg in messages:
-                    if msg.id in printed_message_ids:
-                        continue
-                    
-                    if self._is_agent_message(msg):
-                        # Extract text and citations
-                        msg_text = self._extract_text_from_message(msg)
-                        msg_citations = self._extract_citations_from_message(msg)
-                        
-                        if msg_citations:
-                            all_citations.update(msg_citations)
-                            logger.info(f"Running citation count: {len(all_citations)} sources")
-                        
-                        # Call progress callback if provided
-                        if progress_callback:
-                            metadata = {
-                                'citation_count': len(all_citations),
-                                'status': run.status,
-                                'poll_count': poll_count,
-                                'activity_log': all_activity.copy(),  # Include all activity
-                                'latest_text': msg_text
-                            }
-                            # Extract metadata from message if available
-                            msg_metadata = getattr(msg, 'metadata', {})
-                            if msg_metadata:
-                                metadata.update(msg_metadata)
-                            
-                            try:
-                                await progress_callback(msg_text or "", metadata)
-                            except Exception as e:
-                                logger.warning(f"Progress callback error: {e}")
-                    
-                    printed_message_ids.add(msg.id)
-                    break  # Process one at a time to avoid blocking
-                
-                # Refresh run status
-                run = await self._client.agents.runs.get(thread_id=thread.id, run_id=run.id)
-                
-            except Exception as e:
-                error_msg = str(e)
-                if "ASSISTANT" not in error_msg:  # Don't spam known enum errors
-                    logger.warning(f"Polling error: {error_msg[:100]}")
-            
-            # Poll at a slower cadence to reduce UI churn and log noise during long runs.
-            await asyncio.sleep(DEEP_RESEARCH_POLL_INTERVAL_SECONDS)
+                break
+            except _RetryableDeepResearchRunError as exc:
+                if attempt > DEEP_RESEARCH_MAX_RETRY_ATTEMPTS:
+                    raise RuntimeError(
+                        f"Deep Research run incomplete: {exc.status}\n"
+                        f"Details: {exc.error_details if exc.error_details else 'No additional details available'}"
+                    ) from exc
+                logger.warning(
+                    "Retrying Deep Research after retryable failure attempt=%s/%s industry=%s details=%s",
+                    attempt,
+                    DEEP_RESEARCH_MAX_RETRY_ATTEMPTS + 1,
+                    self._industry,
+                    exc.error_details,
+                )
+                live_progress_enabled = False
 
-        # Check completion status
-        if run.status != "completed":
-            logger.error("Deep Research run ended with status %s", run.status)
-            error_details = getattr(run, 'last_error', None)
-            if error_details:
-                logger.error("Run error details: %s", error_details)
-            raise RuntimeError(
-                f"Deep Research run incomplete: {run.status}\n"
-                f"Details: {error_details if error_details else 'No additional details available'}"
-            )
+        thread_id = str(report.metadata.get("thread_id") or "")
+        run_id = str(report.metadata.get("run_id") or "")
+        poll_count = int(report.metadata.get("poll_count") or 0)
+        run_query_length = int(report.metadata.get("run_query_length") or len(self._build_run_query(query)))
+        agent_message_id = str(report.metadata.get("agent_message_id") or "")
+        all_citations = set(report.metadata.get("streamed_citations") or [])
 
-        logger.info(f"Deep Research completed after {poll_count} polls with {len(all_citations)} citations")
-
-        # Get the final response
-        messages = []
-        async for message in self._client.agents.messages.list(
-            thread_id=thread.id,
-            order="desc",
-        ):
-            messages.append(message)
-
-        # Completion sweep: collect citations from all assistant messages in case
-        # polling loop skipped late-arriving message citations.
-        all_citations.update(self._collect_agent_citations(messages))
-        
-        agent_message = next(
-            (m for m in messages if self._is_agent_message(m)),
-            None,
-        )
-        if not agent_message:
-            raise RuntimeError("Deep Research produced no assistant message")
-
-        # Parse the final report
-        report = self._parse_message(agent_message)
-        
         # CORRECTIVE URL SEARCH: Check for missing URLs
-        if not report.citations or self._has_placeholder_citations(report):
+        if thread_id and (not report.citations or self._has_placeholder_citations(report)):
             logger.warning("Deep Research returned no proper URLs, attempting corrective URL search")
             
             url_followup_query = (
@@ -802,24 +677,24 @@ class DeepResearchClient:
             )
             
             await self._client.agents.messages.create(
-                thread_id=thread.id,
+                thread_id=thread_id,
                 role=MessageRole.USER,
                 content=url_followup_query,
             )
 
             try:
                 url_run = await self._client.agents.runs.create_and_process(
-                    thread_id=thread.id,
+                    thread_id=thread_id,
                     agent_id=self._agent_id,
                 )
 
                 if url_run.status == "completed":
                     url_messages = []
-                    async for message in self._client.agents.messages.list(thread_id=thread.id):
+                    async for message in self._client.agents.messages.list(thread_id=thread_id):
                         url_messages.append(message)
                     
                     url_agent_message = next(
-                        (m for m in url_messages if self._is_agent_message(m) and m.id != agent_message.id),
+                        (m for m in url_messages if self._is_agent_message(m) and m.id != agent_message_id),
                         None,
                     )
                     
@@ -858,8 +733,8 @@ class DeepResearchClient:
 
         # Add metadata
         report.metadata.update({
-            "thread_id": thread.id,
-            "run_id": run.id,
+            "thread_id": thread_id,
+            "run_id": run_id,
             "industry": self._industry,
             "poll_count": poll_count,
             "citation_count": len(report.citations),
@@ -872,7 +747,7 @@ class DeepResearchClient:
             "discovery_sources": discovery_source_urls,
             "confirmation_sources": confirmation_source_urls,
             "display_sources": display_source_urls,
-            "run_query_length": len(run_query),
+            "run_query_length": run_query_length,
         })
         
         # Final citation audit
@@ -899,6 +774,244 @@ class DeepResearchClient:
             )
 
         return report
+
+    async def _run_once(
+        self,
+        query: str,
+        *,
+        progress_callback: Optional[Callable[[str, Dict[str, Any]], None]],
+        live_progress_enabled: bool,
+        attempt: int,
+    ) -> DeepResearchReport:
+        assert self._client and self._agent_id
+
+        logger.info(
+            "Deep Research run started industry=%s attempt=%s live_progress=%s",
+            self._industry,
+            attempt,
+            live_progress_enabled,
+            extra={"query": query, "industry": self._industry},
+        )
+        run_query = self._build_run_query(query)
+
+        thread = await self._client.agents.threads.create()
+        await self._client.agents.messages.create(
+            thread_id=thread.id,
+            role=MessageRole.USER,
+            content=run_query,
+        )
+
+        try:
+            run = await self._client.agents.runs.create(
+                thread_id=thread.id,
+                agent_id=self._agent_id,
+            )
+        except AzureError as exc:
+            logger.exception("Deep Research run failed to start: %s", exc)
+            error_msg = str(exc)
+            if "unsupported_tool" in error_msg.lower():
+                raise RuntimeError(
+                    "Deep Research tool not supported in this configuration. "
+                    "Common causes:\n"
+                    "  1. Resource region mismatch (must all be in West US or Norway East)\n"
+                    "  2. o3-deep-research model not deployed in the same region as AI Project\n"
+                    "  3. gpt-4o model not deployed in the same region\n"
+                    "  4. Bing connection not properly linked to AI Project\n"
+                    f"Azure error: {error_msg}"
+                ) from exc
+            raise
+
+        logger.info(
+            "Deep Research run created thread_id=%s run_id=%s attempt=%s",
+            thread.id,
+            run.id,
+            attempt,
+        )
+
+        printed_message_ids: Set[str] = set()
+        processed_step_ids: Set[str] = set()
+        all_citations: Set[str] = set()
+        all_activity: List[str] = []
+        last_status = None
+        poll_count = 0
+
+        while run.status in ["queued", "in_progress", "requires_action"]:
+            poll_count += 1
+
+            if run.status != last_status:
+                logger.info(
+                    "Run status: %s thread_id=%s run_id=%s attempt=%s",
+                    run.status,
+                    thread.id,
+                    run.id,
+                    attempt,
+                )
+                last_status = run.status
+
+            if poll_count % 5 == 0:
+                logger.debug(
+                    "Poll #%s thread_id=%s run_id=%s messages=%s citations=%s",
+                    poll_count,
+                    thread.id,
+                    run.id,
+                    len(printed_message_ids),
+                    len(all_citations),
+                )
+
+            if live_progress_enabled:
+                try:
+                    steps = self._client.agents.runs.list_steps(thread_id=thread.id, run_id=run.id)
+                    steps_list = []
+                    async for step in steps:
+                        steps_list.append(step)
+
+                    sorted_steps = sorted(steps_list, key=lambda x: getattr(x, 'created_at', 0))
+
+                    for step in sorted_steps:
+                        step_id = getattr(step, 'id', None)
+                        if step_id and step_id not in processed_step_ids:
+                            step_info = self._extract_step_info(step)
+                            if step_info:
+                                all_activity.append(step_info)
+                                logger.info("Step: %s", step_info)
+                            processed_step_ids.add(step_id)
+                except Exception as e:
+                    logger.debug("Could not fetch steps: %s", e)
+
+                try:
+                    messages = self._client.agents.messages.list(
+                        thread_id=thread.id,
+                        order="asc",
+                        limit=100
+                    )
+
+                    async for msg in messages:
+                        if msg.id in printed_message_ids:
+                            continue
+
+                        if self._is_agent_message(msg):
+                            msg_text = self._extract_text_from_message(msg)
+                            msg_citations = self._extract_citations_from_message(msg)
+
+                            if msg_citations:
+                                all_citations.update(msg_citations)
+                                logger.info("Running citation count: %s sources", len(all_citations))
+
+                            if progress_callback:
+                                metadata = {
+                                    'citation_count': len(all_citations),
+                                    'status': run.status,
+                                    'poll_count': poll_count,
+                                    'activity_log': all_activity.copy(),
+                                    'latest_text': msg_text,
+                                }
+                                msg_metadata = getattr(msg, 'metadata', {})
+                                if msg_metadata:
+                                    metadata.update(msg_metadata)
+
+                                try:
+                                    await progress_callback(msg_text or "", metadata)
+                                except Exception as e:
+                                    logger.warning("Progress callback error: %s", e)
+
+                        printed_message_ids.add(msg.id)
+                        break
+                except Exception as e:
+                    error_msg = str(e)
+                    if "ASSISTANT" not in error_msg:
+                        logger.warning(
+                            "Live message polling error thread_id=%s run_id=%s attempt=%s error=%s",
+                            thread.id,
+                            run.id,
+                            attempt,
+                            error_msg[:200],
+                        )
+
+            try:
+                run = await self._client.agents.runs.get(thread_id=thread.id, run_id=run.id)
+            except Exception as e:
+                logger.warning(
+                    "Run status refresh error thread_id=%s run_id=%s attempt=%s error=%s",
+                    thread.id,
+                    run.id,
+                    attempt,
+                    str(e)[:200],
+                )
+
+            await asyncio.sleep(DEEP_RESEARCH_POLL_INTERVAL_SECONDS)
+
+        if run.status != "completed":
+            error_details = getattr(run, 'last_error', None)
+            logger.error(
+                "Deep Research run ended with status %s thread_id=%s run_id=%s attempt=%s",
+                run.status,
+                thread.id,
+                run.id,
+                attempt,
+            )
+            if error_details:
+                logger.error("Run error details: %s", error_details)
+            if self._is_retryable_run_error(error_details):
+                raise _RetryableDeepResearchRunError(run.status, error_details)
+            raise RuntimeError(
+                f"Deep Research run incomplete: {run.status}\n"
+                f"Details: {error_details if error_details else 'No additional details available'}"
+            )
+
+        logger.info(
+            "Deep Research completed after %s polls with %s citations thread_id=%s run_id=%s attempt=%s",
+            poll_count,
+            len(all_citations),
+            thread.id,
+            run.id,
+            attempt,
+        )
+
+        messages = []
+        async for message in self._client.agents.messages.list(
+            thread_id=thread.id,
+            order="desc",
+        ):
+            messages.append(message)
+
+        all_citations.update(self._collect_agent_citations(messages))
+
+        agent_message = next(
+            (m for m in messages if self._is_agent_message(m)),
+            None,
+        )
+        if not agent_message:
+            raise RuntimeError("Deep Research produced no assistant message")
+
+        report = self._parse_message(agent_message)
+        report.metadata.update({
+            "thread_id": thread.id,
+            "run_id": run.id,
+            "industry": self._industry,
+            "poll_count": poll_count,
+            "citation_count": len(report.citations),
+            "run_query_length": len(run_query),
+            "attempt": attempt,
+            "streamed_citations": sorted(all_citations),
+            "agent_message_id": getattr(agent_message, "id", ""),
+        })
+        return report
+
+    @staticmethod
+    def _is_retryable_run_error(error_details: Any) -> bool:
+        if not error_details:
+            return False
+        if isinstance(error_details, dict):
+            code = str(error_details.get("code") or "").strip().lower()
+            message = str(error_details.get("message") or "").strip().lower()
+        else:
+            code = str(getattr(error_details, "code", "") or "").strip().lower()
+            message = str(getattr(error_details, "message", "") or "").strip().lower()
+        return (
+            code == "tool_server_error"
+            and "deep_research_server_error" in message
+            and "streaming messages from deep research resource" in message
+        )
 
     def _has_placeholder_citations(self, report: DeepResearchReport) -> bool:
         """Check if the report contains placeholder citations instead of real URLs."""

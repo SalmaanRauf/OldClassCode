@@ -3,6 +3,7 @@ Unit tests for DeepResearchClient citation extraction fallbacks.
 """
 from types import SimpleNamespace
 
+import pytest
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -309,3 +310,185 @@ def test_build_run_query_keeps_prompt_budget_reasonable():
 
 def test_default_poll_interval_is_40_seconds():
     assert DEEP_RESEARCH_POLL_INTERVAL_SECONDS == 40.0
+
+
+class _AsyncItems:
+    def __init__(self, items):
+        self._items = list(items)
+
+    def __aiter__(self):
+        self._iter = iter(self._items)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._iter)
+        except StopIteration as exc:
+            raise StopAsyncIteration from exc
+
+
+class _FakeThreadsAPI:
+    def __init__(self):
+        self.count = 0
+
+    async def create(self):
+        self.count += 1
+        return SimpleNamespace(id=f"thread-{self.count}")
+
+
+class _FakeMessagesAPI:
+    def __init__(self, responses_by_thread, fail_live_poll_threads=None):
+        self._responses_by_thread = responses_by_thread
+        self._fail_live_poll_threads = set(fail_live_poll_threads or [])
+        self.created = []
+
+    async def create(self, *, thread_id, role, content):
+        self.created.append({"thread_id": thread_id, "role": role, "content": content})
+
+    def list(self, *, thread_id, order="asc", limit=None):
+        del limit
+        if order == "asc" and thread_id in self._fail_live_poll_threads:
+            raise RuntimeError("message polling failed")
+        return _AsyncItems(self._responses_by_thread.get((thread_id, order), []))
+
+
+class _FakeRunsAPI:
+    def __init__(self, statuses_by_run):
+        self._statuses_by_run = {
+            key: list(value)
+            for key, value in statuses_by_run.items()
+        }
+        self.created_runs = []
+
+    async def create(self, *, thread_id, agent_id):
+        del agent_id
+        run_id = f"run-{len(self.created_runs) + 1}"
+        run = self._statuses_by_run[run_id].pop(0)
+        self.created_runs.append({"thread_id": thread_id, "run_id": run_id})
+        return SimpleNamespace(**vars(run))
+
+    async def get(self, *, thread_id, run_id):
+        del thread_id
+        queue = self._statuses_by_run[run_id]
+        if queue:
+            run = queue.pop(0)
+            return SimpleNamespace(**vars(run))
+        return SimpleNamespace(id=run_id, status="completed", last_error=None)
+
+    def list_steps(self, *, thread_id, run_id):
+        del thread_id, run_id
+        return _AsyncItems([])
+
+
+def _run_status(run_id: str, status: str, last_error=None):
+    return SimpleNamespace(id=run_id, status=status, last_error=last_error)
+
+
+def _assistant_message(msg_id: str, text: str):
+    return SimpleNamespace(
+        id=msg_id,
+        role="assistant",
+        content=[_text_block(text, annotations=[_url_annotation("https://example.com/source", "Source")])],
+        url_citation_annotations=[],
+        metadata={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_retries_retryable_streaming_failure_once_and_succeeds(monkeypatch):
+    client = _client()
+    client._industry = "financial_services"
+    client._instructions_override = None
+    client._agent_id = "agent-1"
+    client._runtime_policy = SimpleNamespace(source_policy_mode="balanced")
+    client._build_run_query = lambda query: query
+
+    async def _ensure_client():
+        return None
+
+    client._ensure_client = _ensure_client
+
+    sleep_calls = []
+
+    async def _fake_sleep(seconds):
+        sleep_calls.append(seconds)
+
+    monkeypatch.setattr("services.deep_research_client.asyncio.sleep", _fake_sleep)
+
+    retryable_error = {
+        "code": "tool_server_error",
+        "message": "Error: deep_research_server_error; Error in streaming messages from deep research resource: ",
+    }
+    responses_by_thread = {
+        ("thread-1", "asc"): [],
+        ("thread-1", "desc"): [],
+        ("thread-2", "desc"): [_assistant_message("msg-2", "Recovered summary")],
+    }
+    client._client = SimpleNamespace(
+        agents=SimpleNamespace(
+            threads=_FakeThreadsAPI(),
+            messages=_FakeMessagesAPI(responses_by_thread),
+            runs=_FakeRunsAPI(
+                {
+                    "run-1": [
+                        _run_status("run-1", "queued"),
+                        _run_status("run-1", "failed", retryable_error),
+                    ],
+                    "run-2": [
+                        _run_status("run-2", "queued"),
+                        _run_status("run-2", "completed"),
+                    ],
+                }
+            ),
+        )
+    )
+
+    report = await client.run("Research Fannie Mae")
+
+    assert report.summary == "Recovered summary"
+    assert report.metadata["run_id"] == "run-2"
+    assert len(client._client.agents.runs.created_runs) == 2
+    assert sleep_calls
+
+
+@pytest.mark.asyncio
+async def test_run_refreshes_status_even_when_live_message_polling_errors(monkeypatch):
+    client = _client()
+    client._industry = "financial_services"
+    client._instructions_override = None
+    client._agent_id = "agent-1"
+    client._runtime_policy = SimpleNamespace(source_policy_mode="balanced")
+    client._build_run_query = lambda query: query
+
+    async def _ensure_client():
+        return None
+
+    client._ensure_client = _ensure_client
+
+    async def _fake_sleep(seconds):
+        del seconds
+
+    monkeypatch.setattr("services.deep_research_client.asyncio.sleep", _fake_sleep)
+
+    responses_by_thread = {
+        ("thread-1", "desc"): [_assistant_message("msg-1", "Completed despite poll failure")],
+    }
+    client._client = SimpleNamespace(
+        agents=SimpleNamespace(
+            threads=_FakeThreadsAPI(),
+            messages=_FakeMessagesAPI(responses_by_thread, fail_live_poll_threads={"thread-1"}),
+            runs=_FakeRunsAPI(
+                {
+                    "run-1": [
+                        _run_status("run-1", "queued"),
+                        _run_status("run-1", "completed"),
+                    ],
+                }
+            ),
+        )
+    )
+
+    report = await client.run("Research Fannie Mae")
+
+    assert report.summary == "Completed despite poll failure"
+    assert report.metadata["run_id"] == "run-1"
