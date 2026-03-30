@@ -215,3 +215,80 @@ def test_enrich_person_resolution_from_prospect_detail_prefers_richer_nested_can
     assert len(profile["matched_person"]["projects"]) == 2
     assert len(profile["matched_person"]["closeWonOpps"]) == 1
     assert profile["relationship_owner"] == "Germaal Ross"
+
+
+def test_enrich_person_resolution_from_prospect_detail_aggregates_nested_evidence_fragments() -> None:
+    class FakeClient:
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            del params, retry_on_5xx, retry_delay_seconds, stop_on_auth
+            assert endpoint == "/api/prospects/contact-77"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "contactId": "contact-77",
+                    "accountId": "001-to",
+                    "name": "Jason Dandridge",
+                    "title": "Head of Operations",
+                    "location": "Washington, DC, United States",
+                    "relationshipSnapshot": {
+                        "relationshipOwner": "Taylor Smith"
+                    },
+                    "projectPortfolio": {
+                        "projectCount": 2,
+                        "projects": [
+                            {"projectId": "p-10", "name": "Ops Transformation"},
+                            {"projectId": "p-11", "name": "Shared Services Modernization"},
+                        ],
+                    },
+                    "closedWonSummary": {
+                        "winCount": 1,
+                        "closeWonOpps": [
+                            {"opportunityId": "w-10", "name": "Controls Improvement Program"}
+                        ],
+                    },
+                },
+            }
+
+    matched = {
+        "id": "contact-77",
+        "contactId": "contact-77",
+        "name": "Jason Dandridge",
+        "title": "Head of Operations",
+        "_source": "person_search",
+        "_company_scope": "to",
+        "linked_account_id": "001-to",
+        "linked_company_name": "Federal National Mortgage Association (Fannie Mae)",
+    }
+    person_resolution = {
+        "status": "matched",
+        "match_source": "person_search",
+        "match_scope": "to",
+        "match_strategy": "exact_name_to_account",
+        "matched": matched,
+    }
+
+    warnings: list[str] = []
+    enriched_resolution = enrich_person_resolution_from_prospect_detail(
+        client=FakeClient(),
+        person_name="Jason Dandridge",
+        person_resolution=person_resolution,
+        candidate_people=[matched],
+        warnings=warnings,
+    )
+    profile = build_person_profile_transition(
+        person_requested="Jason Dandridge",
+        person_resolution=enriched_resolution,
+        candidate_people=[enriched_resolution["matched"]],
+        to_account={},
+        from_account=None,
+        warnings=warnings,
+    )
+
+    assert warnings == []
+    assert profile["project_count"] == 2
+    assert profile["win_count"] == 1
+    assert len(profile["matched_person"]["projects"]) == 2
+    assert len(profile["matched_person"]["closeWonOpps"]) == 1
+    assert profile["relationship_owner"] == "Taylor Smith"
+    assert enriched_resolution["detail_diagnostics"]["selected_path"] == "root"

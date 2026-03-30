@@ -2322,8 +2322,9 @@ def select_person_detail_candidate(
     matched_ids = _person_reference_ids(matched_person or {})
     matched_account_id = str(first_non_empty(matched_person or {}, ["linked_account_id", "accountId", "sfdcAccountId"]) or "")
 
+    nodes_with_paths = list(iter_dict_nodes_with_paths(payload))
     candidates: List[Dict[str, Any]] = []
-    for path, node in iter_dict_nodes_with_paths(payload):
+    for path, node in nodes_with_paths:
         merged_node = merge_person_detail_node(node)
         record = parse_person_like_record(merged_node)
         if not record:
@@ -2421,23 +2422,58 @@ def select_person_detail_candidate(
         reverse=True,
     )[0]
 
+    supplemental_fragments = collect_person_detail_fragments(
+        nodes_with_paths=nodes_with_paths,
+        selected_record=selected_meta["record"],
+        person_name=person_name,
+        matched_person=matched_person,
+    )
+    if supplemental_fragments:
+        selected_record = merge_person_candidates(
+            candidates=[selected_meta["record"]] + [item["fragment"] for item in supplemental_fragments],
+            selected=selected_meta["record"],
+            title_hints=[],
+        )
+        selected_record["_source"] = selected_meta["record"].get("_source")
+    else:
+        selected_record = selected_meta["record"]
+
+    selected_project_count = max(
+        to_int(first_non_empty(selected_record, ["projectCount", "project_count", "numberOfProjects"])) or 0,
+        len(to_list_dicts(first_non_empty(selected_record, ["projects"]))),
+    )
+    selected_win_count = max(
+        to_int(first_non_empty(selected_record, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
+        len(to_list_dicts(first_non_empty(selected_record, ["closeWonOpps", "closeWonOpportunities"]))),
+    )
     richer_nodes_skipped = any(
-        (item["project_count"] > selected_meta["project_count"] or item["win_count"] > selected_meta["win_count"])
+        (item["project_count"] > selected_project_count or item["win_count"] > selected_win_count)
         and item["path"] != selected_meta["path"]
         for item in candidates
     )
+    observed_project_counts = [item["project_count"] for item in candidates] + [
+        item["project_count"] for item in supplemental_fragments
+    ]
+    observed_win_counts = [item["win_count"] for item in candidates] + [
+        item["win_count"] for item in supplemental_fragments
+    ]
     diagnostics = {
         "candidate_count": len(candidates),
         "selected_path": selected_meta["path"],
         "selected_richness_score": selected_meta["richness_score"],
-        "selected_project_count": selected_meta["project_count"],
-        "selected_win_count": selected_meta["win_count"],
+        "selected_project_count": selected_project_count,
+        "selected_win_count": selected_win_count,
         "richer_nodes_skipped": richer_nodes_skipped,
-        "selection_reason": _person_detail_selection_reason(selected_meta),
-        "max_observed_project_count": max(item["project_count"] for item in candidates),
-        "max_observed_win_count": max(item["win_count"] for item in candidates),
+        "selection_reason": _person_detail_selection_reason(
+            selected_meta,
+            aggregated_nested_evidence=bool(supplemental_fragments),
+        ),
+        "max_observed_project_count": max(observed_project_counts) if observed_project_counts else 0,
+        "max_observed_win_count": max(observed_win_counts) if observed_win_counts else 0,
+        "supplemental_fragment_count": len(supplemental_fragments),
+        "supplemental_fragment_paths": [item["path"] for item in supplemental_fragments],
     }
-    return selected_meta["record"], diagnostics
+    return selected_record, diagnostics
 
 
 def extract_person_search_candidates(payload: Any) -> List[Dict[str, Any]]:
@@ -3147,7 +3183,110 @@ def merge_person_detail_node(node: Dict[str, Any]) -> Dict[str, Any]:
     return merged
 
 
-def _person_detail_selection_reason(selected_meta: Dict[str, Any]) -> str:
+def collect_person_detail_fragments(
+    nodes_with_paths: List[Tuple[str, Dict[str, Any]]],
+    selected_record: Dict[str, Any],
+    person_name: Optional[str],
+    matched_person: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    selected_ids = _person_reference_ids(selected_record) | _person_reference_ids(matched_person or {})
+    selected_account_id = str(
+        first_non_empty(selected_record, ["accountId", "linked_account_id", "sfdcAccountId"])
+        or first_non_empty(matched_person or {}, ["linked_account_id", "accountId", "sfdcAccountId"])
+        or ""
+    ).strip()
+    selected_name = full_person_name(selected_record)
+
+    fragments: List[Dict[str, Any]] = []
+    for path, node in nodes_with_paths:
+        merged_node = merge_person_detail_node(node)
+        fragment = extract_person_detail_fragment(
+            node=merged_node,
+            selected_ids=selected_ids,
+            selected_account_id=selected_account_id,
+            selected_name=selected_name,
+            requested_name=person_name,
+        )
+        if fragment is None:
+            continue
+        fragments.append(
+            {
+                "path": path,
+                "fragment": fragment,
+                "project_count": max(
+                    to_int(first_non_empty(fragment, ["projectCount", "project_count", "numberOfProjects"])) or 0,
+                    len(to_list_dicts(first_non_empty(fragment, ["projects"]))),
+                ),
+                "win_count": max(
+                    to_int(first_non_empty(fragment, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
+                    len(to_list_dicts(first_non_empty(fragment, ["closeWonOpps", "closeWonOpportunities"]))),
+                ),
+            }
+        )
+    return fragments
+
+
+def extract_person_detail_fragment(
+    node: Dict[str, Any],
+    selected_ids: set[str],
+    selected_account_id: str,
+    selected_name: str,
+    requested_name: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    explicit_id = str(first_non_empty(node, ["contactId", "id", "prospectId", "personId"]) or "").strip()
+    if explicit_id and selected_ids and explicit_id not in selected_ids:
+        return None
+
+    explicit_account_id = str(first_non_empty(node, ["accountId", "sfdcAccountId"]) or "").strip()
+    if explicit_account_id and selected_account_id and explicit_account_id != selected_account_id:
+        return None
+
+    explicit_name = first_non_empty(node, ["name", "contactName", "fullName", "person"])
+    if explicit_name:
+        if requested_name and not (
+            exact_name_equals(str(explicit_name), requested_name)
+            or same_first_last_name(str(explicit_name), requested_name)
+        ):
+            if selected_name and not (
+                exact_name_equals(str(explicit_name), selected_name)
+                or same_first_last_name(str(explicit_name), selected_name)
+            ):
+                return None
+
+    projects = to_list_dicts(first_non_empty(node, ["projects"]))
+    wins = to_list_dicts(first_non_empty(node, ["closeWonOpps", "closeWonOpportunities"]))
+    connections = to_list_dicts(first_non_empty(node, ["connections"]))
+    project_count = max(
+        to_int(first_non_empty(node, ["projectCount", "project_count", "numberOfProjects"])) or 0,
+        len(projects),
+    )
+    win_count = max(
+        to_int(first_non_empty(node, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
+        len(wins),
+    )
+    relationship_owner = first_non_empty(node, ["relationshipOwner", "relationship_owner"])
+
+    fragment: Dict[str, Any] = {}
+    if present(relationship_owner) == "present":
+        fragment["relationshipOwner"] = relationship_owner
+    if project_count:
+        fragment["projectCount"] = project_count
+    if win_count:
+        fragment["winCount"] = win_count
+    if projects:
+        fragment["projects"] = projects
+    if wins:
+        fragment["closeWonOpps"] = wins
+    if connections:
+        fragment["connections"] = connections
+
+    return fragment or None
+
+
+def _person_detail_selection_reason(
+    selected_meta: Dict[str, Any],
+    aggregated_nested_evidence: bool = False,
+) -> str:
     reasons: List[str] = []
     if selected_meta.get("id_match"):
         reasons.append("id_match")
@@ -3169,6 +3308,8 @@ def _person_detail_selection_reason(selected_meta: Dict[str, Any]) -> str:
         reasons.append("education")
     if selected_meta.get("location_present"):
         reasons.append("location")
+    if aggregated_nested_evidence:
+        reasons.append("aggregated_nested_evidence")
     return ",".join(reasons) if reasons else "richest_candidate"
 
 
