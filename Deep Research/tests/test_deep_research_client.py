@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from services.deep_research_client import (
     DEEP_RESEARCH_POLL_INTERVAL_SECONDS,
+    DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING,
     DeepResearchClient,
     DeepResearchCitation,
     DeepResearchReport,
@@ -312,6 +313,10 @@ def test_default_poll_interval_is_40_seconds():
     assert DEEP_RESEARCH_POLL_INTERVAL_SECONDS == 40.0
 
 
+def test_live_progress_polling_is_disabled_by_default():
+    assert DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING is False
+
+
 class _AsyncItems:
     def __init__(self, items):
         self._items = list(items)
@@ -453,6 +458,8 @@ async def test_run_retries_retryable_streaming_failure_once_and_succeeds(monkeyp
 
 @pytest.mark.asyncio
 async def test_run_refreshes_status_even_when_live_message_polling_errors(monkeypatch):
+    monkeypatch.setattr("services.deep_research_client.DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING", True)
+
     client = _client()
     client._industry = "financial_services"
     client._instructions_override = None

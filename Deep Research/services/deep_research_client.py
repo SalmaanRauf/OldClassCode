@@ -24,6 +24,9 @@ from services.runtime_policy import get_runtime_policy
 logger = logging.getLogger(__name__)
 DEEP_RESEARCH_POLL_INTERVAL_SECONDS = 40.0
 DEEP_RESEARCH_MAX_RETRY_ATTEMPTS = 1
+# Status-only by default for docs compliance. Set to True only if we want to
+# restore the older active message/step polling experiment.
+DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING = False
 
 
 class _RetryableDeepResearchRunError(RuntimeError):
@@ -634,7 +637,7 @@ class DeepResearchClient:
         assert self._client and self._agent_id
 
         attempt = 0
-        live_progress_enabled = True
+        live_progress_enabled = DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING
         while True:
             attempt += 1
             try:
@@ -847,6 +850,21 @@ class DeepResearchClient:
                     attempt,
                 )
                 last_status = run.status
+                if progress_callback:
+                    try:
+                        await progress_callback(
+                            self._status_progress_message(run.status),
+                            {
+                                "citation_count": len(all_citations),
+                                "status": run.status,
+                                "poll_count": poll_count,
+                                "activity_log": all_activity.copy(),
+                                "latest_text": "",
+                                "progress_mode": "status_only" if not live_progress_enabled else "live_polling",
+                            },
+                        )
+                    except Exception as e:
+                        logger.warning("Progress callback error: %s", e)
 
             if poll_count % 5 == 0:
                 logger.debug(
@@ -1012,6 +1030,17 @@ class DeepResearchClient:
             and "deep_research_server_error" in message
             and "streaming messages from deep research resource" in message
         )
+
+    @staticmethod
+    def _status_progress_message(status: Any) -> str:
+        normalized = str(status or "").strip().lower()
+        if normalized.endswith(".queued") or normalized == "queued":
+            return "Deep Research queued."
+        if normalized.endswith(".in_progress") or normalized == "in_progress":
+            return "Deep Research in progress."
+        if normalized.endswith(".requires_action") or normalized == "requires_action":
+            return "Deep Research waiting on tool action."
+        return f"Deep Research status: {status}"
 
     def _has_placeholder_citations(self, report: DeepResearchReport) -> bool:
         """Check if the report contains placeholder citations instead of real URLs."""
