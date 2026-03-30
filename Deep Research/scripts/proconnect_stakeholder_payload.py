@@ -1823,8 +1823,8 @@ def build_person_profile_transition(
         and win_count == 0
         and isinstance(detail_diagnostics, dict)
         and (
-            to_int(detail_diagnostics.get("max_observed_project_count")) or 0
-            or to_int(detail_diagnostics.get("max_observed_win_count")) or 0
+            to_int(detail_diagnostics.get("max_aligned_project_count")) or 0
+            or to_int(detail_diagnostics.get("max_aligned_win_count")) or 0
         )
     ):
         warnings.append(
@@ -2401,6 +2401,8 @@ def select_person_detail_candidate(
             "selection_reason": "no_person_like_candidates",
             "max_observed_project_count": 0,
             "max_observed_win_count": 0,
+            "max_aligned_project_count": 0,
+            "max_aligned_win_count": 0,
         }
 
     selected_meta = sorted(
@@ -2457,6 +2459,20 @@ def select_person_detail_candidate(
     observed_win_counts = [item["win_count"] for item in candidates] + [
         item["win_count"] for item in supplemental_fragments
     ]
+    aligned_candidate_project_counts = [
+        item["project_count"]
+        for item in candidates
+        if item["id_match"] or item["exact_name"] or (item["same_name"] and item["account_match"])
+    ]
+    aligned_candidate_win_counts = [
+        item["win_count"]
+        for item in candidates
+        if item["id_match"] or item["exact_name"] or (item["same_name"] and item["account_match"])
+    ]
+    aligned_fragment_project_counts = [item["project_count"] for item in supplemental_fragments]
+    aligned_fragment_win_counts = [item["win_count"] for item in supplemental_fragments]
+    aligned_project_counts = aligned_candidate_project_counts + aligned_fragment_project_counts
+    aligned_win_counts = aligned_candidate_win_counts + aligned_fragment_win_counts
     diagnostics = {
         "candidate_count": len(candidates),
         "selected_path": selected_meta["path"],
@@ -2470,6 +2486,8 @@ def select_person_detail_candidate(
         ),
         "max_observed_project_count": max(observed_project_counts) if observed_project_counts else 0,
         "max_observed_win_count": max(observed_win_counts) if observed_win_counts else 0,
+        "max_aligned_project_count": max(aligned_project_counts) if aligned_project_counts else 0,
+        "max_aligned_win_count": max(aligned_win_counts) if aligned_win_counts else 0,
         "supplemental_fragment_count": len(supplemental_fragments),
         "supplemental_fragment_paths": [item["path"] for item in supplemental_fragments],
     }

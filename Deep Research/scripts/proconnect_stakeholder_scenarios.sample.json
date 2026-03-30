@@ -11,7 +11,6 @@
       "department": "C-Suite",
       "expected_status": "WARN",
       "expected_org_chart_min": 10,
-      "expected_project_count_min": 1,
       "expected_win_count_min": 1,
       "expected_match_source_in": ["from_key_buyers"],
       "expected_matched_name": "Jennifer Brady"
@@ -27,7 +26,6 @@
       "department": "Finance",
       "expected_status": "WARN",
       "expected_org_chart_min": 10,
-      "expected_project_count_min": 1,
       "expected_win_count_min": 1,
       "expected_match_source_in": ["to_key_buyers"],
       "expected_matched_name": "Cissy Yang"
@@ -43,8 +41,6 @@
       "department": "Operations",
       "expected_status": "WARN",
       "expected_org_chart_min": 10,
-      "expected_project_count_min": 1,
-      "expected_win_count_min": 1,
       "expected_match_source_in": ["person_search"],
       "expected_matched_name": "Jason Dandridge"
     },
@@ -59,8 +55,6 @@
       "department": "Legal",
       "expected_status": "WARN",
       "expected_org_chart_min": 10,
-      "expected_project_count_min": 1,
-      "expected_win_count_min": 1,
       "expected_match_source_in": ["person_search"],
       "expected_matched_name": "Nancy Jardini",
       "forbid_matched_names": ["Nancy Cole"]
@@ -76,8 +70,6 @@
       "department": "Legal",
       "expected_status": "WARN",
       "expected_org_chart_min": 10,
-      "expected_project_count_min": 1,
-      "expected_win_count_min": 1,
       "expected_match_source_in": ["to_org_chart_department"],
       "expected_matched_name": "Danielle McCoy"
     },

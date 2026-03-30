@@ -292,3 +292,41 @@ def test_enrich_person_resolution_from_prospect_detail_aggregates_nested_evidenc
     assert len(profile["matched_person"]["closeWonOpps"]) == 1
     assert profile["relationship_owner"] == "Taylor Smith"
     assert enriched_resolution["detail_diagnostics"]["selected_path"] == "root"
+
+
+def test_build_person_profile_transition_ignores_unaligned_detail_evidence_warning() -> None:
+    matched = {
+        "id": "contact-88",
+        "contactId": "contact-88",
+        "name": "Nancy Jardini",
+        "title": "Deputy General Counsel",
+        "_source": "person_search",
+        "_company_scope": "to",
+        "linked_account_id": "001-to",
+    }
+    person_resolution = {
+        "status": "matched",
+        "match_scope": "to",
+        "match_source": "person_search",
+        "matched": matched,
+        "detail_diagnostics": {
+            "max_observed_project_count": 0,
+            "max_observed_win_count": 10,
+            "max_aligned_project_count": 0,
+            "max_aligned_win_count": 0,
+        },
+    }
+
+    warnings: list[str] = []
+    profile = build_person_profile_transition(
+        person_requested="Nancy Jardini",
+        person_resolution=person_resolution,
+        candidate_people=[matched],
+        to_account={},
+        from_account=None,
+        warnings=warnings,
+    )
+
+    assert profile["project_count"] == 0
+    assert profile["win_count"] == 0
+    assert warnings == []
