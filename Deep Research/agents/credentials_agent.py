@@ -48,15 +48,17 @@ I need to validate the following opportunity with Protiviti's internal experienc
 - Scope: {scope}
 - Sector/Industry: {sector}
 - Key Requirements: {requirements}
+{search_context_block}
 
 # Instructions
-1. Search for up to 3 credentials most relevant to this opportunity
-2. Prioritize by: industry match > technology match > challenge similarity
+1. Search for up to {max_matches} credentials most relevant to this opportunity
+2. Prioritize by: {ranking_priorities}
 3. For each credential, provide:
    - Title: The credential title
    - Client Challenge: What problem the client faced
    - Value Provided: What value Protiviti delivered
    - iShare URL: Link to the full credential
+{why_relevant_instruction}
 
 # Constraints
 - Never reveal client names (they are confidential)
@@ -75,6 +77,7 @@ Respond with a JSON object:
             "value_provided": "Value delivered",
             "industry": "Industry sector",
             "technologies_used": ["tech1", "tech2"],
+            "why_relevant": "Short explanation of why this credential fits",
             "url": "https://ishare.protiviti.com/..."
         }}
     ],
@@ -103,14 +106,16 @@ Opportunities:
 
 # Instructions
 1. For each opportunity, search up to {max_matches} credentials most relevant to that specific opportunity.
-2. Prioritize relevance by: industry match > technology match > challenge similarity.
+2. Prioritize relevance by: {ranking_priorities}.
 3. Keep opportunity groupings separate by `opportunity_id`.
 4. Do not combine or pool matches across opportunities.
 5. Keep responses concise to avoid truncation:
    - `client_challenge`, `approach`, and `value_provided` each max ~220 characters.
+   - `why_relevant` max ~180 characters when requested.
 6. Do NOT output markdown code fences.
 7. Do NOT truncate with ellipses (`...`).
 8. Return result objects for all listed opportunities.
+{why_relevant_instruction}
 
 # Constraints
 - Never reveal client names.
@@ -126,13 +131,14 @@ Respond ONLY with valid JSON:
       "opportunity_id": "opp_1",
       "matches": [
         {{
-          "title": "Credential title",
-          "client_challenge": "Problem description",
-          "approach": "How it was approached",
-          "value_provided": "Value delivered",
-          "industry": "Industry sector",
-          "technologies_used": ["tech1", "tech2"],
-          "url": "https://ishare.protiviti.com/..."
+            "title": "Credential title",
+            "client_challenge": "Problem description",
+            "approach": "How it was approached",
+            "value_provided": "Value delivered",
+            "industry": "Industry sector",
+            "technologies_used": ["tech1", "tech2"],
+            "why_relevant": "Short explanation of why this credential fits",
+            "url": "https://ishare.protiviti.com/..."
         }}
       ],
       "no_matches_found": false
@@ -193,6 +199,7 @@ class CredentialsAgent:
             CredentialsResponse with matching credentials or no_matches_found=True
         """
         start_time = perf_counter()
+        max_matches = self._max_matches_for_opportunity(opportunity)
 
         # Build query from template
         query = self._build_query(opportunity, sector)
@@ -209,7 +216,8 @@ class CredentialsAgent:
                 opportunity_id=self._opportunity_identity(opportunity),
                 sector=sector,
                 query_text=query,
-                duration_ms=duration_ms
+                duration_ms=duration_ms,
+                max_matches=max_matches,
             )
             
         except ContextFreeError as e:
@@ -251,7 +259,8 @@ class CredentialsAgent:
             )
             return {}, diagnostics
 
-        query = self._build_batch_query(requested, sector, max_matches_per_opportunity)
+        effective_max_matches = self._max_matches_for_batch(requested, max_matches_per_opportunity)
+        query = self._build_batch_query(requested, sector, effective_max_matches)
         try:
             raw_response = await self.client.ask(query, self.gpt_endpoint)
             duration_ms = (perf_counter() - start_time) * 1000
@@ -261,7 +270,7 @@ class CredentialsAgent:
                 sector=sector,
                 query_text=query,
                 duration_ms=duration_ms,
-                max_matches_per_opportunity=max_matches_per_opportunity,
+                max_matches_per_opportunity=effective_max_matches,
             )
         except Exception as first_error:
             if not self._is_timeout_like_error(first_error):
@@ -311,7 +320,7 @@ class CredentialsAgent:
                     )
                     response_map: Dict[str, CredentialsResponse] = {}
                     for idx, opportunity in enumerate(requested, 1):
-                        key = self._opportunity_identity(opportunity, idx)
+                        key = self._batch_response_key(opportunity)
                         response = await self.find_credentials(
                             opportunity,
                             sector=sector,
@@ -359,11 +368,19 @@ class CredentialsAgent:
     def _build_query(self, opportunity: Opportunity, sector: str) -> str:
         """Build the query string from template and opportunity data."""
         requirements_str = self._extract_requirements(opportunity)
+        max_matches = self._max_matches_for_opportunity(opportunity)
+        ranking_priorities = self._ranking_priorities_for_opportunity(opportunity)
+        search_context_block = self._build_search_context_block(opportunity)
+        why_relevant_instruction = self._why_relevant_instruction(opportunity)
         return CREDENTIALS_QUERY_TEMPLATE.format(
             title=opportunity.title,
             scope=opportunity.scope,
             sector=sector,
-            requirements=requirements_str
+            requirements=requirements_str,
+            max_matches=max_matches,
+            ranking_priorities=ranking_priorities,
+            search_context_block=search_context_block,
+            why_relevant_instruction=why_relevant_instruction,
         )
 
     def _build_batch_query(
@@ -373,23 +390,28 @@ class CredentialsAgent:
         max_matches_per_opportunity: int
     ) -> str:
         """Build a single batch query for up to three opportunities."""
+        effective_max_matches = self._max_matches_for_batch(opportunities, max_matches_per_opportunity)
         lines = []
         for idx, opportunity in enumerate(opportunities, 1):
             opp_id = self._opportunity_identity(opportunity, idx)
             requirements = self._extract_requirements(opportunity)
             truncated_scope = self._truncate_scope_for_batch(opportunity.scope)
+            search_context = self._build_batch_search_context_line(opportunity)
             lines.extend(
                 [
                     f"- opportunity_id: {opp_id}",
                     f"  title: {opportunity.title}",
                     f"  scope: {truncated_scope}",
                     f"  key_requirements: {requirements}",
+                    *([f"  search_context: {search_context}"] if search_context else []),
                 ]
             )
 
         return BATCH_CREDENTIALS_QUERY_TEMPLATE.format(
             sector=sector,
-            max_matches=max_matches_per_opportunity,
+            max_matches=effective_max_matches,
+            ranking_priorities=self._ranking_priorities_for_batch(opportunities),
+            why_relevant_instruction=self._why_relevant_instruction_for_batch(opportunities),
             opportunities_block="\n".join(lines),
         )
 
@@ -405,6 +427,96 @@ class CredentialsAgent:
         if not truncated:
             truncated = text[:max_chars].rstrip()
         return f"{truncated}..."
+
+    def _max_matches_for_opportunity(self, opportunity: Opportunity) -> int:
+        return 2 if getattr(opportunity, "credential_search_context", None) else MAX_SINGLE_MATCHES
+
+    def _max_matches_for_batch(
+        self,
+        opportunities: List[Opportunity],
+        requested_max_matches: int,
+    ) -> int:
+        if opportunities and all(getattr(opportunity, "credential_search_context", None) for opportunity in opportunities):
+            return min(requested_max_matches, 2)
+        return requested_max_matches
+
+    def _ranking_priorities_for_opportunity(self, opportunity: Opportunity) -> str:
+        if getattr(opportunity, "credential_search_context", None):
+            return (
+                "industry/subindustry fit > role-family fit > buyer-priority fit > "
+                "likely-client-need fit > challenge similarity > technology similarity"
+            )
+        return "industry match > technology match > challenge similarity"
+
+    def _ranking_priorities_for_batch(self, opportunities: List[Opportunity]) -> str:
+        if opportunities and all(getattr(opportunity, "credential_search_context", None) for opportunity in opportunities):
+            return (
+                "industry/subindustry fit > role-family fit > buyer-priority fit > "
+                "likely-client-need fit > challenge similarity > technology similarity"
+            )
+        return "industry match > technology match > challenge similarity"
+
+    def _why_relevant_instruction(self, opportunity: Opportunity) -> str:
+        if not getattr(opportunity, "credential_search_context", None):
+            return ""
+        return (
+            "   - Why Relevant: One sentence explaining why the credential fits the role, industry, "
+            "and likely buying need\n"
+        )
+
+    def _why_relevant_instruction_for_batch(self, opportunities: List[Opportunity]) -> str:
+        if not opportunities or not all(getattr(opportunity, "credential_search_context", None) for opportunity in opportunities):
+            return ""
+        return (
+            "9. Include `why_relevant` for each credential with one sentence focused on role, industry, "
+            "and likely buying need."
+        )
+
+    def _build_search_context_block(self, opportunity: Opportunity) -> str:
+        search_context = getattr(opportunity, "credential_search_context", None)
+        if not search_context:
+            return ""
+        priorities = ", ".join(list(getattr(search_context, "buyer_priorities", []) or [])[:5]) or "N/A"
+        likely_needs = ", ".join(list(getattr(search_context, "likely_client_needs", []) or [])[:4]) or "N/A"
+        account_signals = ", ".join(list(getattr(search_context, "account_signals", []) or [])[:5]) or "N/A"
+        lines = [
+            "",
+            "**Structured Search Context:**",
+            f"- Buyer/Person: {getattr(search_context, 'person_name', '')}",
+            f"- Buyer Role: {getattr(search_context, 'person_title', '')}",
+            f"- Company: {getattr(search_context, 'company_name', '')}",
+            f"- Industry: {getattr(search_context, 'industry', '') or 'General'}",
+        ]
+        subindustry = str(getattr(search_context, "subindustry", "") or "").strip()
+        if subindustry:
+            lines.append(f"- Subindustry: {subindustry}")
+        lines.extend(
+            [
+                f"- Role Family: {getattr(search_context, 'role_family', '') or 'general'}",
+                f"- Buyer Priorities: {priorities}",
+                f"- Likely Client Needs: {likely_needs}",
+                f"- Account Signals: {account_signals}",
+                f"- Selection Reason: {getattr(search_context, 'selection_reason', '') or 'Selected for movement credentials lookup'}",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _build_batch_search_context_line(self, opportunity: Opportunity) -> str:
+        search_context = getattr(opportunity, "credential_search_context", None)
+        if not search_context:
+            return ""
+        parts = [
+            f"buyer={str(getattr(search_context, 'person_name', '') or '').strip()}",
+            f"role={str(getattr(search_context, 'person_title', '') or '').strip()}",
+            f"industry={str(getattr(search_context, 'industry', '') or '').strip()}",
+            f"subindustry={str(getattr(search_context, 'subindustry', '') or '').strip()}",
+            f"role_family={str(getattr(search_context, 'role_family', '') or '').strip()}",
+            "buyer_priorities=" + "; ".join(list(getattr(search_context, "buyer_priorities", []) or [])[:4]),
+            "likely_client_needs=" + "; ".join(list(getattr(search_context, "likely_client_needs", []) or [])[:4]),
+            "account_signals=" + "; ".join(list(getattr(search_context, "account_signals", []) or [])[:4]),
+            f"selection_reason={str(getattr(search_context, 'selection_reason', '') or '').strip()}",
+        ]
+        return " | ".join(part for part in parts if part and not part.endswith("="))
 
     def _is_timeout_like_error(self, error: Exception) -> bool:
         message = str(error).lower()
@@ -435,6 +547,9 @@ class CredentialsAgent:
         normalized_cmmc = self._normalize_cmmc_requirement(opportunity.cmmc_level)
         if normalized_cmmc:
             requirements.append(normalized_cmmc)
+        search_context = getattr(opportunity, "credential_search_context", None)
+        if search_context:
+            requirements.extend(list(getattr(search_context, "likely_client_needs", []) or [])[:2])
         if opportunity.scope:
             scope_lower = opportunity.scope.lower()
             if "cybersecurity" in scope_lower:
@@ -445,7 +560,16 @@ class CredentialsAgent:
                 requirements.append("Compliance")
             if "risk" in scope_lower:
                 requirements.append("Risk Management")
-        return ", ".join(requirements) if requirements else "N/A"
+        normalized = []
+        seen = set()
+        for value in requirements:
+            text = str(value or "").strip()
+            key = text.lower()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            normalized.append(text)
+        return ", ".join(normalized) if normalized else "N/A"
 
     def _normalize_cmmc_requirement(self, level: Optional[str]) -> Optional[str]:
         """Normalize CMMC requirement text to canonical Level formatting."""
@@ -528,6 +652,7 @@ class CredentialsAgent:
                 if opp is None:
                     continue
                 returned += 1
+                response_key = self._batch_response_key(opp)
                 matches, filtered_invalid_url_count = self._coerce_matches(
                     entry.get("matches", []),
                     max_matches_per_opportunity,
@@ -558,8 +683,8 @@ class CredentialsAgent:
                     duration_ms=duration_ms,
                     match_count=len(matches),
                 )
-                response_map[opp_id] = CredentialsResponse(
-                    opportunity_id=opp_id,
+                response_map[response_key] = CredentialsResponse(
+                    opportunity_id=response_key,
                     opportunity_title=opp.title,
                     matches=matches,
                     no_matches_found=entry.get("no_matches_found", not has_matches),
@@ -569,10 +694,11 @@ class CredentialsAgent:
 
             for idx, opp in enumerate(opportunities, 1):
                 opp_id = self._opportunity_identity(opp, idx)
-                if opp_id in response_map:
+                response_key = self._batch_response_key(opp)
+                if response_key in response_map:
                     continue
                 diagnostics = CredentialsLookupDiagnostics(
-                    opportunity_id=opp_id,
+                    opportunity_id=response_key,
                     opportunity_title=opp.title,
                     sector=sector,
                     query_text=query_text,
@@ -583,8 +709,8 @@ class CredentialsAgent:
                     duration_ms=duration_ms,
                     match_count=0,
                 )
-                response_map[opp_id] = CredentialsResponse(
-                    opportunity_id=opp_id,
+                response_map[response_key] = CredentialsResponse(
+                    opportunity_id=response_key,
                     opportunity_title=opp.title,
                     matches=[],
                     no_matches_found=True,
@@ -617,6 +743,7 @@ class CredentialsAgent:
                     opp = id_to_opp.get(opp_id)
                     if opp is None:
                         continue
+                    response_key = self._batch_response_key(opp)
                     matches, filtered_invalid_url_count = self._coerce_matches(
                         entry.get("matches", []),
                         max_matches_per_opportunity,
@@ -647,8 +774,8 @@ class CredentialsAgent:
                         duration_ms=duration_ms,
                         match_count=len(matches),
                     )
-                    response_map[opp_id] = CredentialsResponse(
-                        opportunity_id=opp_id,
+                    response_map[response_key] = CredentialsResponse(
+                        opportunity_id=response_key,
                         opportunity_title=opp.title,
                         matches=matches,
                         no_matches_found=entry.get("no_matches_found", not has_matches),
@@ -658,10 +785,11 @@ class CredentialsAgent:
 
                 for idx, opp in enumerate(opportunities, 1):
                     opp_id = self._opportunity_identity(opp, idx)
-                    if opp_id in recovered_ids or opp_id in response_map:
+                    response_key = self._batch_response_key(opp)
+                    if opp_id in recovered_ids or response_key in response_map:
                         continue
                     diagnostics = CredentialsLookupDiagnostics(
-                        opportunity_id=opp_id,
+                        opportunity_id=response_key,
                         opportunity_title=opp.title,
                         sector=sector,
                         query_text=query_text,
@@ -672,8 +800,8 @@ class CredentialsAgent:
                         duration_ms=duration_ms,
                         match_count=0,
                     )
-                    response_map[opp_id] = CredentialsResponse(
-                        opportunity_id=opp_id,
+                    response_map[response_key] = CredentialsResponse(
+                        opportunity_id=response_key,
                         opportunity_title=opp.title,
                         matches=[],
                         no_matches_found=True,
@@ -803,6 +931,7 @@ class CredentialsAgent:
                             match_data.get("technologies_used", [])
                         ),
                         emd=match_data.get("emd"),
+                        why_relevant=str(match_data.get("why_relevant", "") or "").strip() or None,
                         url=url,
                     )
                 )
@@ -825,7 +954,7 @@ class CredentialsAgent:
     ) -> Dict[str, CredentialsResponse]:
         results: Dict[str, CredentialsResponse] = {}
         for idx, opp in enumerate(opportunities, 1):
-            opp_id = self._opportunity_identity(opp, idx)
+            opp_id = self._batch_response_key(opp)
             diagnostics = CredentialsLookupDiagnostics(
                 opportunity_id=opp_id,
                 opportunity_title=opp.title,
@@ -856,7 +985,8 @@ class CredentialsAgent:
         opportunity_id: Optional[str] = None,
         sector: str = "General",
         query_text: str = "",
-        duration_ms: float = 0.0
+        duration_ms: float = 0.0,
+        max_matches: int = MAX_SINGLE_MATCHES,
     ) -> CredentialsResponse:
         """Parse GPT response into CredentialsResponse.
         
@@ -888,7 +1018,7 @@ class CredentialsAgent:
             data = self._parse_single_response_payload(raw)
             matches, filtered_invalid_url_count = self._coerce_matches(
                 data.get("matches", []),
-                MAX_SINGLE_MATCHES,
+                max_matches,
             )
 
             has_matches = len(matches) > 0
@@ -1040,6 +1170,9 @@ class CredentialsAgent:
         if index is not None:
             return f"opp_{index}"
         return opportunity.title
+
+    def _batch_response_key(self, opportunity: Opportunity) -> str:
+        return self._opportunity_identity(opportunity, None)
     
     def _extract_json(self, text: str) -> str:
         """Extract JSON from text, handling markdown code blocks."""

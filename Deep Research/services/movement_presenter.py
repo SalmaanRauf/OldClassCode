@@ -293,10 +293,7 @@ def _build_row_detail(
     if proof:
         lookup_status = proof.lookup_status
         credential_summary = proof.summary
-        matched_credentials = [
-            {"title": credential.title, "url": credential.url}
-            for credential in proof.matched_credentials
-        ]
+        matched_credentials = _serialize_matched_credentials(proof)
 
     if person_detail:
         row_payload["has_person_detail"] = True
@@ -503,6 +500,8 @@ def _build_named_mover_board_row(
         relationship_owner=relationship_owner or None,
         person_match_status=_normalize_text(preflight.person_resolution.match_status) or None,
     )
+    proof_payload = _clean_dict(named_mover_context.get("named_mover_credentials_proof"))
+    proof = MovementCredentialsProof(**proof_payload) if proof_payload else None
 
     matched_name = _normalize_text(preflight.person_resolution.matched_name or request.person_name)
     matched_title = _normalize_text(preflight.person_resolution.matched_title or "")
@@ -538,6 +537,7 @@ def _build_named_mover_board_row(
             confidence_label=None,
         ),
         leverage=leverage,
+        credentials_proof=proof,
     )
 
 
@@ -551,6 +551,7 @@ def _build_named_mover_detail(
 ) -> Dict[str, Any]:
     person_profile = _clean_dict(named_mover_context.get("person_profile"))
     matched_person = _clean_dict(person_profile.get("matched_person"))
+    proof = row.credentials_proof
     person_detail = {
         "name": _normalize_text(preflight.person_resolution.matched_name if preflight else row.person_name) or row.person_name,
         "title": _first_non_empty_text(preflight.person_resolution.matched_title if preflight else "", matched_person.get("title")),
@@ -578,9 +579,9 @@ def _build_named_mover_detail(
         "win_count": row_payload["win_count"],
         "relationship_owner": row_payload["relationship_owner"],
         "person_match_status": row_payload["person_match_status"],
-        "credential_summary": "",
-        "lookup_status": "",
-        "matched_credentials": [],
+        "credential_summary": _normalize_text(proof.summary if proof else ""),
+        "lookup_status": proof.lookup_status if proof else "",
+        "matched_credentials": _serialize_matched_credentials(proof) if proof else [],
         "person_detail": person_detail,
         "action_posture": row_payload["action_posture"],
         "action_summary": _normalize_text(row_payload["action_summary"]),
@@ -605,6 +606,20 @@ def _normalize_secondary_controls(controls: List[Dict[str, Any]]) -> List[Dict[s
             }
         )
     return normalized
+
+
+def _serialize_matched_credentials(proof: MovementCredentialsProof) -> List[Dict[str, Any]]:
+    results: List[Dict[str, Any]] = []
+    for credential in list(proof.matched_credentials or [])[:2]:
+        item = {
+            "title": credential.title,
+            "url": credential.url,
+        }
+        why_relevant = _normalize_text(getattr(credential, "why_relevant", "") or "")
+        if why_relevant:
+            item["why_relevant"] = why_relevant
+        results.append(item)
+    return results
 
 
 def _find_named_mover_scope_record(*, person_name: str, scope_context: Dict[str, Any]) -> Dict[str, Any]:

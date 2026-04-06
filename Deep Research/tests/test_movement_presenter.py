@@ -57,6 +57,7 @@ def _movement(index: int, *, with_proof: bool = False) -> MovementRecord:
                 MovementCredentialReference(
                     title="Controls Transformation Program",
                     url="https://example.com/credential",
+                    why_relevant="Relevant to technology controls and operating-model uplift.",
                 )
             ],
         )
@@ -347,6 +348,7 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
         {
             "title": "Controls Transformation Program",
             "url": "https://example.com/credential",
+            "why_relevant": "Relevant to technology controls and operating-model uplift.",
         }
     ]
     assert detail["person_detail"] == {
@@ -421,6 +423,17 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
                     "protiviti_alumni": {"items": []},
                 }
             },
+            "named_mover_credentials_proof": {
+                "lookup_status": "Matched",
+                "summary": "Matched credentials: Technology Controls Refresh.",
+                "matched_credentials": [
+                    {
+                        "title": "Technology Controls Refresh",
+                        "url": "https://example.com/named-mover-credential",
+                        "why_relevant": "Fits a new FS technology leader focused on controls modernization.",
+                    }
+                ],
+            },
         },
     )
 
@@ -432,11 +445,16 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
     assert payload["movement_rows"][0]["project_count"] == 4
     assert payload["movement_rows"][0]["win_count"] == 2
     assert payload["movement_rows"][0]["relationship_owner"] == "Bernadette Norrington"
+    assert payload["movement_rows"][0]["has_credential_proof"] is True
 
     detail = payload["row_details_by_id"]["movement-row-1"]
     assert detail["source_title"] == "Scenario input + ProConnect preflight"
     assert detail["source_url"] is None
     assert detail["person_detail"]["match_scope"] == "from"
+    assert detail["lookup_status"] == "Matched"
+    assert detail["matched_credentials"][0]["why_relevant"] == (
+        "Fits a new FS technology leader focused on controls modernization."
+    )
 
 
 def test_build_movement_brief_payload_named_mover_uses_list_evidence_when_counts_are_sparse():

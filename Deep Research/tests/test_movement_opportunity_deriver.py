@@ -117,5 +117,7 @@ def test_deriver_creates_top_three_credentials_inputs_from_ranked_rows():
     assert opportunities[0].person_name == "Person 0"
     assert opportunities[0].opportunity.title.startswith("Person 0")
     assert opportunities[0].opportunity.agency == "Fannie Mae"
-    assert "Warm path available: yes" in (opportunities[0].opportunity.incumbent or "")
+    assert opportunities[0].opportunity.incumbent is None
+    assert opportunities[0].opportunity.credential_search_context is not None
+    assert opportunities[0].opportunity.credential_search_context.person_title == "New Role 0"
     assert opportunities[0].source_signal_codes == ["FS.EXEC.TRANSITION"]

@@ -813,6 +813,7 @@ function Definition({ label, value }) {
 }
 
 function DetailBlock({ label, value, link = "", compact = false }) {
+    const isPrimitiveValue = typeof value === "string" || typeof value === "number";
     return (
         <div style={{ minWidth: 0 }}>
             <div className="movement-brief__detail-label">{label}</div>
@@ -827,9 +828,15 @@ function DetailBlock({ label, value, link = "", compact = false }) {
                     {value}
                 </a>
             ) : (
-                <p className="movement-brief__detail-value" style={{ marginTop: compact ? "0.35rem" : "0.45rem" }}>
-                    {value || "—"}
-                </p>
+                isPrimitiveValue ? (
+                    <p className="movement-brief__detail-value" style={{ marginTop: compact ? "0.35rem" : "0.45rem" }}>
+                        {value || "—"}
+                    </p>
+                ) : (
+                    <div className="movement-brief__detail-value" style={{ marginTop: compact ? "0.35rem" : "0.45rem" }}>
+                        {value || "—"}
+                    </div>
+                )
             )}
         </div>
     );
@@ -856,22 +863,47 @@ function renderLeverage(detail) {
 }
 
 function renderCredentialSummary(detail) {
-    const pieces = [];
-    if (detail.lookup_status) {
-        pieces.push(`Lookup: ${detail.lookup_status}`);
+    const matchedCredentials = Array.isArray(detail.matched_credentials) ? detail.matched_credentials.slice(0, 2) : [];
+    const hasContent = detail.lookup_status || detail.credential_summary || matchedCredentials.length;
+    if (!hasContent) {
+        return "—";
     }
-    if (detail.credential_summary) {
-        pieces.push(detail.credential_summary);
-    }
-    if (Array.isArray(detail.matched_credentials) && detail.matched_credentials.length) {
-        pieces.push(
-            detail.matched_credentials
-                .slice(0, 2)
-                .map((cred) => `${cred.title} (${cred.url})`)
-                .join("\n")
-        );
-    }
-    return pieces.join("\n");
+
+    return (
+        <div style={{ display: "grid", gap: "0.55rem" }}>
+            {detail.lookup_status ? <div>{`Lookup: ${detail.lookup_status}`}</div> : null}
+            {detail.credential_summary ? <div>{detail.credential_summary}</div> : null}
+            {matchedCredentials.length ? (
+                <div style={{ display: "grid", gap: "0.55rem" }}>
+                    {matchedCredentials.map((cred, index) => (
+                        <div
+                            key={`${cred.title || "credential"}-${index}`}
+                            style={{
+                                borderTop: index === 0 ? "none" : "1px solid rgba(15, 23, 42, 0.08)",
+                                paddingTop: index === 0 ? 0 : "0.55rem",
+                                display: "grid",
+                                gap: "0.25rem",
+                            }}
+                        >
+                            <div style={{ fontWeight: 600 }}>{cred.title}</div>
+                            {cred.why_relevant ? <div>{`Why relevant: ${cred.why_relevant}`}</div> : null}
+                            {cred.url ? (
+                                <a
+                                    className="movement-brief__link"
+                                    href={cred.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    style={{ width: "fit-content" }}
+                                >
+                                    View credential
+                                </a>
+                            ) : null}
+                        </div>
+                    ))}
+                </div>
+            ) : null}
+        </div>
+    );
 }
 
 function renderPersonDetail(personDetail) {

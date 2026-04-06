@@ -39,6 +39,7 @@ def test_credentials_service_prefers_person_account_linked_matches():
                         title="Model Risk Remediation",
                         client_challenge="Challenge",
                         value_provided="Value",
+                        why_relevant="Fits the buyer's controls modernization remit.",
                         url="https://example.com/cred",
                     )
                 ],
@@ -49,6 +50,7 @@ def test_credentials_service_prefers_person_account_linked_matches():
 
     assert packets["mov_1"].lookup_status == "Matched"
     assert packets["mov_1"].matched_credentials[0].title == "Model Risk Remediation"
+    assert packets["mov_1"].matched_credentials[0].why_relevant == "Fits the buyer's controls modernization remit."
     assert "Matched credentials" in packets["mov_1"].summary
 
 

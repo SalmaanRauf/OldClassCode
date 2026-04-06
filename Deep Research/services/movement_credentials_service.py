@@ -43,7 +43,11 @@ class MovementCredentialsService:
 
     def _coerce(self, response: CredentialsResponse) -> MovementCredentialsProof:
         references = [
-            MovementCredentialReference(title=match.title, url=match.url)
+            MovementCredentialReference(
+                title=match.title,
+                url=match.url,
+                why_relevant=str(match.why_relevant or "").strip() or None,
+            )
             for match in list(response.matches or [])[:2]
             if str(match.title or "").strip() and str(match.url or "").strip()
         ]

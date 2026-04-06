@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.credentials_agent import CredentialsAgent
 from services.contextfree_client import ContextFreeClient, ContextFreeError
-from models.bd_schemas import Opportunity
+from models.bd_schemas import CredentialSearchContext, Opportunity
 
 
 # =============================================================================
@@ -130,6 +130,34 @@ class TestQueryBuilding:
         
         assert "Basic Opportunity" in query
         assert "N/A" in query or "General consulting" in query
+
+    def test_builds_enriched_query_when_movement_search_context_is_present(self, agent):
+        opp = Opportunity(
+            title="Jennifer Brady Chief Information Officer Advisory Play",
+            scope="Find relevant credentials for a new financial-services CIO.",
+            confidence="High",
+            credential_search_context=CredentialSearchContext(
+                person_name="Jennifer Brady",
+                person_title="Chief Information Officer",
+                company_name="Fannie Mae",
+                industry="Financial Services",
+                subindustry="Mortgage and Consumer Lending",
+                role_family="technology_leadership",
+                buyer_priorities=["technology modernization", "AI governance"],
+                likely_client_needs=["modernize technology governance and control environment"],
+                account_signals=["Warm introduction path available."],
+                selection_reason="Selected exact ProConnect match ranked #1.",
+            ),
+        )
+
+        query = agent._build_query(opp, sector="Financial Services")
+
+        assert "Structured Search Context" in query
+        assert "Chief Information Officer" in query
+        assert "Mortgage and Consumer Lending" in query
+        assert "technology modernization" in query
+        assert "Why Relevant" in query
+        assert "up to 2 credentials" in query
 
     def test_normalizes_numeric_cmmc_level(self, agent):
         """Numeric CMMC level should render as canonical 'CMMC Level X'."""
@@ -417,6 +445,72 @@ class TestResponseParsing:
         assert len(set(urls)) == 3
         assert "https://ishare.protiviti.com/cred/1" in urls
         assert "https://ishare.protiviti.com/cred/4" not in urls
+
+    def test_single_parse_preserves_why_relevant(self, agent):
+        raw = json.dumps(
+            {
+                "matches": [
+                    {
+                        "title": "Credential 1",
+                        "client_challenge": "Challenge 1",
+                        "approach": "Approach 1",
+                        "value_provided": "Value 1",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "why_relevant": "Fits a new FS CIO focused on controls modernization.",
+                        "url": "https://ishare.protiviti.com/cred/1",
+                    }
+                ],
+                "no_matches_found": False,
+            }
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity", max_matches=2)
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 1
+        assert result.matches[0].why_relevant == "Fits a new FS CIO focused on controls modernization."
+
+    def test_single_parse_caps_matches_at_two_when_requested(self, agent):
+        raw = json.dumps(
+            {
+                "matches": [
+                    {
+                        "title": "Credential 1",
+                        "client_challenge": "Challenge 1",
+                        "approach": "Approach 1",
+                        "value_provided": "Value 1",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/1",
+                    },
+                    {
+                        "title": "Credential 2",
+                        "client_challenge": "Challenge 2",
+                        "approach": "Approach 2",
+                        "value_provided": "Value 2",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/2",
+                    },
+                    {
+                        "title": "Credential 3",
+                        "client_challenge": "Challenge 3",
+                        "approach": "Approach 3",
+                        "value_provided": "Value 3",
+                        "industry": "Financial Services",
+                        "technologies_used": [],
+                        "url": "https://ishare.protiviti.com/cred/3",
+                    },
+                ],
+                "no_matches_found": False,
+            }
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity", max_matches=2)
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 2
 
 
 # =============================================================================
@@ -741,6 +835,36 @@ class TestBatchLookup:
         assert len(rendered_scope) <= 353
         assert rendered_scope.endswith("...")
         assert "scope scope scope" in rendered_scope
+
+    def test_batch_query_uses_role_aware_ranking_for_movement_context(self, agent):
+        opportunities = [
+            Opportunity(
+                title="Jennifer Brady Chief Information Officer Advisory Play",
+                scope="Find relevant credentials for a new financial-services CIO.",
+                confidence="High",
+                credential_search_context=CredentialSearchContext(
+                    person_name="Jennifer Brady",
+                    person_title="Chief Information Officer",
+                    company_name="Fannie Mae",
+                    industry="Financial Services",
+                    subindustry="Mortgage and Consumer Lending",
+                    role_family="technology_leadership",
+                    buyer_priorities=["technology modernization", "AI governance"],
+                    likely_client_needs=["modernize technology governance and control environment"],
+                    account_signals=["Warm introduction path available."],
+                    selection_reason="Selected exact ProConnect match ranked #1.",
+                ),
+            ),
+        ]
+
+        query = agent._build_batch_query(opportunities, "Financial Services", 3)
+
+        assert "industry/subindustry fit > role-family fit" in query
+        assert "Why Relevant" not in query
+        assert "why_relevant" in query
+        assert "Chief Information Officer" in query
+        assert "technology modernization" in query
+        assert "Max matches per opportunity: 2" in query
 
     @pytest.mark.asyncio
     async def test_batch_partial_recovery_recovers_completed_objects(self, agent, mock_client):

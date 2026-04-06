@@ -361,6 +361,7 @@ class MovementBriefOrchestrator:
             preflight=preflight,
             signal_evidence=signal_evidence,
             ranked_rows=ranked_rows,
+            actioning_context=actioning_context,
             max_opportunities=3,
         )
         ranked_rows = self._attach_opportunity_ids(ranked_rows, derived_opportunities)
@@ -372,6 +373,11 @@ class MovementBriefOrchestrator:
         credential_packets = self.credentials_service.build_proof_packets(
             derived_opportunities,
             credentials_lookup.results,
+        )
+        actioning_context = self._attach_named_mover_credential_proof(
+            actioning_context,
+            derived_opportunities,
+            credential_packets,
         )
         await self._emit(
             progress_cb,
@@ -470,17 +476,84 @@ class MovementBriefOrchestrator:
         ranked_rows: List[Dict[str, Any]],
         derived_opportunities: List[Any],
     ) -> List[Dict[str, Any]]:
+        derived_by_key: Dict[tuple[str, str, str], Any] = {}
+        fallback_by_person_company: Dict[tuple[str, str], Any] = {}
+        for derived in derived_opportunities:
+            if str(getattr(derived, "source_type", "") or "").strip() == "named_mover":
+                continue
+            opportunity = getattr(derived, "opportunity", None)
+            search_context = getattr(opportunity, "credential_search_context", None)
+            key = (
+                self._normalized_text(getattr(derived, "person_name", "") or "").lower(),
+                self._normalized_text(getattr(opportunity, "agency", "") or "").lower(),
+                self._normalized_text(
+                    getattr(search_context, "person_title", None)
+                    or self._extract_role_from_title(getattr(opportunity, "title", "") or "")
+                ).lower(),
+            )
+            if all(key):
+                derived_by_key[key] = derived
+            fallback_key = (
+                self._normalized_text(getattr(derived, "person_name", "") or "").lower(),
+                self._normalized_text(getattr(opportunity, "agency", "") or "").lower(),
+            )
+            if all(fallback_key) and fallback_key not in fallback_by_person_company:
+                fallback_by_person_company[fallback_key] = derived
+
         normalized: List[Dict[str, Any]] = []
-        for index, row in enumerate(ranked_rows):
+        for row in ranked_rows:
             updated = dict(row)
-            if index < len(derived_opportunities):
-                derived = derived_opportunities[index]
+            movement = updated.get("movement")
+            key = (
+                self._normalized_text(getattr(movement, "person_name", "") or "").lower(),
+                self._normalized_text(getattr(movement, "target_company", "") or "").lower(),
+                self._normalized_text(getattr(movement, "new_role", "") or "").lower(),
+            )
+            derived = derived_by_key.get(key)
+            if derived is None:
+                fallback_key = key[:2]
+                derived = fallback_by_person_company.get(fallback_key)
+            if derived is not None:
                 opportunity_id = str(getattr(derived, "opportunity_id", "") or "").strip()
                 if opportunity_id:
                     updated["opportunity_id"] = opportunity_id
                     updated["opportunity_title"] = getattr(getattr(derived, "opportunity", None), "title", "")
             normalized.append(updated)
         return normalized
+
+    def _attach_named_mover_credential_proof(
+        self,
+        actioning_context: Dict[str, Any],
+        derived_opportunities: List[Any],
+        credential_packets: Dict[str, MovementCredentialsProof],
+    ) -> Dict[str, Any]:
+        updated_context = dict(actioning_context or {})
+        named_packet: Optional[MovementCredentialsProof] = None
+        for derived in derived_opportunities:
+            if str(getattr(derived, "source_type", "") or "").strip() != "named_mover":
+                continue
+            opportunity_id = str(getattr(derived, "opportunity_id", "") or "").strip()
+            if not opportunity_id:
+                continue
+            named_packet = credential_packets.get(opportunity_id)
+            if named_packet is not None:
+                break
+
+        if named_packet is None:
+            updated_context.pop("named_mover_credentials_proof", None)
+            return updated_context
+
+        if hasattr(named_packet, "model_dump"):
+            updated_context["named_mover_credentials_proof"] = named_packet.model_dump()
+        elif hasattr(named_packet, "dict"):
+            updated_context["named_mover_credentials_proof"] = named_packet.dict()
+        else:
+            updated_context["named_mover_credentials_proof"] = {
+                "lookup_status": getattr(named_packet, "lookup_status", "No Match"),
+                "summary": getattr(named_packet, "summary", ""),
+                "matched_credentials": list(getattr(named_packet, "matched_credentials", []) or []),
+            }
+        return updated_context
 
     async def _prepare_move_context(
         self,
@@ -982,6 +1055,15 @@ class MovementBriefOrchestrator:
     @staticmethod
     def _normalized_text(value: Any) -> str:
         return " ".join(str(value or "").split()).strip()
+
+    @staticmethod
+    def _extract_role_from_title(value: Any) -> str:
+        title = " ".join(str(value or "").split()).strip()
+        if not title.endswith("Advisory Play"):
+            return title
+        core = title[: -len("Advisory Play")].strip()
+        parts = core.split(" ", 1)
+        return parts[1].strip() if len(parts) == 2 else core
 
     def _first_non_empty_text(self, *values: Any) -> str:
         for value in values:

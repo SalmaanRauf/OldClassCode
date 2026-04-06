@@ -90,6 +90,7 @@ class MovementCredentialReference(BaseModel):
 
     title: str = Field(..., description="Credential title")
     url: str = Field(..., description="Credential URL")
+    why_relevant: Optional[str] = Field(None, description="Short explanation of why the credential fits")
 
 
 class MovementCredentialsProof(BaseModel):

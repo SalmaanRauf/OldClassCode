@@ -74,6 +74,25 @@ class Opportunity(BaseModel):
     cmmc_level: Optional[str] = Field(None, description="CMMC compliance requirement if applicable")
     confidence: Literal["High", "Medium", "Low"] = Field("Medium", description="Confidence level")
     citations: List[str] = Field(default_factory=list, description="Source URLs")
+    credential_search_context: Optional["CredentialSearchContext"] = Field(
+        None,
+        description="Optional structured context used to improve credential search relevance",
+    )
+
+
+class CredentialSearchContext(BaseModel):
+    """Structured context to improve credential matching for person-led opportunities."""
+
+    person_name: str = Field("", description="Person tied to the credential search context")
+    person_title: str = Field("", description="Buyer title or role of interest")
+    company_name: str = Field("", description="Company or account context")
+    industry: str = Field("", description="Normalized industry context")
+    subindustry: str = Field("", description="More specific subindustry context when known")
+    role_family: str = Field("", description="Normalized role-family classification")
+    buyer_priorities: List[str] = Field(default_factory=list, description="Likely buyer priorities")
+    likely_client_needs: List[str] = Field(default_factory=list, description="Likely client needs")
+    account_signals: List[str] = Field(default_factory=list, description="Relevant account pressure or move signals")
+    selection_reason: str = Field("", description="Why this row was selected for credentials lookup")
 
 
 OpportunityExtractionStatus = Literal["Parsed", "No Opportunities", "Extraction Failed"]
@@ -168,6 +187,7 @@ class CredentialMatch(BaseModel):
     industry: str = Field("", description="Industry sector")
     technologies_used: List[str] = Field(default_factory=list, description="Technologies used")
     emd: Optional[str] = Field(None, description="Engagement Managing Director")
+    why_relevant: Optional[str] = Field(None, description="Short explanation of why the credential fits")
     url: str = Field(..., description="iShare URL for the credential")
 
 
@@ -257,6 +277,7 @@ class CredentialsBatchDiagnostics(BaseModel):
 
 
 try:  # pragma: no cover - harmless when pydantic is unavailable
+    Opportunity.model_rebuild()
     CredentialsResponse.model_rebuild()
 except Exception:
     pass

@@ -247,7 +247,7 @@ async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary()
             return ranked[:max_rows]
 
     class FakeOpportunityDeriver:
-        def derive(self, *, request, preflight, signal_evidence, ranked_rows, max_opportunities=3):
+        def derive(self, *, request, preflight, signal_evidence, ranked_rows, actioning_context=None, max_opportunities=3):
             call_order.append("derive_opportunities")
             return [
                 SimpleNamespace(
@@ -407,7 +407,7 @@ async def test_orchestrator_wraps_deep_research_progress_metadata():
             return enriched_rows[:max_rows]
 
     class FakeOpportunityDeriver:
-        def derive(self, *, request, preflight, signal_evidence, ranked_rows, max_opportunities=3):
+        def derive(self, *, request, preflight, signal_evidence, ranked_rows, actioning_context=None, max_opportunities=3):
             call_order.append("derive_opportunities")
             return []
 
@@ -897,6 +897,128 @@ async def test_orchestrator_marks_named_mover_as_known_when_exact_proconnect_mat
     assert assembled["ranked_rows"][0]["project_count"] == 0
     assert assembled["ranked_rows"][0]["win_count"] == 0
     assert assembled["deep_enriched_rows"][0]["person_match_status"] == "matched"
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_stores_named_mover_credential_proof_in_actioning_context():
+    preflight = _preflight()
+
+    class FakeTransitionService:
+        def build_preflight(self, request, *, transition_case=None):
+            return preflight
+
+    class FakePromptBuilder:
+        def build(self, request, preflight_arg):
+            return MovementPromptPackage(
+                industry_key="financial_services",
+                system_prompt="FS prompt + overlay",
+                user_prompt="Generated move prompt.",
+            )
+
+    class FakeFSSignalDigestor:
+        async def digest(self, **kwargs):
+            return ([], {"status": "Succeeded"}, [])
+
+    class FakeMovementDigestor:
+        async def digest(self, **kwargs):
+            return ([], {"status": "Succeeded", "movements_returned": 0})
+
+    class FakeProConnectService:
+        def light_enrich_movements(self, movement_rows):
+            return []
+
+        def deep_enrich_movements(self, movement_rows, *, max_rows=10):
+            return []
+
+    class FakeRanker:
+        def rank(self, enriched_rows, max_rows=10):
+            return []
+
+    class FakeOpportunityDeriver:
+        def derive(self, **kwargs):
+            return [
+                SimpleNamespace(
+                    source_type="named_mover",
+                    opportunity_id="named_1",
+                    person_name="Jennifer Brady",
+                    opportunity=Opportunity(
+                        opportunity_id="named_1",
+                        title="Jennifer Brady Chief Information Officer Advisory Play",
+                        agency="Fannie Mae",
+                        scope="Derived scope",
+                        confidence="High",
+                    ),
+                )
+            ]
+
+    class FakeCredentialsLookupRunner:
+        async def run(self, opportunities, *, sector, max_opportunities=3):
+            return SimpleNamespace(
+                results={
+                    "named_1": CredentialsResponse(
+                        opportunity_id="named_1",
+                        opportunity_title=opportunities[0].title,
+                        matches=[],
+                        lookup_status="Matched",
+                    )
+                },
+                diagnostics={},
+                batch_diagnostics=None,
+                status_counts={"Matched": 1, "No Match": 0, "Lookup Failed": 0},
+                lookups_executed_count=1,
+            )
+
+    class FakeMovementCredentialsService:
+        def build_proof_packets(self, derived_opportunities, lookup_results):
+            return {
+                "named_1": MovementCredentialsProof(
+                    lookup_status="Matched",
+                    summary="Matched credentials: Technology Controls Refresh.",
+                    matched_credentials=[],
+                )
+            }
+
+    class FakeAssembler:
+        def assemble(self, **kwargs):
+            return MovementBrief(
+                executive_summary="Move summary text.",
+                signal_summary=[],
+                movement_rows=[],
+                where_to_act=[],
+                takeaway="Takeaway",
+            )
+
+    async def fake_deep_research_runner(query, **kwargs):
+        return {"summary": "Deep research summary"}
+
+    orchestrator = MovementBriefOrchestrator(
+        transition_service=FakeTransitionService(),
+        prompt_builder=FakePromptBuilder(),
+        fs_signal_evidence_digestor=FakeFSSignalDigestor(),
+        movement_digestor=FakeMovementDigestor(),
+        proconnect_service=FakeProConnectService(),
+        ranker=FakeRanker(),
+        opportunity_deriver=FakeOpportunityDeriver(),
+        credentials_lookup_runner=FakeCredentialsLookupRunner(),
+        credentials_service=FakeMovementCredentialsService(),
+        assembler=FakeAssembler(),
+        deep_research_runner=fake_deep_research_runner,
+    )
+
+    result = await orchestrator.run_from_reviewed_context(
+        request=_request(),
+        preflight=preflight,
+        actioning_context={"person_profile": {"direct_person_evidence": True}},
+        prompt_package=MovementPromptPackage(
+            industry_key="financial_services",
+            system_prompt="SYSTEM",
+            user_prompt="PROMPT",
+        ),
+        run_id="run-proof",
+    )
+
+    assert result.actioning_context["named_mover_credentials_proof"]["lookup_status"] == "Matched"
+    assert "Technology Controls Refresh" in result.actioning_context["named_mover_credentials_proof"]["summary"]
 
 
 @pytest.mark.asyncio
