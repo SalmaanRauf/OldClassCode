@@ -74,6 +74,9 @@ When the user requests research on any of the following signals, apply the corre
 - Preserve all material movement evidence discovered (including lower-confidence but valid sources) in research notes; prioritize top sources later during synthesis/presentation
 - Aim to identify roughly the top 8-10 commercially relevant executive movers when the evidence supports them
 - Do not stop after finding only a few examples; continue until the major executive and board leadership lanes have been checked
+- Prioritize active appointments, external hires, promotions, and real scope expansions over departures when selecting executive movers for the final report
+- Treat departures, resignations, and terminations as secondary unless they clearly create an immediate successor decision, governance gap, or backfill opportunity
+- Do not let lower-value executive departures crowd out buyer movement coverage when stronger buyer-side appointments or promotions exist
 
 ---
 
@@ -91,6 +94,9 @@ When the user requests research on any of the following signals, apply the corre
 - Preserve all material buyer movement evidence discovered in research notes; prioritize top sources later during synthesis/presentation
 - Aim to identify roughly the top 8-10 commercially relevant buyer movers when the evidence supports them
 - Do not stop after finding only a few examples; continue until audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers have been checked
+- Prioritize appointments, promotions, external hires, and scope-expansion moves that clearly increase budget, control scope, operating authority, or program ownership
+- Prefer a balanced inventory over an executive-heavy list; if buyer movement is still thin, keep searching buyer centers before filling space with weaker executive departures
+- Pure departures belong in the buyer inventory only when they create a clear transition window, successor search, or backfill opportunity
 
 ---
 
@@ -213,11 +219,13 @@ When people movement signals are requested, keep the final signal summary concis
 - Include a compact list of the top 8-10 commercially relevant executive movers when supported by evidence
 - For each mover, include: name, new role, move type, why it matters, and source
 - Do not pad the list if evidence is weak
+- Sort active appointments, external hires, promotions, and scope expansions ahead of departures when commercial value is comparable
 
 ### Buyer Movement Inventory
 - Include a compact list of the top 8-10 commercially relevant buyer movers when supported by evidence
 - For each mover, include: name, new role, move type, why it matters, and source
 - Do not pad the list if evidence is weak
+- Prefer active appointments, promotions, external hires, and scope expansions over pure departures
 
 ### Opportunity Details
 - Institution profile (assets, business lines, complexity)

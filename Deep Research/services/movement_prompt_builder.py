@@ -18,7 +18,10 @@ NAMED_MOVE_OVERLAY = """
 - Bias findings toward signals that explain why the account matters now, while preserving broader account-signal coverage.
 - Preserve source-backed movement evidence that can later feed the leverage table.
 - Aim to surface roughly the top 8-10 commercially relevant executive movers and the top 8-10 commercially relevant buyer movers when the evidence supports them. Do not pad the list if evidence is weak.
+- Prioritize active appointments, external hires, promotions, and scope-expansion moves over departures when deciding which movers deserve space in the final report.
+- Treat departures, resignations, and terminations as secondary unless they clearly create an immediate vacancy, successor decision, governance gap, or backfill opportunity at the destination account.
 - Do not stop after finding only a few examples. Continue until the destination account has been checked across audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers.
+- Prefer a balanced movement inventory over an executive-heavy list. If buyer movement is materially thinner than executive movement, keep spending search effort on buyer-center discovery instead of padding the report with lower-value executive departures.
 - Preserve compact Executive Movement Inventory and Buyer Movement Inventory sections in the final report with one line per mover covering name, new role, move type, why it matters, and source.
 """.strip()
 
@@ -80,7 +83,16 @@ class MovementPromptBuilder:
             "Aim to identify roughly the top 8-10 high-value executive movers and the top 8-10 high-value buyer movers, but do not pad the list when evidence is weak."
         )
         lines.append(
+            "Prioritize active appointments, external hires, promotions, and scope expansions over departures when deciding which movers deserve inclusion."
+        )
+        lines.append(
+            "Treat departures, resignations, and terminations as secondary unless they clearly create an immediate vacancy, successor decision, governance gap, or backfill opportunity."
+        )
+        lines.append(
             "Do not stop after finding only a few names. Check audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers."
+        )
+        lines.append(
+            "Prefer a balanced movement inventory over an executive-heavy list. If buyer movement is materially thinner than executive movement, keep pushing buyer-center discovery instead of padding with lower-value executive departures."
         )
         lines.append(
             "Include compact Executive Movement Inventory and Buyer Movement Inventory sections in the report with name, new role, move type, why it matters, and source."

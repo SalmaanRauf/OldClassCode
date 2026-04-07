@@ -41,3 +41,5 @@ def test_financial_services_prompt_requires_high_value_movement_inventory():
     assert "Executive Movement Inventory" in content
     assert "Buyer Movement Inventory" in content
     assert "do not stop after finding only a few examples" in lowered
+    assert "prioritize active appointments, external hires, promotions, and real scope expansions over departures" in lowered
+    assert "prefer a balanced inventory over an executive-heavy list" in lowered

@@ -20,6 +20,8 @@ Extract a strict JSON inventory of executive and buyer movement rows from the De
 6. Categories must be `EXEC` or `BUYER`.
 7. Apply the stated lookback window strictly when dates are available. Exclude moves whose effective date falls outside the requested window.
 8. Return `effective_date` in `YYYY-MM-DD` form when the source supports it. If only month/year is known, use the first day of that month. If no date is stated, return `null`.
+9. When the markdown contains both appointments/promotions and departures, do not let lower-value departure rows crowd out active appointments, promotions, external hires, or scope-expansion moves.
+10. Preserve buyer-side appointments, promotions, and external hires whenever the markdown supports them; do not under-extract buyer rows simply because executive departures are easier to spot.
 
 # Output Contract
 Return ONLY valid JSON:
