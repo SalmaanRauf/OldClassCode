@@ -441,6 +441,7 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
     )
 
     assert payload["movement_rows"][0]["person_name"] == "Jennifer Brady"
+    assert payload["where_to_act"][0]["person_name"] == "Jennifer Brady"
     assert payload["movement_rows"][0]["previous_role"] == "Senior Director of Technology Risk"
     assert payload["movement_rows"][0]["new_role"] == "Chief Information Officer"
     assert payload["movement_rows"][0]["known"] is True

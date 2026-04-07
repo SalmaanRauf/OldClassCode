@@ -169,9 +169,9 @@ def test_assemble_brief_keeps_all_ranked_rows_and_attaches_proof_packets():
     assert brief.where_to_act[0].action_posture == "Immediate Re-engagement"
     assert "0 current projects, 2 wins" in brief.where_to_act[0].likely_play
     assert brief.where_to_act[0].relationship_owner == "Ben L"
-    assert "Relationship owner: Ben L." in brief.where_to_act[0].why_now
-    assert "Leverage: known in ProConnect, delivery history." in brief.where_to_act[0].why_now
-    assert "Credential proof: Existing delivery with adjacent team." in brief.where_to_act[0].why_now
+    assert "Relationship Owner: Ben L." in brief.where_to_act[0].why_now
+    assert "Leverage: Known in ProConnect; Delivery History." in brief.where_to_act[0].why_now
+    assert "Credential Proof: Existing delivery with adjacent team." in brief.where_to_act[0].why_now
     assert brief.movement_rows[0].leverage is not None
     assert brief.movement_rows[0].credentials_proof is not None
     assert brief.movement_rows[0].credentials_proof.lookup_status == "Matched"
@@ -244,7 +244,7 @@ def test_assemble_brief_uses_credential_proof_to_raise_action_priority():
     )
 
     assert brief.where_to_act[0].person_name == "Person 1"
-    assert "Credential proof: Matched credentials: AI Governance Transformation." in brief.where_to_act[0].why_now
+    assert "Credential Proof: Matched credentials: AI Governance Transformation." in brief.where_to_act[0].why_now
 
 
 def test_assemble_brief_describes_known_person_without_implying_relationship_history():
@@ -409,8 +409,8 @@ def test_assemble_brief_dedupes_same_person_across_visible_rows_and_actions():
         "Jason Dandridge",
     ]
     assert [action.person_name for action in brief.where_to_act[:2]] == [
-        "Danielle M. McCoy",
         "Jason Dandridge",
+        "Danielle M. McCoy",
     ]
 
 
@@ -457,3 +457,106 @@ def test_assemble_brief_uses_transition_language_for_departure_actions():
 
     assert "around departed" not in brief.where_to_act[0].likely_play.lower()
     assert "transition" in brief.where_to_act[0].likely_play.lower()
+
+
+def test_assemble_brief_prioritizes_named_mover_and_active_actions_before_departures():
+    assembler = MovementBriefAssembler()
+
+    ranked_rows = [
+        {
+            "movement": _movement(0).model_copy(
+                update={
+                    "person_name": "Danielle M. McCoy",
+                    "previous_role": "SVP & General Counsel",
+                    "new_role": "Departed",
+                    "movement_type": "Departure",
+                    "target_company": "Fannie Mae",
+                }
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": "Germal Ross",
+            "person_match_status": "matched",
+            "rank_score": 95,
+            "action_posture": "Expansion Opportunity",
+        },
+        {
+            "movement": _movement(1).model_copy(
+                update={
+                    "person_name": "Peter Akwaboah",
+                    "previous_role": "Chief Operating Officer",
+                    "new_role": "Acting Chief Executive Officer & Chief Operating Officer",
+                    "movement_type": "Promoted",
+                    "target_company": "Fannie Mae",
+                    "category": "EXEC",
+                }
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+            "person_match_status": "matched",
+            "rank_score": 75,
+            "action_posture": "Expansion Opportunity",
+        },
+        {
+            "movement": _movement(2).model_copy(
+                update={
+                    "person_name": "Tom Klein",
+                    "previous_role": "Deputy General Counsel",
+                    "new_role": "Acting General Counsel",
+                    "movement_type": "Promotion/Appointment",
+                    "target_company": "Fannie Mae",
+                    "category": "BUYER",
+                }
+            ),
+            "known": False,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+            "person_match_status": "matched",
+            "rank_score": 70,
+            "action_posture": "Expansion Opportunity",
+        },
+    ]
+
+    brief = assembler.assemble(
+        request=_request(),
+        preflight=_preflight(),
+        trigger=_trigger(),
+        deep_research_summary="Fannie Mae is under active leadership transition.",
+        signal_evidence=[],
+        ranked_rows=ranked_rows,
+        deep_enriched_rows=[],
+        credential_packets={},
+        actioning_context={
+            "person_profile": {
+                "direct_person_evidence": True,
+                "relationship_owner": "Bernadette Norrington",
+                "project_count": 0,
+                "win_count": 1,
+                "matched_person": {
+                    "name": "Jennifer Brady",
+                    "title": "Senior Director of Technology Risk",
+                },
+            },
+            "named_mover_credentials_proof": {
+                "lookup_status": "Matched",
+                "summary": "Matched credentials: Technology Controls Refresh.",
+                "matched_credentials": [],
+            },
+        },
+    )
+
+    assert [action.person_name for action in brief.where_to_act[:3]] == [
+        "Jennifer Brady",
+        "Peter Akwaboah",
+        "Tom Klein",
+    ]
+    assert "Chief Information Officer" in brief.where_to_act[0].likely_play
+    assert "Acting Chief Executive Officer & Chief Operating Officer" in brief.where_to_act[1].likely_play
+    assert "Deputy General Counsel" not in brief.where_to_act[2].likely_play

@@ -175,6 +175,20 @@ def build_movement_brief_payload(
     if scenario_row is not None:
         visible_rows = [scenario_row, *visible_rows]
     visible_actions = list(brief.where_to_act[:3])
+    scenario_action = _build_named_mover_action(
+        request=request,
+        preflight=preflight,
+        named_mover_context=named_mover_context or {},
+        scenario_row=scenario_row,
+    )
+    if scenario_action is not None:
+        scenario_key = _normalize_person_name(scenario_action.person_name)
+        filtered = [
+            action
+            for action in visible_actions
+            if _normalize_person_name(action.person_name) != scenario_key
+        ]
+        visible_actions = [scenario_action, *filtered][:3]
     row_payloads: List[Dict[str, Any]] = []
     row_details_by_id: Dict[str, Dict[str, Any]] = {}
     person_details_by_name = person_details_by_name or {}
@@ -335,6 +349,57 @@ def _build_action_payload(action: MovementAction) -> Dict[str, Any]:
         "why_now": _normalize_text(action.why_now),
         "relationship_owner": _normalize_text(action.relationship_owner or "") or None,
     }
+
+
+def _build_named_mover_action(
+    *,
+    request: Optional[MovementBriefRequest],
+    preflight: Optional[TransitionPreflight],
+    named_mover_context: Dict[str, Any],
+    scenario_row: Optional[MovementRecord],
+) -> Optional[MovementAction]:
+    if request is None or preflight is None or scenario_row is None or not named_mover_context:
+        return None
+
+    leverage = scenario_row.leverage or MovementLeverageSummary()
+    proof = scenario_row.credentials_proof
+    project_bits = []
+    if leverage.project_count or leverage.win_count:
+        project_bits.append(f"{leverage.project_count} Current Projects")
+        project_bits.append(f"{leverage.win_count} Wins")
+    project_suffix = f" ({', '.join(project_bits)})" if project_bits else ""
+    likely_play = (
+        f"Lead with {scenario_row.person_name}'s {request.new_role} transition and activate the warm path into "
+        f"{_normalize_text(preflight.to_account.company_name or request.to_company)}{project_suffix}."
+    )
+
+    why_now_parts = [
+        _ensure_sentence(
+            f"Named move scenario validated against ProConnect for {scenario_row.person_name}'s transition into the {request.new_role} role at "
+            f"{_normalize_text(preflight.to_account.company_name or request.to_company)}"
+        )
+    ]
+    if leverage.relationship_owner:
+        why_now_parts.append(f"Relationship Owner: {_normalize_text(leverage.relationship_owner)}.")
+    leverage_bits = []
+    if leverage.known:
+        leverage_bits.append("Known in ProConnect")
+    if leverage.worked_with:
+        leverage_bits.append("Delivery History")
+    if leverage_bits:
+        why_now_parts.append(f"Leverage: {'; '.join(leverage_bits)}.")
+    if proof and proof.lookup_status == "Matched" and _normalize_text(proof.summary):
+        why_now_parts.append(_ensure_sentence(f"Credential Proof: {_normalize_text(proof.summary)}"))
+    elif proof and proof.lookup_status == "Lookup Failed" and _normalize_text(proof.summary):
+        why_now_parts.append(_ensure_sentence(f"Credential Lookup Warning: {_normalize_text(proof.summary)}"))
+
+    return MovementAction(
+        action_posture="Immediate Re-engagement" if leverage.worked_with else "Expansion Opportunity",
+        person_name=scenario_row.person_name,
+        likely_play=likely_play,
+        why_now=" ".join(part for part in why_now_parts if part),
+        relationship_owner=leverage.relationship_owner,
+    )
 
 
 def _build_stats(rows: List[MovementRecord], actions: List[MovementAction]) -> Dict[str, Any]:
@@ -685,6 +750,15 @@ def _normalize_action_context(value: Any) -> Dict[str, Any]:
 
 def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _ensure_sentence(value: Any) -> str:
+    text = _normalize_text(value)
+    if not text:
+        return ""
+    if text[-1] in ".!?":
+        return text
+    return f"{text}."
 
 
 def _public_source_url(value: str) -> Optional[str]:

@@ -400,6 +400,7 @@ class MovementBriefOrchestrator:
         movement_brief = self.assembler.assemble(
             request=request,
             preflight=preflight,
+            actioning_context=actioning_context,
             trigger=trigger,
             signal_evidence=signal_evidence,
             movement_rows=movement_rows,
