@@ -147,6 +147,8 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
     assert "prefer a balanced movement inventory over an executive-heavy list" in package.system_prompt.lower()
     assert "roughly 15-18 total movers" in package.system_prompt.lower()
     assert "general counsel, deputy general counsel, corporate secretary" in package.system_prompt.lower()
+    assert "legal name and common alias" in package.system_prompt.lower()
+    assert "coverage checklist across the buyer centers and major executive lanes" in package.system_prompt.lower()
 
 
 def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
@@ -170,6 +172,10 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     assert "prefer a balanced movement inventory over an executive-heavy list" in package.user_prompt.lower()
     assert "roughly 15-18 total movers" in package.user_prompt.lower()
     assert "general counsel, deputy general counsel, corporate secretary" in package.user_prompt.lower()
+    assert "legal name and common alias" in package.user_prompt.lower()
+    assert "\"Federal National Mortgage Association (Fannie Mae)\"" in package.user_prompt
+    assert "\"Fannie Mae\"" in package.user_prompt
+    assert "coverage checklist across buyer centers and major executive lanes" in package.user_prompt.lower()
     assert "Jennifer Brady" not in package.user_prompt
     assert "Capital One" not in package.user_prompt
     assert "Chief Information Officer" not in package.user_prompt

@@ -45,3 +45,6 @@ def test_financial_services_prompt_requires_high_value_movement_inventory():
     assert "prefer a balanced inventory over an executive-heavy list" in lowered
     assert "roughly 15-18 total movers" in lowered
     assert "general counsel, deputy general counsel, corporate secretary" in lowered
+    assert "legal name and common alias" in lowered
+    assert "coverage checklist across major executive lanes" in lowered
+    assert "buyer-center coverage checklist" in lowered

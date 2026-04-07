@@ -74,10 +74,12 @@ When the user requests research on any of the following signals, apply the corre
 - Preserve all material movement evidence discovered (including lower-confidence but valid sources) in research notes; prioritize top sources later during synthesis/presentation
 - Aim to identify roughly the top 8-10 commercially relevant executive movers when the evidence supports them
 - Preserve roughly 15-18 total movers across the executive and buyer inventories when the evidence supports that many, with a balanced mix instead of a one-sided executive list
+- Use both the target company's legal name and common alias in searches whenever both exist
 - Do not stop after finding only a few examples; continue until the major executive and board leadership lanes have been checked
 - Prioritize active appointments, external hires, promotions, and real scope expansions over departures when selecting executive movers for the final report
 - Keep materially relevant departures, resignations, and terminations when they create an immediate successor decision, governance gap, or backfill opportunity, but sort them after active appointments/promotions when commercial value is comparable
 - Do not let lower-value executive departures crowd out buyer movement coverage when stronger buyer-side appointments or promotions exist
+- Maintain a coverage checklist across major executive lanes and do not finalize until those lanes have been checked with targeted title-family searches or evidence is exhausted
 
 ---
 
@@ -99,6 +101,8 @@ When the user requests research on any of the following signals, apply the corre
 - Prefer a balanced inventory over an executive-heavy list; if buyer movement is still thin, keep searching buyer centers before filling space with weaker executive departures
 - Pure departures belong in the buyer inventory only when they create a clear transition window, successor search, or backfill opportunity
 - If buyer recall is thin, expand title-family coverage and explicitly search for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, and Single-Family/Multifamily business leaders at the target account
+- Maintain a buyer-center coverage checklist and do not finalize until each buyer center has been checked with targeted title-family searches or evidence is exhausted
+- If the movement inventory is still below roughly 15 movers, continue targeted searches across issuer newsroom, leadership pages, governance pages, investor relations, conference bios, and corroborated self-disclosures before concluding that evidence is weak
 
 ---
 
