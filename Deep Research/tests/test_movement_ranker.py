@@ -26,6 +26,22 @@ def _row(name: str, category: str = "BUYER") -> MovementRecord:
     )
 
 
+def _movement(name: str, *, movement_type: str, new_role: str, category: str = "BUYER") -> MovementRecord:
+    return MovementRecord(
+        person_name=name,
+        target_company="Capital One",
+        previous_role="Director",
+        new_role=new_role,
+        movement_type=movement_type,
+        category=category,
+        company_context="internal",
+        evidence=MovementEvidence(
+            evidence_quote=f"{name} moved into a new role.",
+            source_url=f"https://example.com/{name.lower().replace(' ', '-')}",
+        ),
+    )
+
+
 def test_ranker_orders_rows_by_combined_leverage_and_role_priority():
     ranker = MovementRanker()
     enriched_rows = [
@@ -125,3 +141,72 @@ def test_ranker_assigns_action_posture_from_rank_signal():
     assert postures[0] == "Immediate Re-engagement"
     assert "Expansion Opportunity" in postures
     assert "Monitor" in postures
+
+
+def test_ranker_prefers_appointment_like_moves_over_departures_with_equal_leverage():
+    ranker = MovementRanker()
+
+    ranked = ranker.rank([
+        {
+            "movement": _movement(
+                "Known Departure",
+                movement_type="Departure",
+                new_role="Departed",
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+        },
+        {
+            "movement": _movement(
+                "Known Promotion",
+                movement_type="Promoted",
+                new_role="Chief Control Officer",
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+        },
+    ])
+
+    assert ranked[0]["movement"].person_name == "Known Promotion"
+    assert ranked[0]["rank_score"] > ranked[1]["rank_score"]
+
+
+def test_ranker_downgrades_departures_to_monitor_without_delivery_history():
+    ranker = MovementRanker()
+
+    ranked = ranker.rank([
+        {
+            "movement": _movement(
+                "Known Departure",
+                movement_type="Departure",
+                new_role="Departed",
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": "Owner",
+        },
+        {
+            "movement": _movement(
+                "Buyer Promotion",
+                movement_type="Promoted",
+                new_role="Head of Enterprise Operations",
+            ),
+            "known": False,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+        },
+    ])
+
+    by_name = {item["movement"].person_name: item for item in ranked}
+    assert by_name["Known Departure"]["action_posture"] == "Monitor"
+    assert by_name["Buyer Promotion"]["action_posture"] == "Expansion Opportunity"
