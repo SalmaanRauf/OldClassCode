@@ -137,6 +137,45 @@ def test_selector_prefers_exact_matches_then_falls_back_and_dedupes():
     ]
 
 
+def test_selector_dedupes_same_person_when_role_variants_repeat():
+    selector = MovementCredentialCandidateSelector()
+    ranked_rows = [
+        _ranked_row(
+            "Danielle M. McCoy",
+            new_role="Departed",
+            match_status="matched",
+            rank_score=9.0,
+            target_company="Fannie Mae",
+        ),
+        _ranked_row(
+            "Danielle M. McCoy",
+            new_role="N/A (Departed)",
+            match_status="matched",
+            rank_score=8.0,
+            target_company="Federal National Mortgage Association",
+        ),
+        _ranked_row(
+            "Jason Dandridge",
+            new_role="Chief Control Officer & Head of Enterprise Operations",
+            match_status="matched",
+            rank_score=7.0,
+        ),
+    ]
+
+    selected = selector.select(
+        request=_request(),
+        preflight=_preflight(),
+        ranked_rows=ranked_rows,
+        actioning_context={},
+        max_candidates=3,
+    )
+
+    assert [candidate.person_name for candidate in selected] == [
+        "Danielle M. McCoy",
+        "Jason Dandridge",
+    ]
+
+
 def test_selector_reserves_named_mover_when_visible_and_matched():
     selector = MovementCredentialCandidateSelector()
     ranked_rows = [

@@ -330,6 +330,90 @@ def test_assemble_brief_keeps_cover_summary_compact_when_deep_research_summary_i
     assert brief.signal_summary[0] == "Confirmed signals: Executive Movement."
 
 
+def test_assemble_brief_dedupes_same_person_across_visible_rows_and_actions():
+    assembler = MovementBriefAssembler()
+
+    ranked_rows = [
+        {
+            "movement": _movement(0).model_copy(
+                update={
+                    "person_name": "Danielle M. McCoy",
+                    "previous_role": "SVP & General Counsel",
+                    "new_role": "Departed",
+                    "movement_type": "Departure",
+                    "target_company": "Fannie Mae",
+                }
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+            "person_match_status": "matched",
+            "rank_score": 90,
+            "action_posture": "Expansion Opportunity",
+        },
+        {
+            "movement": _movement(1).model_copy(
+                update={
+                    "person_name": "Danielle M. McCoy",
+                    "previous_role": "Senior Vice President & General Counsel",
+                    "new_role": "N/A (Departed)",
+                    "movement_type": "Departure",
+                    "target_company": "Federal National Mortgage Association",
+                }
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+            "person_match_status": "matched",
+            "rank_score": 80,
+            "action_posture": "Expansion Opportunity",
+        },
+        {
+            "movement": _movement(2).model_copy(
+                update={
+                    "person_name": "Jason Dandridge",
+                    "previous_role": "SVP",
+                    "new_role": "Chief Control Officer & Head of Enterprise Operations",
+                    "movement_type": "Promotion & Role Expansion",
+                    "target_company": "Fannie Mae",
+                }
+            ),
+            "known": True,
+            "worked_with": False,
+            "project_count": 0,
+            "win_count": 0,
+            "relationship_owner": None,
+            "person_match_status": "matched",
+            "rank_score": 70,
+            "action_posture": "Expansion Opportunity",
+        },
+    ]
+
+    brief = assembler.assemble(
+        request=_request(),
+        preflight=_preflight(),
+        trigger=_trigger(),
+        deep_research_summary="Movement is active.",
+        signal_evidence=[],
+        ranked_rows=ranked_rows,
+        deep_enriched_rows=[],
+        credential_packets={},
+    )
+
+    assert [row.person_name for row in brief.movement_rows] == [
+        "Danielle M. McCoy",
+        "Jason Dandridge",
+    ]
+    assert [action.person_name for action in brief.where_to_act[:2]] == [
+        "Danielle M. McCoy",
+        "Jason Dandridge",
+    ]
+
+
 def test_assemble_brief_uses_transition_language_for_departure_actions():
     assembler = MovementBriefAssembler()
     departure_row = MovementRecord(

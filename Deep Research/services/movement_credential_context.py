@@ -75,12 +75,8 @@ class MovementCredentialCandidate:
     ranked_row: Optional[Dict[str, Any]] = None
 
     @property
-    def dedupe_key(self) -> Tuple[str, str, str]:
-        return (
-            _normalized_key(self.person_name),
-            _normalized_key(self.target_company),
-            _normalized_key(self.new_role),
-        )
+    def dedupe_key(self) -> str:
+        return _normalized_key(self.person_name)
 
 
 class MovementCredentialCandidateSelector:
@@ -100,7 +96,7 @@ class MovementCredentialCandidateSelector:
 
         ordered_rows = list(ranked_rows or [])
         selected: List[MovementCredentialCandidate] = []
-        seen: set[Tuple[str, str, str]] = set()
+        seen: set[str] = set()
 
         named_candidate = self._build_named_mover_candidate(
             request=request,

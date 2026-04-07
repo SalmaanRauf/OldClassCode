@@ -50,7 +50,7 @@ class MovementBriefAssembler:
         derived_opportunities: Optional[List[Any]] = None,
         credentials_lookup: Optional[Any] = None,
     ) -> MovementBrief:
-        ordered_rows = self._order_ranked_rows(ranked_rows)
+        ordered_rows = self._dedupe_ranked_rows(self._order_ranked_rows(ranked_rows))
         visible_rows = [
             self._attach_enrichment(item, credential_packets)
             for item in ordered_rows
@@ -103,6 +103,21 @@ class MovementBriefAssembler:
         if any("rank_score" in item for item in ranked_rows):
             return sorted(ranked_rows, key=lambda item: float(item.get("rank_score") or 0.0), reverse=True)
         return list(ranked_rows)
+
+    def _dedupe_ranked_rows(self, ranked_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if not ranked_rows:
+            return []
+
+        unique_rows: List[Dict[str, Any]] = []
+        seen_people: set[str] = set()
+        for item in ranked_rows:
+            movement = item.get("movement")
+            person_key = self._normalized_person_key(getattr(movement, "person_name", ""))
+            if not person_key or person_key in seen_people:
+                continue
+            seen_people.add(person_key)
+            unique_rows.append(item)
+        return unique_rows
 
     def _attach_enrichment(
         self,
@@ -333,6 +348,12 @@ class MovementBriefAssembler:
     @staticmethod
     def _normalized_text(value: Any) -> str:
         return re.sub(r"\s+", " ", str(value or "").strip())
+
+    @classmethod
+    def _normalized_person_key(cls, value: Any) -> str:
+        text = cls._normalized_text(value).lower()
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
 
     @staticmethod
     def _build_likely_play(
