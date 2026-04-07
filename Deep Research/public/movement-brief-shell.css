@@ -4,6 +4,11 @@ body:has(.movement-brief) main > div {
   max-width: none !important;
 }
 
+body:has(.movement-brief) .flex.flex-col.mx-auto.w-full.flex-grow.p-4:has(.movement-brief) {
+  width: 100% !important;
+  max-width: none !important;
+}
+
 .step:has(.movement-brief) > div {
   width: 100% !important;
   max-width: none !important;

@@ -216,7 +216,7 @@ const BRIEF_STYLES = `
   }
 
   .movement-brief__table-shell {
-    overflow-x: auto;
+    overflow-x: visible;
     border: 1px solid #e2d8ca;
     border-radius: 1rem;
     background: #ffffff;
@@ -224,8 +224,9 @@ const BRIEF_STYLES = `
 
   .movement-brief__table {
     width: 100%;
-    min-width: 58rem;
+    min-width: 0;
     border-collapse: collapse;
+    table-layout: fixed;
     text-align: left;
   }
 
@@ -235,26 +236,66 @@ const BRIEF_STYLES = `
 
   .movement-brief__table th,
   .movement-brief__table td {
-    padding: 0.95rem 1rem;
+    padding: 0.72rem 0.75rem;
     vertical-align: top;
     border-top: 1px solid #ece3d7;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .movement-brief__table thead th {
     border-top: none;
     color: #7a5a2e;
-    font-size: 0.72rem;
+    font-size: 0.64rem;
     font-weight: 700;
-    letter-spacing: 0.14em;
+    letter-spacing: 0.11em;
     text-transform: uppercase;
-    white-space: nowrap;
+    line-height: 1.35;
+    white-space: normal;
   }
 
   .movement-brief__table tbody th {
     color: #12263a;
-    font-size: 0.95rem;
+    font-size: 0.84rem;
     font-weight: 700;
+    line-height: 1.45;
   }
+
+  .movement-brief__table th:nth-child(1),
+  .movement-brief__table td:nth-child(1) { width: 7%; }
+
+  .movement-brief__table th:nth-child(2),
+  .movement-brief__table td:nth-child(2) { width: 10%; }
+
+  .movement-brief__table th:nth-child(3),
+  .movement-brief__table td:nth-child(3) { width: 11%; }
+
+  .movement-brief__table th:nth-child(4),
+  .movement-brief__table td:nth-child(4) { width: 10%; }
+
+  .movement-brief__table th:nth-child(5),
+  .movement-brief__table td:nth-child(5) { width: 11%; }
+
+  .movement-brief__table th:nth-child(6),
+  .movement-brief__table td:nth-child(6) { width: 5%; }
+
+  .movement-brief__table th:nth-child(7),
+  .movement-brief__table td:nth-child(7) { width: 6%; }
+
+  .movement-brief__table th:nth-child(8),
+  .movement-brief__table td:nth-child(8) { width: 7%; }
+
+  .movement-brief__table th:nth-child(9),
+  .movement-brief__table td:nth-child(9) { width: 4%; }
+
+  .movement-brief__table th:nth-child(10),
+  .movement-brief__table td:nth-child(10) { width: 9%; }
+
+  .movement-brief__table th:nth-child(11),
+  .movement-brief__table td:nth-child(11) { width: 11%; }
+
+  .movement-brief__table th:nth-child(12),
+  .movement-brief__table td:nth-child(12) { width: 10%; }
 
   .movement-brief__table-row--featured td,
   .movement-brief__table-row--featured th {
@@ -268,7 +309,7 @@ const BRIEF_STYLES = `
 
   .movement-brief__person-cell {
     display: grid;
-    gap: 0.45rem;
+    gap: 0.35rem;
   }
 
   .movement-brief__focus-chip {
@@ -280,17 +321,17 @@ const BRIEF_STYLES = `
     border: 1px solid #d8b15f;
     background: #fff3d6;
     color: #8a5a11;
-    padding: 0.22rem 0.65rem;
-    font-size: 0.72rem;
+    padding: 0.18rem 0.5rem;
+    font-size: 0.66rem;
     font-weight: 700;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.06em;
     text-transform: uppercase;
   }
 
   .movement-brief__table-cell {
     color: #334155;
-    font-size: 0.92rem;
-    line-height: 1.55;
+    font-size: 0.82rem;
+    line-height: 1.45;
   }
 
   .movement-brief__badge,
@@ -300,16 +341,21 @@ const BRIEF_STYLES = `
     align-items: center;
     justify-content: center;
     border-radius: 999px;
-    padding: 0.3rem 0.7rem;
-    font-size: 0.76rem;
+    padding: 0.18rem 0.42rem;
+    font-size: 0.62rem;
     font-weight: 700;
-    line-height: 1.1;
+    line-height: 1.2;
+    text-align: center;
   }
 
   .movement-brief__badge {
+    min-width: 4.75rem;
     text-transform: uppercase;
     letter-spacing: 0.12em;
     border: 1px solid transparent;
+    white-space: nowrap;
+    word-break: normal;
+    overflow-wrap: normal;
   }
 
   .movement-brief__badge--buyer {
@@ -354,14 +400,18 @@ const BRIEF_STYLES = `
   }
 
   .movement-brief__detail-button {
-    min-height: 2.75rem;
+    min-height: 2.2rem;
     border: 1px solid #ccb99c;
     border-radius: 999px;
     background: #ffffff;
     color: #24364a;
-    padding: 0.6rem 0.95rem;
-    font-size: 0.9rem;
+    width: 100%;
+    min-width: 0;
+    padding: 0.42rem 0.58rem;
+    font-size: 0.72rem;
     font-weight: 700;
+    line-height: 1.2;
+    white-space: normal;
     cursor: pointer;
   }
 
@@ -670,7 +720,7 @@ export default function MovementBrief() {
                                                                         aria-label={`${expanded ? "Hide" : "View"} detail for ${row.person_name}`}
                                                                         onClick={() => toggleExpanded(row.row_id)}
                                                                     >
-                                                                        {expanded ? "Hide detail" : "View detail"}
+                                                                        {expanded ? "Hide" : "Detail"}
                                                                     </button>
                                                                 </td>
                                                             </tr>
