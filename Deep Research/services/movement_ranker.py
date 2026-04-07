@@ -88,11 +88,6 @@ class MovementRanker:
         return score
 
     def _action_posture(self, item: Dict[str, Any], score: float) -> str:
-        movement = item["movement"]
-        if self._is_departure_like(movement):
-            if item.get("worked_with") and score >= 4.0:
-                return "Expansion Opportunity"
-            return "Monitor"
         if item.get("worked_with") and score >= 4.0:
             return "Immediate Re-engagement"
         if item.get("known") or score >= 2.0:
@@ -113,11 +108,6 @@ class MovementRanker:
         if any(marker in text for marker in cls._ACTING_MARKERS):
             return 0.6
         return 0.0
-
-    @classmethod
-    def _is_departure_like(cls, movement: Any) -> bool:
-        text = cls._movement_text(movement)
-        return any(marker in text for marker in cls._DEPARTURE_MARKERS)
 
     @staticmethod
     def _movement_text(movement: Any) -> str:
