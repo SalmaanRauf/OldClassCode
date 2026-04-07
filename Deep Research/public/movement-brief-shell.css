@@ -4,6 +4,11 @@ body:has(.movement-brief) main > div {
   max-width: none !important;
 }
 
+.step:has(.movement-brief) > div {
+  width: 100% !important;
+  max-width: none !important;
+}
+
 [data-step-type="assistant_message"]:has(.movement-brief).step,
 [data-step-type="assistant_message"]:has(.movement-brief).step > div,
 [data-step-type="assistant_message"]:has(.movement-brief) > .flex.flex-col {

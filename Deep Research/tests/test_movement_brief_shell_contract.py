@@ -22,6 +22,7 @@ def test_movement_brief_shell_avoids_viewport_width_overflow():
 
     assert "100vw" not in shell_css
     assert "body:has(.movement-brief) main" in shell_css
+    assert ".step:has(.movement-brief) > div" in shell_css
     assert "[data-step-type=\"assistant_message\"]:has(.movement-brief) .ai-message" in shell_css
     assert "width: 100% !important;" in shell_css
     assert "max-width: none !important;" in shell_css
