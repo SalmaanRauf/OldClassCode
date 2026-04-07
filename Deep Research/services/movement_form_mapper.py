@@ -293,7 +293,7 @@ def build_movement_user_query(request: MovementBriefRequest | Dict[str, Any]) ->
         ),
         "Bias non-movement findings toward explaining why the account matters now.",
         "Preserve source-backed movement evidence suitable for a movement-led account brief.",
-        "Try to preserve roughly 10-14 total movers across executive and buyer inventories when the evidence supports that many.",
+        "Try to preserve roughly 15-18 total movers across executive and buyer inventories when the evidence supports that many.",
         "Prioritize active appointments, external hires, promotions, and scope expansions over departures when deciding which movers deserve inclusion.",
         "Keep materially relevant departures when they create a vacancy, successor decision, governance gap, or backfill opportunity, but sort them after active appointments and promotions when commercial value is comparable.",
         "Prefer a balanced movement inventory over an executive-heavy list, and keep pushing buyer-center discovery before padding with lower-value executive departures.",

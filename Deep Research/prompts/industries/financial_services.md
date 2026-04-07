@@ -73,7 +73,7 @@ When the user requests research on any of the following signals, apply the corre
 - When acquisitions/subsidiaries are in-scope, include governance and leadership integration movements when evidenced
 - Preserve all material movement evidence discovered (including lower-confidence but valid sources) in research notes; prioritize top sources later during synthesis/presentation
 - Aim to identify roughly the top 8-10 commercially relevant executive movers when the evidence supports them
-- Preserve roughly 10-14 total movers across the executive and buyer inventories when the evidence supports that many, with a balanced mix instead of a one-sided executive list
+- Preserve roughly 15-18 total movers across the executive and buyer inventories when the evidence supports that many, with a balanced mix instead of a one-sided executive list
 - Do not stop after finding only a few examples; continue until the major executive and board leadership lanes have been checked
 - Prioritize active appointments, external hires, promotions, and real scope expansions over departures when selecting executive movers for the final report
 - Keep materially relevant departures, resignations, and terminations when they create an immediate successor decision, governance gap, or backfill opportunity, but sort them after active appointments/promotions when commercial value is comparable
@@ -230,8 +230,8 @@ When people movement signals are requested, keep the final signal summary concis
 - Prefer active appointments, promotions, external hires, and scope expansions over pure departures
 
 ### Movement Inventory Balance
-- Aim for a balanced total movement inventory, usually around 10-14 rows across executive and buyer movers when supported by evidence
-- If fewer than 10 total movers are found, spend more effort on targeted buyer-center title searches before finalizing the report
+- Aim for a balanced total movement inventory, usually around 15-18 rows across executive and buyer movers when supported by evidence
+- If fewer than 15 total movers are found, spend more effort on targeted buyer-center title searches before finalizing the report
 
 ### Opportunity Details
 - Institution profile (assets, business lines, complexity)

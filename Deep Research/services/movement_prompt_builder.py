@@ -18,7 +18,7 @@ NAMED_MOVE_OVERLAY = """
 - Bias findings toward signals that explain why the account matters now, while preserving broader account-signal coverage.
 - Preserve source-backed movement evidence that can later feed the leverage table.
 - Aim to surface roughly the top 8-10 commercially relevant executive movers and the top 8-10 commercially relevant buyer movers when the evidence supports them. Do not pad the list if evidence is weak.
-- Try to preserve roughly 10-14 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement instead of a heavily one-sided list.
+- Try to preserve roughly 15-18 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement instead of a heavily one-sided list.
 - Prioritize active appointments, external hires, promotions, and scope-expansion moves over departures when deciding which movers deserve space in the final report.
 - Keep materially relevant departures, resignations, and terminations when they create a vacancy, successor decision, governance gap, or backfill opportunity at the destination account, but sort them after active appointments/promotions when commercial value is comparable.
 - Do not stop after finding only a few examples. Continue until the destination account has been checked across audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers.
@@ -85,7 +85,7 @@ class MovementPromptBuilder:
             "Aim to identify roughly the top 8-10 high-value executive movers and the top 8-10 high-value buyer movers, but do not pad the list when evidence is weak."
         )
         lines.append(
-            "Try to preserve roughly 10-14 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement."
+            "Try to preserve roughly 15-18 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement."
         )
         lines.append(
             "Prioritize active appointments, external hires, promotions, and scope expansions over departures when deciding which movers deserve inclusion."
