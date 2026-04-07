@@ -1,3 +1,9 @@
+body:has(.movement-brief) main,
+body:has(.movement-brief) main > div {
+  width: 100% !important;
+  max-width: none !important;
+}
+
 [data-step-type="assistant_message"]:has(.movement-brief).step,
 [data-step-type="assistant_message"]:has(.movement-brief).step > div,
 [data-step-type="assistant_message"]:has(.movement-brief) > .flex.flex-col {
@@ -8,9 +14,9 @@
 
 [data-step-type="assistant_message"]:has(.movement-brief) .ai-message {
   display: block !important;
-  width: min(96rem, 100%) !important;
-  max-width: min(96rem, 100%) !important;
-  margin: 0 auto !important;
+  width: 100% !important;
+  max-width: none !important;
+  margin: 0 !important;
   gap: 0 !important;
 }
 

@@ -3,9 +3,9 @@ import React, { useState } from "react";
 const BRIEF_STYLES = `
   .movement-brief {
     width: 100%;
-    max-width: min(94rem, 100%);
+    max-width: none;
     margin: 0 auto;
-    padding: 0 clamp(0.25rem, 1vw, 0.75rem);
+    padding: 0 clamp(0.15rem, 0.7vw, 0.5rem);
     min-width: 0;
     color: #1f2937;
     font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
@@ -224,7 +224,7 @@ const BRIEF_STYLES = `
 
   .movement-brief__table {
     width: 100%;
-    min-width: 72rem;
+    min-width: 58rem;
     border-collapse: collapse;
     text-align: left;
   }
