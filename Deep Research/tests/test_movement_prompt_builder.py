@@ -139,6 +139,10 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
     assert "People Movement Account Overlay" in package.system_prompt
     assert "buyer movement" in package.system_prompt.lower()
     assert "destination account" in package.system_prompt.lower()
+    assert "top 8-10 commercially relevant executive movers" in package.system_prompt.lower()
+    assert "audit, finance, risk, compliance, legal, technology, security, data/ai" in package.system_prompt.lower()
+    assert "executive movement inventory" in package.system_prompt.lower()
+    assert "buyer movement inventory" in package.system_prompt.lower()
 
 
 def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
@@ -155,6 +159,9 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     assert "buyer movement" in package.user_prompt.lower()
     assert "why the account matters now" in package.user_prompt.lower()
     assert "source-backed movement evidence" in package.user_prompt.lower()
+    assert "top 8-10 high-value executive movers" in package.user_prompt.lower()
+    assert "top 8-10 high-value buyer movers" in package.user_prompt.lower()
+    assert "do not stop after finding only a few names" in package.user_prompt.lower()
     assert "Jennifer Brady" not in package.user_prompt
     assert "Capital One" not in package.user_prompt
     assert "Chief Information Officer" not in package.user_prompt

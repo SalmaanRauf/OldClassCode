@@ -28,5 +28,16 @@ def test_financial_services_prompt_keeps_broad_signal_coverage_but_biases_to_mov
     content = _read_prompt()
 
     assert "Conduct comprehensive research on Financial Services opportunities." in content
-    assert "keep the signal summary concise and oriented to why the people movement matters" in content
+    assert "final signal summary concise and oriented to why the people movement matters" in content
     assert "bias coverage toward signals that explain why the movement matters now" in content
+
+
+def test_financial_services_prompt_requires_high_value_movement_inventory():
+    content = _read_prompt()
+    lowered = content.lower()
+
+    assert "top 8-10 commercially relevant executive movers" in lowered
+    assert "top 8-10 commercially relevant buyer movers" in lowered
+    assert "Executive Movement Inventory" in content
+    assert "Buyer Movement Inventory" in content
+    assert "do not stop after finding only a few examples" in lowered
