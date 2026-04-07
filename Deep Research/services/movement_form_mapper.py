@@ -293,9 +293,11 @@ def build_movement_user_query(request: MovementBriefRequest | Dict[str, Any]) ->
         ),
         "Bias non-movement findings toward explaining why the account matters now.",
         "Preserve source-backed movement evidence suitable for a movement-led account brief.",
+        "Try to preserve roughly 10-14 total movers across executive and buyer inventories when the evidence supports that many.",
         "Prioritize active appointments, external hires, promotions, and scope expansions over departures when deciding which movers deserve inclusion.",
-        "Treat departures, resignations, and terminations as secondary unless they clearly create an immediate vacancy, successor decision, governance gap, or backfill opportunity.",
+        "Keep materially relevant departures when they create a vacancy, successor decision, governance gap, or backfill opportunity, but sort them after active appointments and promotions when commercial value is comparable.",
         "Prefer a balanced movement inventory over an executive-heavy list, and keep pushing buyer-center discovery before padding with lower-value executive departures.",
+        "If buyer recall is thin, expand title-family searches for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, CIO, CISO, Chief Data or AI leaders, Enterprise Operations leaders, and Single-Family or Multifamily business leaders.",
     ]
     if movement_request.geography:
         parts.append(f"Geography: {movement_request.geography}.")

@@ -145,6 +145,8 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
     assert "buyer movement inventory" in package.system_prompt.lower()
     assert "prioritize active appointments, external hires, promotions, and scope-expansion moves" in package.system_prompt.lower()
     assert "prefer a balanced movement inventory over an executive-heavy list" in package.system_prompt.lower()
+    assert "roughly 10-14 total movers" in package.system_prompt.lower()
+    assert "general counsel, deputy general counsel, corporate secretary" in package.system_prompt.lower()
 
 
 def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
@@ -166,6 +168,8 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     assert "do not stop after finding only a few names" in package.user_prompt.lower()
     assert "prioritize active appointments, external hires, promotions, and scope expansions over departures" in package.user_prompt.lower()
     assert "prefer a balanced movement inventory over an executive-heavy list" in package.user_prompt.lower()
+    assert "roughly 10-14 total movers" in package.user_prompt.lower()
+    assert "general counsel, deputy general counsel, corporate secretary" in package.user_prompt.lower()
     assert "Jennifer Brady" not in package.user_prompt
     assert "Capital One" not in package.user_prompt
     assert "Chief Information Officer" not in package.user_prompt

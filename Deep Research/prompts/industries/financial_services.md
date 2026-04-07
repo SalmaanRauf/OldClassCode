@@ -73,9 +73,10 @@ When the user requests research on any of the following signals, apply the corre
 - When acquisitions/subsidiaries are in-scope, include governance and leadership integration movements when evidenced
 - Preserve all material movement evidence discovered (including lower-confidence but valid sources) in research notes; prioritize top sources later during synthesis/presentation
 - Aim to identify roughly the top 8-10 commercially relevant executive movers when the evidence supports them
+- Preserve roughly 10-14 total movers across the executive and buyer inventories when the evidence supports that many, with a balanced mix instead of a one-sided executive list
 - Do not stop after finding only a few examples; continue until the major executive and board leadership lanes have been checked
 - Prioritize active appointments, external hires, promotions, and real scope expansions over departures when selecting executive movers for the final report
-- Treat departures, resignations, and terminations as secondary unless they clearly create an immediate successor decision, governance gap, or backfill opportunity
+- Keep materially relevant departures, resignations, and terminations when they create an immediate successor decision, governance gap, or backfill opportunity, but sort them after active appointments/promotions when commercial value is comparable
 - Do not let lower-value executive departures crowd out buyer movement coverage when stronger buyer-side appointments or promotions exist
 
 ---
@@ -97,6 +98,7 @@ When the user requests research on any of the following signals, apply the corre
 - Prioritize appointments, promotions, external hires, and scope-expansion moves that clearly increase budget, control scope, operating authority, or program ownership
 - Prefer a balanced inventory over an executive-heavy list; if buyer movement is still thin, keep searching buyer centers before filling space with weaker executive departures
 - Pure departures belong in the buyer inventory only when they create a clear transition window, successor search, or backfill opportunity
+- If buyer recall is thin, expand title-family coverage and explicitly search for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, and Single-Family/Multifamily business leaders at the target account
 
 ---
 
@@ -226,6 +228,10 @@ When people movement signals are requested, keep the final signal summary concis
 - For each mover, include: name, new role, move type, why it matters, and source
 - Do not pad the list if evidence is weak
 - Prefer active appointments, promotions, external hires, and scope expansions over pure departures
+
+### Movement Inventory Balance
+- Aim for a balanced total movement inventory, usually around 10-14 rows across executive and buyer movers when supported by evidence
+- If fewer than 10 total movers are found, spend more effort on targeted buyer-center title searches before finalizing the report
 
 ### Opportunity Details
 - Institution profile (assets, business lines, complexity)

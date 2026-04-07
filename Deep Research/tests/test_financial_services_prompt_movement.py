@@ -43,3 +43,5 @@ def test_financial_services_prompt_requires_high_value_movement_inventory():
     assert "do not stop after finding only a few examples" in lowered
     assert "prioritize active appointments, external hires, promotions, and real scope expansions over departures" in lowered
     assert "prefer a balanced inventory over an executive-heavy list" in lowered
+    assert "roughly 10-14 total movers" in lowered
+    assert "general counsel, deputy general counsel, corporate secretary" in lowered

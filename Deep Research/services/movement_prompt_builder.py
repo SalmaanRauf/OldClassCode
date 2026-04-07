@@ -18,10 +18,12 @@ NAMED_MOVE_OVERLAY = """
 - Bias findings toward signals that explain why the account matters now, while preserving broader account-signal coverage.
 - Preserve source-backed movement evidence that can later feed the leverage table.
 - Aim to surface roughly the top 8-10 commercially relevant executive movers and the top 8-10 commercially relevant buyer movers when the evidence supports them. Do not pad the list if evidence is weak.
+- Try to preserve roughly 10-14 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement instead of a heavily one-sided list.
 - Prioritize active appointments, external hires, promotions, and scope-expansion moves over departures when deciding which movers deserve space in the final report.
-- Treat departures, resignations, and terminations as secondary unless they clearly create an immediate vacancy, successor decision, governance gap, or backfill opportunity at the destination account.
+- Keep materially relevant departures, resignations, and terminations when they create a vacancy, successor decision, governance gap, or backfill opportunity at the destination account, but sort them after active appointments/promotions when commercial value is comparable.
 - Do not stop after finding only a few examples. Continue until the destination account has been checked across audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers.
 - Prefer a balanced movement inventory over an executive-heavy list. If buyer movement is materially thinner than executive movement, keep spending search effort on buyer-center discovery instead of padding the report with lower-value executive departures.
+- Use title-family search expansion when buyer recall is thin. Explicitly search for and preserve moves involving General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, Chief Information Officer, Chief Information Security Officer, Chief Data/AI leaders, Enterprise Operations leaders, and Single-Family/Multifamily business leaders when they are tied to the destination account.
 - Preserve compact Executive Movement Inventory and Buyer Movement Inventory sections in the final report with one line per mover covering name, new role, move type, why it matters, and source.
 """.strip()
 
@@ -83,16 +85,22 @@ class MovementPromptBuilder:
             "Aim to identify roughly the top 8-10 high-value executive movers and the top 8-10 high-value buyer movers, but do not pad the list when evidence is weak."
         )
         lines.append(
+            "Try to preserve roughly 10-14 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement."
+        )
+        lines.append(
             "Prioritize active appointments, external hires, promotions, and scope expansions over departures when deciding which movers deserve inclusion."
         )
         lines.append(
-            "Treat departures, resignations, and terminations as secondary unless they clearly create an immediate vacancy, successor decision, governance gap, or backfill opportunity."
+            "Keep materially relevant departures, resignations, and terminations when they create a vacancy, successor decision, governance gap, or backfill opportunity, but sort them after active appointments and promotions when commercial value is comparable."
         )
         lines.append(
             "Do not stop after finding only a few names. Check audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers."
         )
         lines.append(
             "Prefer a balanced movement inventory over an executive-heavy list. If buyer movement is materially thinner than executive movement, keep pushing buyer-center discovery instead of padding with lower-value executive departures."
+        )
+        lines.append(
+            "If buyer recall is thin, expand title-family searches for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, and Single-Family or Multifamily business leaders."
         )
         lines.append(
             "Include compact Executive Movement Inventory and Buyer Movement Inventory sections in the report with name, new role, move type, why it matters, and source."
