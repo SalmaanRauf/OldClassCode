@@ -200,7 +200,7 @@ class MovementBriefAssembler:
 
         project_bits = []
         if project_count or win_count:
-            project_bits.append(f"{project_count} projects")
+            project_bits.append(f"{project_count} current projects")
             project_bits.append(f"{win_count} wins")
         project_suffix = f" ({', '.join(project_bits)})" if project_bits else ""
 

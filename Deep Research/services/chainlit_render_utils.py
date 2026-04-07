@@ -64,7 +64,7 @@ def build_movement_brief_fallback_markdown(payload: Dict[str, Any]) -> str:
             projects = row.get("project_count") or 0
             wins = row.get("win_count") or 0
             if isinstance(projects, int) and projects > 0:
-                leverage_bits.append(f"{projects} projects")
+                leverage_bits.append(f"{projects} current projects")
             if isinstance(wins, int) and wins > 0:
                 leverage_bits.append(f"{wins} wins")
             leverage_text = f" | leverage: {', '.join(leverage_bits)}" if leverage_bits else ""

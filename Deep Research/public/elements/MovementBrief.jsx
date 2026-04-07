@@ -24,6 +24,7 @@ const BRIEF_STYLES = `
     border-radius: 1.5rem;
     box-shadow: 0 18px 48px rgba(15, 23, 42, 0.08);
     padding: clamp(1rem, 2vw, 1.75rem);
+    overflow: clip;
   }
 
   .movement-brief__header,
@@ -255,6 +256,37 @@ const BRIEF_STYLES = `
     font-weight: 700;
   }
 
+  .movement-brief__table-row--featured td,
+  .movement-brief__table-row--featured th {
+    background: linear-gradient(90deg, rgba(245, 238, 226, 0.98), rgba(255, 250, 241, 0.98));
+  }
+
+  .movement-brief__table-row--featured td:first-child,
+  .movement-brief__table-row--featured th:first-of-type {
+    box-shadow: inset 0.3rem 0 0 #c78f2d;
+  }
+
+  .movement-brief__person-cell {
+    display: grid;
+    gap: 0.45rem;
+  }
+
+  .movement-brief__focus-chip {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: fit-content;
+    border-radius: 999px;
+    border: 1px solid #d8b15f;
+    background: #fff3d6;
+    color: #8a5a11;
+    padding: 0.22rem 0.65rem;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+
   .movement-brief__table-cell {
     color: #334155;
     font-size: 0.92rem;
@@ -374,6 +406,12 @@ const BRIEF_STYLES = `
 
   .movement-brief__mobile-row-subtitle {
     margin: 0.5rem 0 0 0;
+  }
+
+  .movement-brief__mobile-row--featured {
+    border-color: #d8b15f;
+    box-shadow: inset 0.28rem 0 0 #c78f2d;
+    background: linear-gradient(90deg, rgba(245, 238, 226, 0.98), rgba(255, 250, 241, 0.98));
   }
 
   .movement-brief__mobile-metrics {
@@ -600,11 +638,18 @@ export default function MovementBrief() {
                                                     const expanded = expandedRowId === row.row_id;
                                                     return (
                                                         <React.Fragment key={row.row_id}>
-                                                            <tr>
+                                                            <tr className={row.is_focus_move ? "movement-brief__table-row--featured" : undefined}>
                                                                 <td>
                                                                     <span className={badgeVariant(row.signal)}>{row.signal}</span>
                                                                 </td>
-                                                                <th scope="row">{row.person_name}</th>
+                                                                <th scope="row">
+                                                                    <div className="movement-brief__person-cell">
+                                                                        <span>{row.person_name}</span>
+                                                                        {row.is_focus_move ? (
+                                                                            <span className="movement-brief__focus-chip">Focus move</span>
+                                                                        ) : null}
+                                                                    </div>
+                                                                </th>
                                                                 <td className="movement-brief__table-cell">{row.previous_role}</td>
                                                                 <td className="movement-brief__table-cell">{row.new_role}</td>
                                                                 <td className="movement-brief__table-cell">{row.movement_type}</td>
@@ -639,8 +684,8 @@ export default function MovementBrief() {
                                                                                 value={detail.source_title || detail.source_url}
                                                                                 link={detail.source_url}
                                                                             />
-                                                                            {detail.source_marker ? (
-                                                                                <DetailBlock label="Source marker" value={detail.source_marker} />
+                                                                            {Array.isArray(detail.internal_connections) && detail.internal_connections.length ? (
+                                                                                <DetailBlock label="Internal connections" value={renderInternalConnections(detail)} />
                                                                             ) : null}
                                                                             <DetailBlock label="Relationship leverage" value={renderLeverage(detail)} />
                                                                             <DetailBlock label="Credential proof" value={renderCredentialSummary(detail)} />
@@ -667,11 +712,19 @@ export default function MovementBrief() {
                                         const detail = detailsById[row.row_id] || {};
                                         const expanded = expandedRowId === row.row_id;
                                         return (
-                                            <article key={row.row_id} className="movement-brief__mobile-row">
+                                            <article
+                                                key={row.row_id}
+                                                className={`movement-brief__mobile-row${row.is_focus_move ? " movement-brief__mobile-row--featured" : ""}`}
+                                            >
                                                 <div className="movement-brief__mobile-row-top">
                                                     <div>
                                                         <span className={badgeVariant(row.signal)}>{row.signal}</span>
                                                         <h3 className="movement-brief__mobile-row-title">{row.person_name}</h3>
+                                                        {row.is_focus_move ? (
+                                                            <div style={{ marginTop: "0.45rem" }}>
+                                                                <span className="movement-brief__focus-chip">Focus move</span>
+                                                            </div>
+                                                        ) : null}
                                                         <p className="movement-brief__mobile-row-subtitle">{row.new_role}</p>
                                                     </div>
                                                     <button
@@ -689,7 +742,7 @@ export default function MovementBrief() {
                                                 <div className="movement-brief__mobile-metrics">
                                                     <Definition label="Known" value={row.known ? "Yes" : "No"} />
                                                     <Definition label="Worked With" value={row.worked_with ? "Yes" : "No"} />
-                                                    <Definition label="Projects" value={row.project_count} />
+                                                    <Definition label="Current Projects" value={row.project_count} />
                                                     <Definition label="Wins" value={row.win_count} />
                                                 </div>
 
@@ -704,8 +757,8 @@ export default function MovementBrief() {
                                                             link={detail.source_url}
                                                             compact
                                                         />
-                                                        {detail.source_marker ? (
-                                                            <DetailBlock label="Source marker" value={detail.source_marker} compact />
+                                                        {Array.isArray(detail.internal_connections) && detail.internal_connections.length ? (
+                                                            <DetailBlock label="Internal connections" value={renderInternalConnections(detail)} compact />
                                                         ) : null}
                                                         <DetailBlock label="Leverage" value={renderLeverage(detail)} compact />
                                                         <DetailBlock label="Credential proof" value={renderCredentialSummary(detail)} compact />
@@ -851,7 +904,7 @@ function renderLeverage(detail) {
         pieces.push(`Worked with: ${detail.worked_with ? "Yes" : "No"}`);
     }
     if (detail.project_count !== undefined || detail.win_count !== undefined) {
-        pieces.push(`Projects: ${detail.project_count || 0} | Wins: ${detail.win_count || 0}`);
+        pieces.push(`Current Projects: ${detail.project_count || 0} | Wins: ${detail.win_count || 0}`);
     }
     if (detail.relationship_owner) {
         pieces.push(`Relationship owner: ${detail.relationship_owner}`);
@@ -860,6 +913,14 @@ function renderLeverage(detail) {
         pieces.push(`Match: ${detail.person_match_status}`);
     }
     return pieces.join("\n");
+}
+
+function renderInternalConnections(detail) {
+    const connections = Array.isArray(detail.internal_connections) ? detail.internal_connections.slice(0, 3) : [];
+    if (!connections.length) {
+        return "—";
+    }
+    return connections.join("\n");
 }
 
 function renderCredentialSummary(detail) {

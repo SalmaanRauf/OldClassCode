@@ -30,7 +30,7 @@ MOVEMENT_TABLE_COLUMNS = [
     "Movement Type",
     "Known",
     "Worked With",
-    "# Projects",
+    "# Current Projects",
     "# Wins",
     "Relationship Owner",
     "Action",
@@ -274,6 +274,7 @@ def _build_row_payload(
         "detail_id": row_id,
         "has_credential_proof": bool(credential_proof and credential_proof.lookup_status != "No Match"),
         "has_person_detail": False,
+        "is_focus_move": row.company_context == "scenario",
     }
 
 
@@ -298,13 +299,16 @@ def _build_row_detail(
     if person_detail:
         row_payload["has_person_detail"] = True
 
+    internal_connections = _normalize_name_list(person_detail.get("internal_connections"))
+    if internal_connections:
+        person_detail = {key: value for key, value in person_detail.items() if key != "internal_connections"}
+
     return {
         "row_id": row_id,
         "signal": row_payload["signal"],
         "evidence_quote": _normalize_text(row.evidence.evidence_quote),
         "source_url": _public_source_url(row.evidence.source_url),
         "source_title": _normalize_text(row.evidence.source_title or "") or None,
-        "source_marker": _normalize_text(row.evidence.source_marker or "") or None,
         "corroborated": row.evidence.corroborated,
         "confidence_label": row.evidence.confidence_label,
         "known": row_payload["known"],
@@ -313,6 +317,7 @@ def _build_row_detail(
         "win_count": row_payload["win_count"],
         "relationship_owner": row_payload["relationship_owner"],
         "person_match_status": row_payload["person_match_status"],
+        "internal_connections": internal_connections,
         "credential_summary": _normalize_text(credential_summary),
         "lookup_status": lookup_status,
         "matched_credentials": matched_credentials,
@@ -563,6 +568,18 @@ def _build_named_mover_detail(
         "claim_policy_note": _normalize_text(person_profile.get("claim_policy_note")),
     }
     person_detail = {key: value for key, value in person_detail.items() if value}
+    scope_context = _clean_dict(named_mover_context.get("from_company_context"))
+    match_scope = _normalize_text(preflight.person_resolution.match_scope if preflight else "").lower()
+    if match_scope == "to":
+        scope_context = _clean_dict(named_mover_context.get("to_company_context"))
+    relationship_network = _clean_dict(scope_context.get("relationship_network"))
+    internal_connections = _normalize_name_list(
+        [
+            item.get("name")
+            for item in _clean_list(_clean_dict(relationship_network.get("connected_colleagues")).get("items"))
+            if isinstance(item, dict)
+        ]
+    )
 
     return {
         "row_id": row_id,
@@ -570,7 +587,6 @@ def _build_named_mover_detail(
         "evidence_quote": _normalize_text(row.evidence.evidence_quote),
         "source_url": None,
         "source_title": _normalize_text(row.evidence.source_title or "") or None,
-        "source_marker": _normalize_text(row.evidence.source_marker or "") or None,
         "corroborated": False,
         "confidence_label": row.evidence.confidence_label,
         "known": row_payload["known"],
@@ -579,6 +595,7 @@ def _build_named_mover_detail(
         "win_count": row_payload["win_count"],
         "relationship_owner": row_payload["relationship_owner"],
         "person_match_status": row_payload["person_match_status"],
+        "internal_connections": internal_connections,
         "credential_summary": _normalize_text(proof.summary if proof else ""),
         "lookup_status": proof.lookup_status if proof else "",
         "matched_credentials": _serialize_matched_credentials(proof) if proof else [],
@@ -643,6 +660,18 @@ def _clean_dict(value: Any) -> Dict[str, Any]:
 
 def _clean_list(value: Any) -> List[Any]:
     return value if isinstance(value, list) else []
+
+
+def _normalize_name_list(value: Any, *, limit: int = 3) -> List[str]:
+    items = value if isinstance(value, list) else []
+    normalized: List[str] = []
+    for item in items:
+        text = _normalize_text(item)
+        if text and text not in normalized:
+            normalized.append(text)
+        if len(normalized) >= limit:
+            break
+    return normalized
 
 
 def _normalize_action_context(value: Any) -> Dict[str, Any]:

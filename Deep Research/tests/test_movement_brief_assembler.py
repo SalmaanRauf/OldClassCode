@@ -167,7 +167,7 @@ def test_assemble_brief_keeps_all_ranked_rows_and_attaches_proof_packets():
     assert len(brief.where_to_act) == 3
     assert brief.where_to_act[0].person_name == "Person 0"
     assert brief.where_to_act[0].action_posture == "Immediate Re-engagement"
-    assert "0 projects, 2 wins" in brief.where_to_act[0].likely_play
+    assert "0 current projects, 2 wins" in brief.where_to_act[0].likely_play
     assert brief.where_to_act[0].relationship_owner == "Ben L"
     assert "Relationship owner: Ben L." in brief.where_to_act[0].why_now
     assert "Leverage: known in ProConnect, delivery history." in brief.where_to_act[0].why_now

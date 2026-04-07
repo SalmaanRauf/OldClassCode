@@ -243,7 +243,15 @@ def build_movement_person_details_by_name(result: Any) -> Dict[str, Dict[str, An
         detail = entry.get("person_detail")
         if not person_name or not isinstance(detail, dict):
             continue
-        cleaned = {str(key): value for key, value in detail.items() if _normalize_text(value)}
+        cleaned: Dict[str, Any] = {}
+        for key, value in detail.items():
+            if isinstance(value, list):
+                normalized_items = [_normalize_text(item) for item in value if _normalize_text(item)]
+                if normalized_items:
+                    cleaned[str(key)] = normalized_items
+                continue
+            if _normalize_text(value):
+                cleaned[str(key)] = value
         if cleaned:
             details[person_name] = cleaned
     return details
@@ -608,7 +616,7 @@ def _format_movement_evidence(result: Any) -> str:
                 leverage_bits.append("known in ProConnect")
             if getattr(leverage, "worked_with", False):
                 leverage_bits.append(
-                    f"worked with ({getattr(leverage, 'project_count', 0)} projects, {getattr(leverage, 'win_count', 0)} wins)"
+                    f"worked with ({getattr(leverage, 'project_count', 0)} current projects, {getattr(leverage, 'win_count', 0)} wins)"
                 )
             owner = _normalize_text(getattr(leverage, "relationship_owner", "") or "")
             if owner:

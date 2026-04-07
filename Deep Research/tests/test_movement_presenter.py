@@ -281,6 +281,7 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
                 "title": "Chief Risk Officer",
                 "location": "New York",
                 "linkedin_url": "https://linkedin.com/in/person-1",
+                "internal_connections": ["Ben L.", "Dana R.", "Morgan T."],
             }
         },
         row_action_context_by_row_id={
@@ -298,6 +299,7 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
     )
 
     assert payload["table_columns"] == MOVEMENT_TABLE_COLUMNS
+    assert MOVEMENT_TABLE_COLUMNS[7] == "# Current Projects"
     assert len(payload["movement_rows"]) == 12
     assert len(payload["where_to_act"]) == 3
     assert payload["stats"]["visible_rows"] == 12
@@ -341,7 +343,8 @@ def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_de
     assert detail["evidence_quote"] == "Person 1 moved into a new role."
     assert detail["source_url"] == "https://example.com/1"
     assert detail["source_title"] == "Source 1"
-    assert detail["source_marker"] == "S1"
+    assert "source_marker" not in detail
+    assert detail["internal_connections"] == ["Ben L.", "Dana R.", "Morgan T."]
     assert detail["credential_summary"] == "Existing delivery with adjacent control team."
     assert detail["lookup_status"] == "Matched"
     assert detail["matched_credentials"] == [
@@ -446,12 +449,14 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
     assert payload["movement_rows"][0]["win_count"] == 2
     assert payload["movement_rows"][0]["relationship_owner"] == "Bernadette Norrington"
     assert payload["movement_rows"][0]["has_credential_proof"] is True
+    assert payload["movement_rows"][0]["is_focus_move"] is True
 
     detail = payload["row_details_by_id"]["movement-row-1"]
     assert detail["source_title"] == "Scenario input + ProConnect preflight"
     assert detail["source_url"] is None
     assert detail["person_detail"]["match_scope"] == "from"
     assert detail["lookup_status"] == "Matched"
+    assert detail["internal_connections"] == ["Bernadette Norrington"]
     assert detail["matched_credentials"][0]["why_relevant"] == (
         "Fits a new FS technology leader focused on controls modernization."
     )

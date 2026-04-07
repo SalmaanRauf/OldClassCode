@@ -6,6 +6,7 @@ name = "Company Intelligence Briefing System"
 description = "Up-to-date company briefings with grounded citations"
 layout = "wide"
 cot = "hidden"
+custom_css = "/public/movement-brief-shell.css"
 
 [meta]
 generated_by = "2.6.2"

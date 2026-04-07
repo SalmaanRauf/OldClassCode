@@ -691,7 +691,19 @@ class ProConnectMovementService:
             "title": str(payload.get("titleExternal") or payload.get("title") or "").strip(),
             "location": str(payload.get("location") or "").strip(),
             "linkedin_url": str(payload.get("linkedinUrl") or payload.get("linkedInUrl") or "").strip(),
+            "internal_connections": ProConnectMovementService._internal_connection_names(payload),
         }
+
+    @classmethod
+    def _internal_connection_names(cls, payload: Dict[str, Any], *, limit: int = 3) -> List[str]:
+        names: List[str] = []
+        for key in ("connections", "connectedColleagues", "connectedColleague"):
+            for name in cls._list_names(payload.get(key), limit=limit):
+                if name not in names:
+                    names.append(name)
+                if len(names) >= limit:
+                    return names
+        return names
 
     @staticmethod
     def _list_names(value: Any, *, limit: int = 6) -> List[str]:
