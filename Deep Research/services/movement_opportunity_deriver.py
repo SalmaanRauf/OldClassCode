@@ -126,9 +126,11 @@ class MovementOpportunityDeriver:
         selection_reason: str,
     ) -> str:
         return (
-            f"Identify the most relevant Protiviti credentials for engaging {person_name} in the "
-            f"{role_scope} role at {target_company}. Prioritize industry-aligned work that maps to the "
-            f"buyer's likely first-year agenda and near-term buying needs. Selection context: {selection_reason}"
+            f"Identify the most relevant Protiviti credentials for engaging {person_name} as a leader who has "
+            f"recently stepped into the {role_scope} role at {target_company}. Prioritize industry-aligned work "
+            f"that helps newly promoted or hired leaders handle expanded responsibilities, first-year transition "
+            f"challenges, and near-term buying needs in complex operating environments. Selection context: "
+            f"{selection_reason}"
         )
 
     @staticmethod

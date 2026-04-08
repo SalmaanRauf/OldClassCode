@@ -89,8 +89,23 @@ class CredentialSearchContext(BaseModel):
     industry: str = Field("", description="Normalized industry context")
     subindustry: str = Field("", description="More specific subindustry context when known")
     role_family: str = Field("", description="Normalized role-family classification")
+    transition_type: str = Field("", description="Transition type, e.g. internal promotion or external hire")
+    previous_company: str = Field("", description="Prior employer or internal source company when known")
+    previous_role: str = Field("", description="Previous role held before the transition")
     buyer_priorities: List[str] = Field(default_factory=list, description="Likely buyer priorities")
     likely_client_needs: List[str] = Field(default_factory=list, description="Likely client needs")
+    expanded_responsibilities: List[str] = Field(
+        default_factory=list,
+        description="Likely expanded responsibilities created by the new role",
+    )
+    new_role_challenges: List[str] = Field(
+        default_factory=list,
+        description="Likely first-year challenges tied to the transition",
+    )
+    transition_environment: str = Field(
+        "",
+        description="Short description of the transition environment and change context",
+    )
     account_signals: List[str] = Field(default_factory=list, description="Relevant account pressure or move signals")
     selection_reason: str = Field("", description="Why this row was selected for credentials lookup")
 

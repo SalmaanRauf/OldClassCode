@@ -211,7 +211,13 @@ def test_context_builder_generates_financial_services_cio_overlay():
         ranked_rows=[
             _ranked_row("Matched One", new_role="Chief Information Officer", match_status="matched", rank_score=9.0),
         ],
-        actioning_context={},
+        actioning_context={
+            "person_profile": {
+                "direct_person_evidence": True,
+                "project_count": 1,
+                "win_count": 1,
+            }
+        },
         max_candidates=1,
     )[0]
 
@@ -243,8 +249,15 @@ def test_context_builder_generates_financial_services_cio_overlay():
     assert context.industry == "Financial Services"
     assert context.subindustry == "Mortgage and Consumer Lending"
     assert context.role_family == "technology_leadership"
+    assert context.transition_type == "named move scenario"
+    assert context.previous_company == "Capital One"
+    assert context.previous_role == "Senior Director of Technology Risk"
     assert "technology modernization" in context.buyer_priorities
     assert any("AI governance" in item for item in context.buyer_priorities)
+    assert any("first-90-day" in item.lower() for item in context.new_role_challenges)
+    assert any("technology" in item.lower() for item in context.expanded_responsibilities)
+    assert "Capital One" in context.transition_environment
+    assert "Fannie Mae" in context.transition_environment
 
 
 def test_context_builder_generates_legal_overlay_for_financial_services():
@@ -276,3 +289,7 @@ def test_context_builder_generates_legal_overlay_for_financial_services():
     assert context.role_family == "legal_corporate_secretary"
     assert "legal operations" in context.buyer_priorities
     assert any("governance" in item.lower() for item in context.likely_client_needs)
+    assert context.transition_type == "internal promotion"
+    assert context.previous_company == "Fannie Mae"
+    assert context.previous_role == "Previous Danielle Mccoy"
+    assert any("governance" in item.lower() for item in context.new_role_challenges)

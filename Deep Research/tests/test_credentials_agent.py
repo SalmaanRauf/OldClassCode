@@ -143,8 +143,21 @@ class TestQueryBuilding:
                 industry="Financial Services",
                 subindustry="Mortgage and Consumer Lending",
                 role_family="technology_leadership",
+                transition_type="named move scenario",
+                previous_company="Capital One",
+                previous_role="Senior Director of Technology Risk",
                 buyer_priorities=["technology modernization", "AI governance"],
                 likely_client_needs=["modernize technology governance and control environment"],
+                expanded_responsibilities=[
+                    "Set the enterprise technology agenda in a newly assumed CIO seat."
+                ],
+                new_role_challenges=[
+                    "Build a first-90-day agenda for technology risk, cyber, data, and AI governance."
+                ],
+                transition_environment=(
+                    "Leadership transition from Capital One into Fannie Mae within a regulated "
+                    "Mortgage and Consumer Lending environment."
+                ),
                 account_signals=["Warm introduction path available."],
                 selection_reason="Selected exact ProConnect match ranked #1.",
             ),
@@ -156,8 +169,13 @@ class TestQueryBuilding:
         assert "Chief Information Officer" in query
         assert "Mortgage and Consumer Lending" in query
         assert "technology modernization" in query
+        assert "Transition Type" in query
+        assert "Capital One" in query
+        assert "first-90-day agenda" in query
+        assert "regulated Mortgage and Consumer Lending environment" in query
         assert "Why Relevant" in query
         assert "up to 2 credentials" in query
+        assert "new-role-challenge fit" in query
 
     def test_normalizes_numeric_cmmc_level(self, agent):
         """Numeric CMMC level should render as canonical 'CMMC Level X'."""

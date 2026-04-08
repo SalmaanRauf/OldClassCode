@@ -53,7 +53,8 @@ I need to validate the following opportunity with Protiviti's internal experienc
 # Instructions
 1. Search for up to {max_matches} credentials most relevant to this opportunity
 2. Prioritize by: {ranking_priorities}
-3. For each credential, provide:
+3. When the structured context describes a newly promoted, appointed, or hired leader, emphasize credentials that map to expanded responsibilities, transition challenges, and the leader's first-year agenda.
+4. For each credential, provide:
    - Title: The credential title
    - Client Challenge: What problem the client faced
    - Value Provided: What value Protiviti delivered
@@ -443,7 +444,8 @@ class CredentialsAgent:
     def _ranking_priorities_for_opportunity(self, opportunity: Opportunity) -> str:
         if getattr(opportunity, "credential_search_context", None):
             return (
-                "industry/subindustry fit > role-family fit > buyer-priority fit > "
+                "industry/subindustry fit > role-family fit > transition-type fit > "
+                "new-role-challenge fit > expanded-responsibility fit > buyer-priority fit > "
                 "likely-client-need fit > challenge similarity > technology similarity"
             )
         return "industry match > technology match > challenge similarity"
@@ -451,7 +453,8 @@ class CredentialsAgent:
     def _ranking_priorities_for_batch(self, opportunities: List[Opportunity]) -> str:
         if opportunities and all(getattr(opportunity, "credential_search_context", None) for opportunity in opportunities):
             return (
-                "industry/subindustry fit > role-family fit > buyer-priority fit > "
+                "industry/subindustry fit > role-family fit > transition-type fit > "
+                "new-role-challenge fit > expanded-responsibility fit > buyer-priority fit > "
                 "likely-client-need fit > challenge similarity > technology similarity"
             )
         return "industry match > technology match > challenge similarity"
@@ -461,7 +464,7 @@ class CredentialsAgent:
             return ""
         return (
             "   - Why Relevant: One sentence explaining why the credential fits the role, industry, "
-            "and likely buying need\n"
+            "transition challenge, and likely buying need\n"
         )
 
     def _why_relevant_instruction_for_batch(self, opportunities: List[Opportunity]) -> str:
@@ -469,7 +472,7 @@ class CredentialsAgent:
             return ""
         return (
             "9. Include `why_relevant` for each credential with one sentence focused on role, industry, "
-            "and likely buying need."
+            "transition challenge, and likely buying need."
         )
 
     def _build_search_context_block(self, opportunity: Opportunity) -> str:
@@ -490,11 +493,27 @@ class CredentialsAgent:
         subindustry = str(getattr(search_context, "subindustry", "") or "").strip()
         if subindustry:
             lines.append(f"- Subindustry: {subindustry}")
+        transition_type = str(getattr(search_context, "transition_type", "") or "").strip()
+        previous_company = str(getattr(search_context, "previous_company", "") or "").strip()
+        previous_role = str(getattr(search_context, "previous_role", "") or "").strip()
+        expanded_responsibilities = ", ".join(
+            list(getattr(search_context, "expanded_responsibilities", []) or [])[:4]
+        ) or "N/A"
+        new_role_challenges = ", ".join(
+            list(getattr(search_context, "new_role_challenges", []) or [])[:4]
+        ) or "N/A"
+        transition_environment = str(getattr(search_context, "transition_environment", "") or "").strip() or "N/A"
         lines.extend(
             [
                 f"- Role Family: {getattr(search_context, 'role_family', '') or 'general'}",
+                *([f"- Transition Type: {transition_type}"] if transition_type else []),
+                *([f"- Previous Company: {previous_company}"] if previous_company else []),
+                *([f"- Previous Role: {previous_role}"] if previous_role else []),
                 f"- Buyer Priorities: {priorities}",
                 f"- Likely Client Needs: {likely_needs}",
+                f"- Expanded Responsibilities: {expanded_responsibilities}",
+                f"- New Role Challenges: {new_role_challenges}",
+                f"- Transition Environment: {transition_environment}",
                 f"- Account Signals: {account_signals}",
                 f"- Selection Reason: {getattr(search_context, 'selection_reason', '') or 'Selected for movement credentials lookup'}",
             ]
@@ -511,8 +530,14 @@ class CredentialsAgent:
             f"industry={str(getattr(search_context, 'industry', '') or '').strip()}",
             f"subindustry={str(getattr(search_context, 'subindustry', '') or '').strip()}",
             f"role_family={str(getattr(search_context, 'role_family', '') or '').strip()}",
+            f"transition_type={str(getattr(search_context, 'transition_type', '') or '').strip()}",
+            f"previous_company={str(getattr(search_context, 'previous_company', '') or '').strip()}",
+            f"previous_role={str(getattr(search_context, 'previous_role', '') or '').strip()}",
             "buyer_priorities=" + "; ".join(list(getattr(search_context, "buyer_priorities", []) or [])[:4]),
             "likely_client_needs=" + "; ".join(list(getattr(search_context, "likely_client_needs", []) or [])[:4]),
+            "expanded_responsibilities=" + "; ".join(list(getattr(search_context, "expanded_responsibilities", []) or [])[:4]),
+            "new_role_challenges=" + "; ".join(list(getattr(search_context, "new_role_challenges", []) or [])[:4]),
+            f"transition_environment={str(getattr(search_context, 'transition_environment', '') or '').strip()}",
             "account_signals=" + "; ".join(list(getattr(search_context, "account_signals", []) or [])[:4]),
             f"selection_reason={str(getattr(search_context, 'selection_reason', '') or '').strip()}",
         ]

@@ -370,6 +370,25 @@ class MovementCredentialContextBuilder:
             role_family=role_family,
             category=candidate.category,
         )
+        transition_type = self._infer_transition_type(candidate)
+        previous_company = self._resolve_previous_company(candidate=candidate, request=request)
+        expanded_responsibilities = self._build_expanded_responsibilities(
+            candidate=candidate,
+            role_family=role_family,
+            industry=industry,
+        )
+        new_role_challenges = self._build_new_role_challenges(
+            candidate=candidate,
+            role_family=role_family,
+            industry=industry,
+            likely_needs=likely_needs,
+        )
+        transition_environment = self._build_transition_environment(
+            candidate=candidate,
+            industry=industry,
+            subindustry=subindustry,
+            previous_company=previous_company,
+        )
         account_signals = self._build_account_signals(
             candidate=candidate,
             preflight=preflight,
@@ -384,8 +403,14 @@ class MovementCredentialContextBuilder:
             industry=industry,
             subindustry=subindustry,
             role_family=role_family,
+            transition_type=transition_type,
+            previous_company=previous_company,
+            previous_role=candidate.previous_role,
             buyer_priorities=priorities,
             likely_client_needs=likely_needs,
+            expanded_responsibilities=expanded_responsibilities,
+            new_role_challenges=new_role_challenges,
+            transition_environment=transition_environment,
             account_signals=account_signals,
             selection_reason=candidate.selection_reason,
         )
@@ -492,6 +517,170 @@ class MovementCredentialContextBuilder:
         fallback_family = "executive_general" if _normalized_key(category) == "exec" else "buyer_general"
         profile = self._FS_ROLE_PROFILES[fallback_family]
         return list(profile["buyer_priorities"]), list(profile["likely_client_needs"])
+
+    def _infer_transition_type(self, candidate: MovementCredentialCandidate) -> str:
+        if candidate.source_type == "named_mover":
+            return "named move scenario"
+
+        movement = (candidate.ranked_row or {}).get("movement")
+        movement_type = _normalized_key(getattr(movement, "movement_type", ""))
+        new_role = _normalized_key(candidate.new_role)
+        if any(marker in movement_type for marker in ("acting",)) or "acting" in new_role:
+            return "acting appointment"
+        if any(marker in movement_type for marker in ("external hire", "joined", "join")):
+            return "external hire"
+        if any(marker in movement_type for marker in ("promot", "role expansion", "appointment", "appointed")):
+            return "internal promotion"
+        if any(marker in movement_type for marker in ("depart", "resign", "termination", "stepped down")):
+            return "departure transition"
+        return "leadership transition"
+
+    def _resolve_previous_company(
+        self,
+        *,
+        candidate: MovementCredentialCandidate,
+        request: MovementBriefRequest,
+    ) -> str:
+        if candidate.source_type == "named_mover":
+            return _normalized_text(request.from_company)
+
+        movement = (candidate.ranked_row or {}).get("movement")
+        company_context = _normalized_key(getattr(movement, "company_context", ""))
+        if company_context in {"internal", "scenario"}:
+            return _normalized_text(candidate.target_company)
+        return ""
+
+    def _build_expanded_responsibilities(
+        self,
+        *,
+        candidate: MovementCredentialCandidate,
+        role_family: str,
+        industry: str,
+    ) -> List[str]:
+        role_label = _normalized_text(candidate.new_role) or "new role"
+        if role_family == "technology_leadership":
+            items = [
+                f"Set the enterprise technology agenda in the {role_label} seat.",
+                "Align cyber, data, AI, and control priorities across the organization.",
+                "Turn inherited technology risk and modernization pressure into an executable roadmap.",
+            ]
+        elif role_family == "security_privacy":
+            items = [
+                f"Reset enterprise security governance in the {role_label} seat.",
+                "Improve resilience, identity, and privacy decisions across the control environment.",
+                "Translate board and regulatory scrutiny into measurable security execution.",
+            ]
+        elif role_family == "data_ai":
+            items = [
+                f"Set the enterprise data and AI agenda in the {role_label} seat.",
+                "Define governance, quality, and model-risk expectations for new initiatives.",
+                "Align analytics, business adoption, and control ownership across teams.",
+            ]
+        elif role_family == "risk_compliance_audit":
+            items = [
+                f"Expand risk, controls, and assurance accountability in the {role_label} role.",
+                "Align regulatory, audit, and issue-management priorities under one operating agenda.",
+                "Translate control pressure into practical governance and remediation work.",
+            ]
+        elif role_family == "finance_controllership":
+            items = [
+                f"Own finance transformation and reporting priorities in the {role_label} role.",
+                "Improve controllership rigor, close processes, and regulatory reporting readiness.",
+                "Connect cost, performance, and governance decisions to operating-model changes.",
+            ]
+        elif role_family == "legal_corporate_secretary":
+            items = [
+                f"Stabilize governance and legal-operations coverage in the {role_label} role.",
+                "Coordinate board, entity-management, and regulatory obligations across stakeholders.",
+                "Translate governance change into durable legal and committee workflows.",
+            ]
+        elif role_family == "operations_transformation":
+            items = [
+                f"Own enterprise operating-model decisions in the {role_label} seat.",
+                "Improve process effectiveness, resilience, and service delivery execution.",
+                "Translate organizational change into measurable transformation outcomes.",
+            ]
+        elif "financial" in _normalized_key(industry):
+            items = [
+                f"Set a pragmatic first-year agenda in the {role_label} role.",
+                "Align governance, risk, and operating-model expectations across stakeholders.",
+                "Turn leadership change into delivery-ready work for a regulated environment.",
+            ]
+        else:
+            items = [
+                f"Define the first-year agenda in the {role_label} role.",
+                "Align stakeholders around the new accountability model.",
+                "Translate the leadership transition into practical transformation work.",
+            ]
+        return _unique_preserve_order(items, limit=3)
+
+    def _build_new_role_challenges(
+        self,
+        *,
+        candidate: MovementCredentialCandidate,
+        role_family: str,
+        industry: str,
+        likely_needs: List[str],
+    ) -> List[str]:
+        base = [
+            "Build a first-90-day agenda that balances immediate stability with visible progress.",
+            "Translate the leadership transition into prioritized workstreams with clear ownership.",
+        ]
+        if role_family == "technology_leadership":
+            base.append(
+                "Build a first-90-day agenda for technology risk, cyber, data, and AI governance."
+            )
+        elif role_family == "legal_corporate_secretary":
+            base.append(
+                "Stabilize governance, committee, and legal-operations responsibilities during the transition."
+            )
+        elif role_family == "risk_compliance_audit":
+            base.append(
+                "Rebalance risk, audit, and compliance expectations without creating assurance gaps."
+            )
+        elif role_family == "operations_transformation":
+            base.append(
+                "Convert new operating-model accountability into measurable transformation milestones."
+            )
+        elif "financial" in _normalized_key(industry):
+            base.append(
+                "Navigate regulatory, governance, and stakeholder pressure while establishing credibility in the role."
+            )
+        base.extend(likely_needs[:2])
+        return _unique_preserve_order(base, limit=4)
+
+    def _build_transition_environment(
+        self,
+        *,
+        candidate: MovementCredentialCandidate,
+        industry: str,
+        subindustry: str,
+        previous_company: str,
+    ) -> str:
+        industry_text = _normalized_text(industry) or "General"
+        subindustry_text = _normalized_text(subindustry)
+        environment_label = "regulated" if "financial" in _normalized_key(industry_text) else "complex"
+        target_company = _normalized_text(candidate.target_company)
+        if previous_company and previous_company.lower() != target_company.lower():
+            summary = (
+                f"Leadership transition from {previous_company} into {target_company} "
+                f"within a {environment_label} {industry_text}"
+            )
+        elif previous_company:
+            summary = (
+                f"Leadership transition inside {target_company} "
+                f"within a {environment_label} {industry_text}"
+            )
+        else:
+            summary = (
+                f"Leadership transition at {target_company} "
+                f"within a {environment_label} {industry_text}"
+            )
+        if subindustry_text:
+            summary = f"{summary} {subindustry_text} environment."
+        else:
+            summary = f"{summary} environment."
+        return summary
 
     def _infer_role_family(self, new_role: str, category: str) -> str:
         normalized = _normalized_key(new_role)
