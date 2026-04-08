@@ -139,16 +139,18 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
     assert "People Movement Account Overlay" in package.system_prompt
     assert "buyer movement" in package.system_prompt.lower()
     assert "destination account" in package.system_prompt.lower()
-    assert "top 8-10 commercially relevant executive movers" in package.system_prompt.lower()
+    assert "broad inventory of materially supported executive and buyer movers" in package.system_prompt.lower()
     assert "audit, finance, risk, compliance, legal, technology, security, data/ai" in package.system_prompt.lower()
     assert "executive movement inventory" in package.system_prompt.lower()
     assert "buyer movement inventory" in package.system_prompt.lower()
-    assert "prioritize active appointments, external hires, promotions, and scope-expansion moves" in package.system_prompt.lower()
-    assert "prefer a balanced movement inventory over an executive-heavy list" in package.system_prompt.lower()
     assert "roughly 15-18 total movers" in package.system_prompt.lower()
     assert "general counsel, deputy general counsel, corporate secretary" in package.system_prompt.lower()
     assert "legal name and common alias" in package.system_prompt.lower()
     assert "coverage checklist across the buyer centers and major executive lanes" in package.system_prompt.lower()
+    assert "prefer recall over conservative pruning" in package.system_prompt.lower()
+    assert "medium-confidence movers with explicit role-and-employer support" in package.system_prompt.lower()
+    assert "downstream workflow ranks and prioritizes later" in package.system_prompt.lower()
+    assert "do not compress multiple movers into prose" in package.system_prompt.lower()
 
 
 def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
@@ -165,17 +167,18 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     assert "buyer movement" in package.user_prompt.lower()
     assert "why the account matters now" in package.user_prompt.lower()
     assert "source-backed movement evidence" in package.user_prompt.lower()
-    assert "top 8-10 high-value executive movers" in package.user_prompt.lower()
-    assert "top 8-10 high-value buyer movers" in package.user_prompt.lower()
-    assert "do not stop after finding only a few names" in package.user_prompt.lower()
-    assert "prioritize active appointments, external hires, promotions, and scope expansions over departures" in package.user_prompt.lower()
-    assert "prefer a balanced movement inventory over an executive-heavy list" in package.user_prompt.lower()
+    assert "broad inventory of materially supported executive and buyer movers" in package.user_prompt.lower()
+    assert "do not stop after finding only a few obvious names" in package.user_prompt.lower()
     assert "roughly 15-18 total movers" in package.user_prompt.lower()
     assert "general counsel, deputy general counsel, corporate secretary" in package.user_prompt.lower()
     assert "legal name and common alias" in package.user_prompt.lower()
     assert "\"Federal National Mortgage Association (Fannie Mae)\"" in package.user_prompt
     assert "\"Fannie Mae\"" in package.user_prompt
     assert "coverage checklist across buyer centers and major executive lanes" in package.user_prompt.lower()
+    assert "prefer recall over conservative pruning" in package.user_prompt.lower()
+    assert "medium-confidence movers with explicit role-and-employer support" in package.user_prompt.lower()
+    assert "downstream workflow ranks movers later" in package.user_prompt.lower()
+    assert "do not compress movers into narrative-only prose" in package.user_prompt.lower()
     assert "Jennifer Brady" not in package.user_prompt
     assert "Capital One" not in package.user_prompt
     assert "Chief Information Officer" not in package.user_prompt

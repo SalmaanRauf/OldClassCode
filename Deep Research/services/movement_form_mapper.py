@@ -293,14 +293,17 @@ def build_movement_user_query(request: MovementBriefRequest | Dict[str, Any]) ->
         ),
         "Bias non-movement findings toward explaining why the account matters now.",
         "Preserve source-backed movement evidence suitable for a movement-led account brief.",
+        "Preserve a broad inventory of materially supported executive and buyer movers instead of only a short shortlist of obvious names.",
         "Try to preserve roughly 15-18 total movers across executive and buyer inventories when the evidence supports that many.",
         "Use both the company's legal name and common alias in searches whenever both exist.",
-        "Prioritize active appointments, external hires, promotions, and scope expansions over departures when deciding which movers deserve inclusion.",
-        "Keep materially relevant departures when they create a vacancy, successor decision, governance gap, or backfill opportunity, but sort them after active appointments and promotions when commercial value is comparable.",
-        "Prefer a balanced movement inventory over an executive-heavy list, and keep pushing buyer-center discovery before padding with lower-value executive departures.",
+        "The downstream workflow ranks movers later, so optimize for recall here instead of pre-filtering too aggressively for commercial value.",
+        "Prefer recall over conservative pruning. When top-tier evidence is sparse, include medium-confidence movers with explicit role-and-employer support from leadership pages, governance pages, conference bios, investor materials, or explicit self-disclosures rather than ending the inventory early.",
+        "Preserve appointments, promotions, acting roles, external hires, scope expansions, and materially relevant departures, resignations, or terminations that create a vacancy, successor decision, governance gap, or backfill opportunity.",
+        "If buyer movement is materially thinner than executive movement, keep pushing buyer-center discovery instead of ending early with an executive-heavy list.",
         "If buyer recall is thin, expand title-family searches for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, CIO, CISO, Chief Data or AI leaders, Enterprise Operations leaders, and Single-Family or Multifamily business leaders.",
         "Maintain a coverage checklist across buyer centers and major executive lanes, and do not finalize until each lane has been checked with targeted title-family searches or the evidence is exhausted.",
         "If the movement inventory is still below roughly 15 movers, continue targeted searches across issuer newsroom, leadership pages, governance pages, investor relations, conference bios, and corroborated self-disclosures before concluding that evidence is weak.",
+        "Do not compress movers into narrative-only prose. Use explicit inventory lines for each mover.",
     ]
     if movement_request.geography:
         parts.append(f"Geography: {movement_request.geography}.")

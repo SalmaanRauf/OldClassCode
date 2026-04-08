@@ -22,6 +22,7 @@ from services.movement_form_mapper import (  # noqa: E402
     build_movement_request_from_form_response,
     build_movement_row_action_context_by_person_name,
     build_movement_trigger,
+    build_movement_user_query,
     build_transition_request_for_movement,
 )
 from services.signal_registry_service import get_signal_registry_service  # noqa: E402
@@ -111,6 +112,24 @@ def test_build_movement_request_normalizes_named_move_form_response_and_defaults
     assert request.industry_override is None
     assert request.geography == "United States"
     assert request.additional_context == "Focus on executive and buyer movement."
+
+
+def test_build_movement_user_query_keeps_recall_first_guidance() -> None:
+    query = build_movement_user_query(
+        {
+            "person_name": "Jennifer Brady",
+            "from_company": "Capital One",
+            "to_company": "Fannie Mae",
+            "new_role": "Chief Information Officer",
+            "lookback_days": 180,
+            "industry_override": "financial_services",
+        }
+    ).lower()
+
+    assert "roughly 15-18 total movers" in query
+    assert "prefer recall over conservative pruning" in query
+    assert "downstream workflow ranks movers later" in query
+    assert "do not compress movers into narrative-only prose" in query
 
 
 def test_build_movement_request_accepts_nested_output_payload() -> None:

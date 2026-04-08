@@ -322,9 +322,9 @@ async def test_digest_unions_rows_across_general_exec_and_buyer_passes():
     ]
     assert diagnostics["movements_returned"] == 3
     assert diagnostics["pass_results"] == [
-        {"focus": "general", "count": 1},
-        {"focus": "executive", "count": 1},
-        {"focus": "buyer", "count": 1},
+        {"focus": "general", "count": 1, "skip_reasons": {}},
+        {"focus": "executive", "count": 1, "skip_reasons": {}},
+        {"focus": "buyer", "count": 1, "skip_reasons": {}},
     ]
 
 
@@ -435,3 +435,52 @@ async def test_digest_filters_rows_outside_requested_lookback_when_effective_dat
 
     assert diagnostics["status"] == "Succeeded"
     assert [row.person_name for row in rows] == ["Tom Klein"]
+
+
+@pytest.mark.asyncio
+async def test_digest_defaults_missing_company_context_and_tracks_skip_reasons():
+    digestor = FSMovementDigestor(
+        kernel=_FakeKernel(
+            {
+                "movement_records": [
+                    {
+                        "person_name": "Thomas Klein",
+                        "target_company": "Fannie Mae",
+                        "previous_role": "Deputy General Counsel",
+                        "new_role": "Acting General Counsel",
+                        "movement_type": "Promotion/Appointment",
+                        "category": "BUYER",
+                        "evidence_quote": "Thomas Klein was promoted to Acting General Counsel.",
+                        "source_url": "https://example.com/tom-klein",
+                        "source_title": "Leadership update",
+                    },
+                    {
+                        "person_name": "Missing Source",
+                        "target_company": "Fannie Mae",
+                        "previous_role": "Risk Executive",
+                        "new_role": "Chief Risk Officer",
+                        "movement_type": "Appointment",
+                        "category": "BUYER",
+                        "company_context": "internal",
+                        "evidence_quote": "Missing source URL should be rejected.",
+                        "source_url": "",
+                    },
+                ]
+            }
+        )
+    )
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.BUYER.MOVEMENT"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find buyer movement at Fannie Mae.",
+        ),
+        deep_research_markdown="Movement notes here.",
+        target_company_aliases=["Fannie Mae"],
+    )
+
+    assert [row.person_name for row in rows] == ["Thomas Klein"]
+    assert rows[0].company_context == "internal"
+    assert diagnostics["skip_reasons"]["missing_source"] >= 1

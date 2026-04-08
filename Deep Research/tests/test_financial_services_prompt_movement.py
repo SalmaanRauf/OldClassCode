@@ -32,19 +32,22 @@ def test_financial_services_prompt_keeps_broad_signal_coverage_but_biases_to_mov
     assert "bias coverage toward signals that explain why the movement matters now" in content
 
 
-def test_financial_services_prompt_requires_high_value_movement_inventory():
+def test_financial_services_prompt_requires_recall_first_movement_inventory():
     content = _read_prompt()
     lowered = content.lower()
 
-    assert "top 8-10 commercially relevant executive movers" in lowered
-    assert "top 8-10 commercially relevant buyer movers" in lowered
+    assert "broad inventory of materially supported executive movers" in lowered
+    assert "broad inventory of materially supported buyer movers" in lowered
     assert "Executive Movement Inventory" in content
     assert "Buyer Movement Inventory" in content
     assert "do not stop after finding only a few examples" in lowered
-    assert "prioritize active appointments, external hires, promotions, and real scope expansions over departures" in lowered
-    assert "prefer a balanced inventory over an executive-heavy list" in lowered
     assert "roughly 15-18 total movers" in lowered
     assert "general counsel, deputy general counsel, corporate secretary" in lowered
     assert "legal name and common alias" in lowered
     assert "coverage checklist across major executive lanes" in lowered
     assert "buyer-center coverage checklist" in lowered
+    assert "prefer recall over conservative pruning" in lowered
+    assert "medium-confidence movers with explicit role-and-employer support" in lowered
+    assert "downstream workflow will rank later" in lowered
+    assert "do not compress multiple movers into prose" in lowered
+    assert "do not move on unless you have found enough movers" in lowered

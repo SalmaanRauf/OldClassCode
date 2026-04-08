@@ -19,17 +19,19 @@ NAMED_MOVE_OVERLAY = """
 - Focus research on the destination account and the requested lookback window.
 - Bias findings toward signals that explain why the account matters now, while preserving broader account-signal coverage.
 - Preserve source-backed movement evidence that can later feed the leverage table.
-- Aim to surface roughly the top 8-10 commercially relevant executive movers and the top 8-10 commercially relevant buyer movers when the evidence supports them. Do not pad the list if evidence is weak.
-- Try to preserve roughly 15-18 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement instead of a heavily one-sided list.
+- Preserve a broad inventory of materially supported executive and buyer movers across the destination account instead of only a short shortlist of obvious names.
+- Try to preserve roughly 15-18 total movers across the two inventories when the evidence supports that many.
+- The downstream workflow ranks and prioritizes later. Optimize for recall here, not aggressive commercial pruning inside the research report.
 - Use both the destination account's legal name and common alias in searches whenever both exist.
-- Prioritize active appointments, external hires, promotions, and scope-expansion moves over departures when deciding which movers deserve space in the final report.
-- Keep materially relevant departures, resignations, and terminations when they create a vacancy, successor decision, governance gap, or backfill opportunity at the destination account, but sort them after active appointments/promotions when commercial value is comparable.
-- Do not stop after finding only a few examples. Continue until the destination account has been checked across audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers.
-- Prefer a balanced movement inventory over an executive-heavy list. If buyer movement is materially thinner than executive movement, keep spending search effort on buyer-center discovery instead of padding the report with lower-value executive departures.
+- Prefer recall over conservative pruning. When top-tier evidence is sparse, keep medium-confidence movers with explicit role-and-employer support from leadership pages, governance pages, conference bios, investor materials, or explicit self-disclosures rather than ending the inventory early.
+- Preserve appointments, promotions, acting roles, external hires, scope expansions, and materially relevant departures, resignations, or terminations when they create a vacancy, successor decision, governance gap, or backfill opportunity.
+- Do not stop after finding only a few obvious names. Continue until the destination account has been checked across audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers.
+- If buyer movement is materially thinner than executive movement, keep spending search effort on buyer-center discovery instead of ending early with an executive-heavy list.
 - Use title-family search expansion when buyer recall is thin. Explicitly search for and preserve moves involving General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, Chief Information Officer, Chief Information Security Officer, Chief Data/AI leaders, Enterprise Operations leaders, and Single-Family/Multifamily business leaders when they are tied to the destination account.
 - Maintain a coverage checklist across the buyer centers and major executive lanes. Do not finalize the report until each lane has been checked with targeted title-family searches or the evidence is exhausted.
 - If the movement inventory is still below roughly 15 movers, continue targeted searches across issuer newsroom, leadership pages, governance pages, investor relations, conference bios, and corroborated self-disclosures before concluding that evidence is weak.
-- Preserve compact Executive Movement Inventory and Buyer Movement Inventory sections in the final report with one line per mover covering name, new role, move type, why it matters, and source.
+- Do not compress multiple movers into prose when they can be listed explicitly in inventories.
+- Preserve explicit Executive Movement Inventory and Buyer Movement Inventory sections in the final report with one line per mover covering name, new role, move type, why it matters, and source.
 """.strip()
 
 
@@ -88,10 +90,10 @@ class MovementPromptBuilder:
             "Preserve source-backed movement evidence suitable for a movement-led account brief."
         )
         lines.append(
-            "Aim to identify roughly the top 8-10 high-value executive movers and the top 8-10 high-value buyer movers, but do not pad the list when evidence is weak."
+            "Preserve a broad inventory of materially supported executive and buyer movers across the account instead of only a short shortlist of obvious names."
         )
         lines.append(
-            "Try to preserve roughly 15-18 total movers across the two inventories when the evidence supports that many, with a balanced mix of executive and buyer movement."
+            "Try to preserve roughly 15-18 total movers across the two inventories when the evidence supports that many."
         )
         if len(search_aliases) >= 2:
             lines.append(
@@ -100,16 +102,19 @@ class MovementPromptBuilder:
                 + "."
             )
         lines.append(
-            "Prioritize active appointments, external hires, promotions, and scope expansions over departures when deciding which movers deserve inclusion."
+            "The downstream workflow ranks movers later, so optimize for recall here instead of pre-filtering too aggressively for commercial value."
         )
         lines.append(
-            "Keep materially relevant departures, resignations, and terminations when they create a vacancy, successor decision, governance gap, or backfill opportunity, but sort them after active appointments and promotions when commercial value is comparable."
+            "Prefer recall over conservative pruning. When top-tier evidence is sparse, include medium-confidence movers with explicit role-and-employer support from leadership pages, governance pages, conference bios, investor materials, or explicit self-disclosures rather than ending the inventory early."
         )
         lines.append(
-            "Do not stop after finding only a few names. Check audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers."
+            "Preserve appointments, promotions, acting roles, external hires, scope expansions, and materially relevant departures, resignations, or terminations that create a vacancy, successor decision, governance gap, or backfill opportunity."
         )
         lines.append(
-            "Prefer a balanced movement inventory over an executive-heavy list. If buyer movement is materially thinner than executive movement, keep pushing buyer-center discovery instead of padding with lower-value executive departures."
+            "Do not stop after finding only a few obvious names. Check audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers."
+        )
+        lines.append(
+            "If buyer movement is materially thinner than executive movement, keep pushing buyer-center discovery instead of ending early with an executive-heavy list."
         )
         lines.append(
             "If buyer recall is thin, expand title-family searches for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, and Single-Family or Multifamily business leaders."
@@ -121,7 +126,7 @@ class MovementPromptBuilder:
             "If the movement inventory is still below roughly 15 movers, continue targeted searches across issuer newsroom, leadership pages, governance pages, investor relations, conference bios, and corroborated self-disclosures before concluding that evidence is weak."
         )
         lines.append(
-            "Include compact Executive Movement Inventory and Buyer Movement Inventory sections in the report with name, new role, move type, why it matters, and source."
+            "Do not compress movers into narrative-only prose. Use explicit Executive Movement Inventory and Buyer Movement Inventory sections in the report with name, new role, move type, why it matters, and source."
         )
         if request.geography:
             lines.append(f"Geography: {request.geography}")

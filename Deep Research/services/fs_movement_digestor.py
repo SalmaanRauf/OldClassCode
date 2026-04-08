@@ -72,6 +72,7 @@ class FSMovementDigestor:
             "raw_response_text": "",
             "parse_outcome": "",
             "movements_returned": 0,
+            "skip_reasons": {},
         }
 
         if not deep_research_markdown or not deep_research_markdown.strip():
@@ -86,6 +87,7 @@ class FSMovementDigestor:
             combined_rows: List[MovementRecord] = []
             raw_responses: List[str] = []
             pass_results: List[Dict[str, Any]] = []
+            aggregate_skip_reasons: Dict[str, int] = {}
 
             for focus, focus_instruction in self.PASS_PLAN:
                 prompt = self._render_prompt(
@@ -105,14 +107,16 @@ class FSMovementDigestor:
                     raw_response = str(result)
                     raw_responses.append(raw_response)
                     payload = json.loads(self._extract_json(raw_response))
-                    rows = self._coerce_movements(
+                    rows, skip_reasons = self._coerce_movements(
                         payload.get("movement_records", []),
                         trigger=trigger,
                         max_rows=max_rows,
                         target_company_aliases=target_company_aliases,
                     )
                     combined_rows.extend(rows)
-                    pass_results.append({"focus": focus, "count": len(rows)})
+                    for reason, count in skip_reasons.items():
+                        aggregate_skip_reasons[reason] = aggregate_skip_reasons.get(reason, 0) + count
+                    pass_results.append({"focus": focus, "count": len(rows), "skip_reasons": skip_reasons})
                 except Exception as exc:
                     pass_results.append(
                         {
@@ -125,6 +129,7 @@ class FSMovementDigestor:
 
             diagnostics["raw_response_text"] = "\n\n".join(raw_responses).strip()
             diagnostics["pass_results"] = pass_results
+            diagnostics["skip_reasons"] = aggregate_skip_reasons
             movements = self._dedupe_rows(combined_rows, max_rows=max_rows)
             diagnostics["movements_returned"] = len(movements)
             diagnostics["status"] = "Succeeded" if movements else "Failed"
@@ -190,19 +195,26 @@ class FSMovementDigestor:
         trigger: BDTrigger,
         max_rows: int,
         target_company_aliases: Optional[List[str]] = None,
-    ) -> List[MovementRecord]:
+    ) -> Tuple[List[MovementRecord], Dict[str, int]]:
         if not isinstance(raw_items, list):
-            return []
+            return [], {}
 
         company_aliases = self._company_aliases(target_company_aliases or [trigger.company_focus])
         deduped_rows: Dict[Tuple[str, str, str, str], Tuple[int, int, MovementRecord]] = {}
+        skip_reasons: Dict[str, int] = {}
+
+        def skip(reason: str) -> None:
+            skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+
         for entry in raw_items:
             if not isinstance(entry, dict):
+                skip("non_dict_entry")
                 continue
 
             target_company = str(entry.get("target_company") or "").strip()
             normalized_target_aliases = self._company_aliases([target_company])
             if company_aliases and company_aliases.isdisjoint(normalized_target_aliases):
+                skip("target_company_mismatch")
                 continue
 
             person_name = str(entry.get("person_name") or "").strip()
@@ -210,20 +222,25 @@ class FSMovementDigestor:
             new_role = str(entry.get("new_role") or "").strip()
             movement_type = str(entry.get("movement_type") or "").strip()
             category = self._normalize_category(entry.get("category"))
-            company_context = str(entry.get("company_context") or "").strip()
+            company_context = str(entry.get("company_context") or "").strip() or "internal"
             effective_date = self._normalize_effective_date(entry.get("effective_date"))
             evidence_quote = str(entry.get("evidence_quote") or "").strip()
             source_url = str(entry.get("source_url") or "").strip()
 
-            if not all([person_name, target_company, movement_type, category, company_context]):
+            if not all([person_name, target_company, movement_type, category]):
+                skip("missing_required_fields")
                 continue
             if not (previous_role or new_role):
+                skip("missing_roles")
                 continue
             if category not in {"EXEC", "BUYER"}:
+                skip("invalid_category")
                 continue
             if not evidence_quote or not source_url:
+                skip("missing_source")
                 continue
             if effective_date and not self._date_within_lookback(effective_date, trigger.time_window_days):
+                skip("outside_lookback")
                 continue
 
             row = MovementRecord(
@@ -260,7 +277,7 @@ class FSMovementDigestor:
             item[2]
             for item in sorted(deduped_rows.values(), key=lambda payload: payload[0])
         ]
-        return rows[:max_rows]
+        return rows[:max_rows], skip_reasons
 
     def _extract_json(self, text: str) -> str:
         cleaned = text.strip()
