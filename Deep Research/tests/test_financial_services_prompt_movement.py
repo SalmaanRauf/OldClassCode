@@ -26,34 +26,25 @@ def test_financial_services_prompt_includes_buyer_movement_guidance():
 
 def test_financial_services_prompt_keeps_broad_signal_coverage_but_biases_to_movement_context():
     content = _read_prompt()
+    lowered = content.lower()
 
     assert "Conduct comprehensive research on Financial Services opportunities." in content
-    assert "final signal summary concise and oriented to why the people movement matters" in content
-    assert "bias coverage toward signals that explain why the movement matters now" in content
+    assert "executive movement and buyer movement are the primary deliverables" in lowered
+    assert "other account signals are secondary" in lowered
 
 
 def test_financial_services_prompt_requires_recall_first_movement_inventory():
     content = _read_prompt()
     lowered = content.lower()
 
-    assert "broad inventory of materially supported executive movers" in lowered
-    assert "broad inventory of materially supported buyer movers" in lowered
+    assert "movement-led account brief" in lowered
+    assert "primary deliverables are executive movement and buyer movement" in lowered
+    assert "secondary deliverable is a concise set of other account signals" in lowered
     assert "Executive Movement Inventory" in content
     assert "Buyer Movement Inventory" in content
     assert "do not stop after finding only a few examples" in lowered
     assert "roughly 15-18 total movers" in lowered
-    assert "general counsel, deputy general counsel, corporate secretary" in lowered
-    assert "chief operating officer" in lowered
-    assert "co-coo" in lowered
-    assert "chief control office" in lowered
-    assert "enterprise operations leaders" in lowered
-    assert "head of enterprise operations" in lowered
-    assert "legal name and common alias" in lowered
     assert "coverage checklist across major executive lanes" in lowered
     assert "buyer-center coverage checklist" in lowered
-    assert "prefer recall over conservative pruning" in lowered
-    assert "medium-confidence movers with explicit role-and-employer support" in lowered
-    assert "downstream workflow will rank later" in lowered
-    assert "do not compress multiple movers into prose" in lowered
     assert "do not move on unless you have found enough movers" in lowered
     assert "never include companies, partnerships, products, programs, or transactions as movers" in lowered

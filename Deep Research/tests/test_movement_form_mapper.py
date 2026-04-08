@@ -126,16 +126,14 @@ def test_build_movement_user_query_keeps_recall_first_guidance() -> None:
         }
     ).lower()
 
+    assert query.startswith("build a movement-led account brief for fannie mae.")
+    assert "primary deliverables" in query
+    assert "executive movement and buyer movement" in query
+    assert "secondary deliverable" in query
+    assert "other account signals" in query
     assert "roughly 15-18 total movers" in query
-    assert "prefer recall over conservative pruning" in query
-    assert "downstream workflow ranks movers later" in query
-    assert "do not compress movers into narrative-only prose" in query
-    assert "chief operating officer" in query
-    assert "coo" in query
-    assert "co-coo" in query
-    assert "chief control office" in query
-    assert "head of enterprise operations" in query
-    assert "never include companies, partnerships, products, programs, or transactions as movers" in query
+    assert "search procedure" in query
+    assert "required output" in query
 
 
 def test_build_movement_request_accepts_nested_output_payload() -> None:

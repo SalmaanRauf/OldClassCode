@@ -137,26 +137,12 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
 
     assert "FINANCIAL SERVICES BASE PROMPT" in package.system_prompt
     assert "People Movement Account Overlay" in package.system_prompt
-    assert "buyer movement" in package.system_prompt.lower()
+    assert "primary deliverables are executive movement and buyer movement" in package.system_prompt.lower()
+    assert "secondary deliverable is a concise set of other account signals" in package.system_prompt.lower()
     assert "destination account" in package.system_prompt.lower()
-    assert "broad inventory of materially supported executive and buyer movers" in package.system_prompt.lower()
-    assert "audit, finance, risk, compliance, legal, technology, security, data/ai" in package.system_prompt.lower()
+    assert "coverage checklist" in package.system_prompt.lower()
     assert "executive movement inventory" in package.system_prompt.lower()
     assert "buyer movement inventory" in package.system_prompt.lower()
-    assert "roughly 15-18 total movers" in package.system_prompt.lower()
-    assert "general counsel, deputy general counsel, corporate secretary" in package.system_prompt.lower()
-    assert "chief operating officer" in package.system_prompt.lower()
-    assert "co-coo" in package.system_prompt.lower()
-    assert "chief control office" in package.system_prompt.lower()
-    assert "enterprise operations leaders" in package.system_prompt.lower()
-    assert "head of enterprise operations" in package.system_prompt.lower()
-    assert "legal name and common alias" in package.system_prompt.lower()
-    assert "coverage checklist across the buyer centers and major executive lanes" in package.system_prompt.lower()
-    assert "prefer recall over conservative pruning" in package.system_prompt.lower()
-    assert "medium-confidence movers with explicit role-and-employer support" in package.system_prompt.lower()
-    assert "downstream workflow ranks and prioritizes later" in package.system_prompt.lower()
-    assert "do not compress multiple movers into prose" in package.system_prompt.lower()
-    assert "never include companies, partnerships, products, programs, or transactions as movers" in package.system_prompt.lower()
 
 
 def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
@@ -166,32 +152,22 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     package = builder.build(_request(synthetic=True), _preflight())
 
     assert package.user_prompt.startswith(
-        "Research Federal National Mortgage Association (Fannie Mae) across all relevant Financial Services signals."
+        "Build a movement-led account brief for Federal National Mortgage Association (Fannie Mae)."
     )
     assert "180 days" in package.user_prompt
+    assert "primary deliverables" in package.user_prompt.lower()
     assert "executive movement" in package.user_prompt.lower()
     assert "buyer movement" in package.user_prompt.lower()
+    assert "secondary deliverable" in package.user_prompt.lower()
+    assert "other account signals" in package.user_prompt.lower()
     assert "why the account matters now" in package.user_prompt.lower()
-    assert "source-backed movement evidence" in package.user_prompt.lower()
-    assert "broad inventory of materially supported executive and buyer movers" in package.user_prompt.lower()
-    assert "do not stop after finding only a few obvious names" in package.user_prompt.lower()
     assert "roughly 15-18 total movers" in package.user_prompt.lower()
-    assert "general counsel, deputy general counsel, corporate secretary" in package.user_prompt.lower()
-    assert "chief operating officer" in package.user_prompt.lower()
-    assert "coo" in package.user_prompt.lower()
-    assert "co-coo" in package.user_prompt.lower()
-    assert "chief control office" in package.user_prompt.lower()
-    assert "enterprise operations leaders" in package.user_prompt.lower()
-    assert "head of enterprise operations" in package.user_prompt.lower()
     assert "legal name and common alias" in package.user_prompt.lower()
     assert "\"Federal National Mortgage Association (Fannie Mae)\"" in package.user_prompt
     assert "\"Fannie Mae\"" in package.user_prompt
-    assert "coverage checklist across buyer centers and major executive lanes" in package.user_prompt.lower()
-    assert "prefer recall over conservative pruning" in package.user_prompt.lower()
-    assert "medium-confidence movers with explicit role-and-employer support" in package.user_prompt.lower()
-    assert "downstream workflow ranks movers later" in package.user_prompt.lower()
-    assert "do not compress movers into narrative-only prose" in package.user_prompt.lower()
-    assert "never include companies, partnerships, products, programs, or transactions as movers" in package.user_prompt.lower()
+    assert "search procedure" in package.user_prompt.lower()
+    assert "required output" in package.user_prompt.lower()
+    assert "coverage checklist" in package.user_prompt.lower()
     assert "Jennifer Brady" not in package.user_prompt
     assert "Capital One" not in package.user_prompt
     assert "Chief Information Officer" not in package.user_prompt

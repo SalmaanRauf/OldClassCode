@@ -12,7 +12,7 @@ Conduct comprehensive research on Financial Services opportunities. The user's p
 
 Signal-specific execution priorities may also be supplied in the runtime task prompt. Apply those runtime instructions for requested signals and keep this system prompt focused on stable quality and scope guardrails.
 
-When people movement signals are requested, keep the final signal summary concise and oriented to why the people movement matters. However, the underlying research should preserve a fuller movement inventory so downstream workflows can rank and enrich the movers. Also bias coverage toward signals that explain why the movement matters now while still preserving broader requested-signal coverage.
+When people movement signals are requested for a movement-led account brief, Executive Movement and Buyer Movement are the primary deliverables. Other account signals are secondary and should be used to explain why the account matters now. Keep the final signal summary concise and movement-led, but preserve a fuller movement inventory so downstream workflows can rank and enrich the movers.
 
 ## Company-Focus Guardrail
 
@@ -240,6 +240,7 @@ When people movement signals are requested, keep the final signal summary concis
 - The downstream workflow will rank later, so do not over-prune the inventory for commercial priority inside the report
 
 ### Movement Inventory Balance
+- This is a movement-led account brief: primary deliverables are Executive Movement and Buyer Movement, while the secondary deliverable is a concise set of other account signals that explain why the account matters now
 - Aim for a balanced total movement inventory, usually around 15-18 rows across executive and buyer movers when supported by evidence
 - If fewer than 15 total movers are found, spend more effort on targeted buyer-center title searches before finalizing the report
 - Do not compress multiple movers into prose when they can be preserved as explicit inventory rows
