@@ -23,6 +23,7 @@ from scripts.proconnect_stakeholder_payload import (
     extract_person_detail_candidate,
     extract_person_search_candidates,
     merge_person_candidates,
+    select_best_candidate,
 )
 
 
@@ -40,10 +41,11 @@ class ProConnectMovementService:
     ) -> None:
         self.client = client
         self._company_account_cache: Dict[str, Optional[Dict[str, Any]]] = {}
-        self._person_payload_cache: Dict[Tuple[str, str], Optional[Dict[str, Any]]] = {}
+        self._person_payload_cache: Dict[Tuple[str, str, str], Optional[Dict[str, Any]]] = {}
         self._person_detail_cache: Dict[str, Optional[Dict[str, Any]]] = {}
         self._account_people_cache: Dict[str, List[Dict[str, Any]]] = {}
         self._account_people_warnings_cache: Dict[str, List[str]] = {}
+        self._uses_live_person_loader = person_loader is None and client is not None
         if person_loader is not None:
             self.person_loader = person_loader
         elif client is not None:
@@ -79,7 +81,14 @@ class ProConnectMovementService:
         include_person_detail: bool = False,
     ) -> Dict[str, Any]:
         """Return leverage facts for a single movement row, optionally scoped to a specific company."""
-        payload = self.person_loader(row.person_name, company_hint or row.target_company) or {}
+        if self._uses_live_person_loader:
+            payload = self._load_live_person_payload(
+                row.person_name,
+                company_hint or row.target_company,
+                title_hint=row.new_role,
+            ) or {}
+        else:
+            payload = self.person_loader(row.person_name, company_hint or row.target_company) or {}
         return self._build_enrichment(row, payload=payload, include_person_detail=include_person_detail)
 
     def _build_enrichment(
@@ -107,11 +116,21 @@ class ProConnectMovementService:
         }
         return enrichment
 
-    def _load_live_person_payload(self, person_name: str, target_company: str) -> Optional[Dict[str, Any]]:
+    def _load_live_person_payload(
+        self,
+        person_name: str,
+        target_company: str,
+        *,
+        title_hint: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         if not self.client:
             return None
 
-        cache_key = (self._cache_key(person_name), self._cache_key(target_company))
+        cache_key = (
+            self._cache_key(person_name),
+            self._cache_key(target_company),
+            self._cache_key(title_hint or ""),
+        )
         if cache_key in self._person_payload_cache:
             return self._person_payload_cache[cache_key]
 
@@ -126,7 +145,13 @@ class ProConnectMovementService:
             return None
 
         account_id = str(account.get("id") or "").strip()
-        exact_person = self._resolve_exact_person(person_name=person_name, account=account, account_id=account_id)
+        title_hints = [title_hint] if str(title_hint or "").strip() else []
+        exact_person = self._resolve_exact_person(
+            person_name=person_name,
+            account=account,
+            account_id=account_id,
+            title_hints=title_hints,
+        )
         if not exact_person:
             logger.info(
                 "ProConnect movement lookup unresolved person=%s company=%s account_id=%s reason=no_exact_person",
@@ -139,18 +164,22 @@ class ProConnectMovementService:
 
         detail = self._load_person_detail(exact_person)
         payload = dict(exact_person)
+        trust_person_delivery_fields = self._has_direct_person_relationship_signal(exact_person)
         if detail:
+            selected = select_best_candidate([payload, detail], title_hints=title_hints)
             payload = merge_person_candidates(
                 candidates=[payload, detail],
-                selected=payload,
-                title_hints=[],
+                selected=selected,
+                title_hints=title_hints,
             )
+            payload = self._prefer_detail_profile_fields(payload, detail)
             payload["id"] = payload.get("id") or detail.get("id")
             payload["accountId"] = payload.get("accountId") or detail.get("accountId")
         payload = self._merge_account_relationship_context(
             payload=payload,
             account=account,
             person_name=person_name,
+            trust_person_delivery_fields=trust_person_delivery_fields,
         )
 
         logger.info(
@@ -187,6 +216,7 @@ class ProConnectMovementService:
         person_name: str,
         account: Dict[str, Any],
         account_id: str,
+        title_hints: Optional[List[str]] = None,
     ) -> Optional[Dict[str, Any]]:
         exact_candidates: List[Dict[str, Any]] = []
         fallback_candidates: List[Dict[str, Any]] = []
@@ -275,14 +305,13 @@ class ProConnectMovementService:
         if not candidates_to_merge:
             return None
 
-        selected = candidates_to_merge[0]
-        for candidate in candidates_to_merge[1:]:
-            selected = merge_person_candidates(
-                candidates=[selected, candidate],
-                selected=selected,
-                title_hints=[],
-            )
-        return selected
+        hints = [hint for hint in (title_hints or []) if str(hint or "").strip()]
+        selected = select_best_candidate(candidates_to_merge, title_hints=hints)
+        return merge_person_candidates(
+            candidates=candidates_to_merge,
+            selected=selected,
+            title_hints=hints,
+        )
 
     def _build_account_people_pool(self, account: Dict[str, Any], *, account_id: str) -> List[Dict[str, Any]]:
         cache_key = account_id or self._cache_key(str(account.get("name") or ""))
@@ -384,7 +413,7 @@ class ProConnectMovementService:
     @staticmethod
     def _person_reference_ids(payload: Dict[str, Any]) -> set[str]:
         ids: set[str] = set()
-        for key in ("contactId", "id", "prospectId", "personId", "primaryKeyBuyerId", "buyerId"):
+        for key in ("contactId", "id", "prospectId", "personId"):
             value = payload.get(key)
             text = str(value or "").strip()
             if text:
@@ -436,6 +465,18 @@ class ProConnectMovementService:
             if self._record_matches_person(person_name, item, person_ids):
                 matches.append(dict(item))
         return matches
+
+    @staticmethod
+    def _best_matching_key_buyer_record(person_name: str, records: List[Any]) -> Dict[str, Any]:
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            candidate_name = full_person_name(item) or str(item.get("name") or "").strip()
+            if not candidate_name:
+                continue
+            if exact_name_equals(person_name, candidate_name) or same_first_last_name(person_name, candidate_name):
+                return dict(item)
+        return {}
 
     @staticmethod
     def _merge_record_lists(*candidate_lists: Any, identity_keys: Tuple[str, ...]) -> List[Dict[str, Any]]:
@@ -495,16 +536,35 @@ class ProConnectMovementService:
                     seen[fingerprint] = existing_index
         return merged
 
+    @staticmethod
+    def _closed_won_records(value: Any) -> List[Dict[str, Any]]:
+        wins: List[Dict[str, Any]] = []
+        for item in value if isinstance(value, list) else []:
+            if not isinstance(item, dict):
+                continue
+            stage = str(item.get("opportunityStage") or item.get("stage") or "").strip().lower()
+            if stage == "closed - won":
+                wins.append(dict(item))
+        return wins
+
+    @staticmethod
+    def _has_direct_person_relationship_signal(payload: Dict[str, Any]) -> bool:
+        if str(payload.get("relationshipOwner") or payload.get("relationship_owner") or "").strip():
+            return True
+        connections = payload.get("connections")
+        return isinstance(connections, list) and bool(connections)
+
     def _merge_account_relationship_context(
         self,
         *,
         payload: Dict[str, Any],
         account: Dict[str, Any],
         person_name: str,
+        trust_person_delivery_fields: bool = False,
     ) -> Dict[str, Any]:
         merged = dict(payload)
         person_ids = self._person_reference_ids(merged)
-        key_buyer = self._best_matching_account_record(person_name, account.get("keyBuyers") or [], person_ids)
+        key_buyer = self._best_matching_key_buyer_record(person_name, account.get("keyBuyers") or [])
         if key_buyer:
             merged = merge_person_candidates(
                 candidates=[merged, key_buyer],
@@ -519,41 +579,88 @@ class ProConnectMovementService:
             for item in self._matching_account_records(person_name, account.get(bucket) or [], person_ids)
             if str(item.get("opportunityStage") or item.get("stage") or "").strip().lower() == "closed - won"
         ]
+        has_direct_relationship_signal = trust_person_delivery_fields
+        trusted_raw_wins = self._merge_record_lists(
+            (merged.get("closeWonOpps") or merged.get("closeWonOpportunities")) if has_direct_relationship_signal else [],
+            self._closed_won_records(merged.get("primaryKeyBuyerOf")) if has_direct_relationship_signal else [],
+            identity_keys=("opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyer", "primaryKeyBuyerId"),
+        )
+        key_buyer_wins = self._merge_record_lists(
+            key_buyer.get("closeWonOpps") or key_buyer.get("closeWonOpportunities"),
+            self._closed_won_records(key_buyer.get("primaryKeyBuyerOf")),
+            identity_keys=("opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyer", "primaryKeyBuyerId"),
+        )
 
         merged_projects = self._merge_record_lists(
-            merged.get("projects"),
+            merged.get("projects") if has_direct_relationship_signal else [],
             key_buyer.get("projects"),
             account_projects,
             identity_keys=("projectId", "id", "name", "primaryKeyBuyer", "primaryKeyBuyerId"),
         )
         merged_wins = self._merge_record_lists(
-            merged.get("closeWonOpps") or merged.get("closeWonOpportunities"),
-            key_buyer.get("closeWonOpps") or key_buyer.get("closeWonOpportunities"),
+            trusted_raw_wins,
+            key_buyer_wins,
             scoped_wins,
             identity_keys=("opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyer", "primaryKeyBuyerId"),
         )
         if merged_projects:
             merged["projects"] = merged_projects
+        else:
+            merged.pop("projects", None)
         if merged_wins:
             merged["closeWonOpps"] = merged_wins
             merged["closeWonOpportunities"] = merged_wins
+        else:
+            merged.pop("closeWonOpps", None)
+            merged.pop("closeWonOpportunities", None)
 
-        merged["projectCount"] = max(
-            self._coerce_count(merged.get("projectCount")),
-            self._coerce_count(merged.get("project_count")),
-            self._coerce_count(merged.get("numberOfProjects")),
-            self._coerce_count(merged.get("numberOfProject")),
+        scoped_project_count = max(
+            (
+                max(
+                    self._coerce_count(merged.get("projectCount")),
+                    self._coerce_count(merged.get("project_count")),
+                    self._coerce_count(merged.get("numberOfProjects")),
+                    self._coerce_count(merged.get("numberOfProject")),
+                    len(merged.get("projects")) if isinstance(merged.get("projects"), list) else 0,
+                )
+                if has_direct_relationship_signal
+                else 0
+            ),
             self._coerce_count(key_buyer.get("projectCount") or key_buyer.get("project_count") or key_buyer.get("numberOfProjects") or key_buyer.get("numberOfProject")),
             len(merged_projects),
         )
-        merged["winCount"] = max(
-            self._coerce_count(merged.get("winCount")),
-            self._coerce_count(merged.get("win_count")),
-            self._coerce_count(merged.get("numberOfWins")),
-            self._coerce_count(merged.get("wins")),
+        scoped_win_count = max(
+            (
+                max(
+                    self._coerce_count(merged.get("winCount")),
+                    self._coerce_count(merged.get("win_count")),
+                    self._coerce_count(merged.get("numberOfWins")),
+                    self._coerce_count(merged.get("wins")),
+                    len(trusted_raw_wins),
+                )
+                if has_direct_relationship_signal
+                else 0
+            ),
             self._coerce_count(key_buyer.get("winCount") or key_buyer.get("win_count") or key_buyer.get("numberOfWins") or key_buyer.get("wins")),
             len(merged_wins),
         )
+        merged["projectCount"] = scoped_project_count
+        merged["project_count"] = scoped_project_count
+        merged["numberOfProjects"] = scoped_project_count
+        merged["numberOfProject"] = scoped_project_count
+        merged["winCount"] = scoped_win_count
+        merged["win_count"] = scoped_win_count
+        merged["numberOfWins"] = scoped_win_count
+        merged["wins"] = scoped_win_count
+        trusted_primary_key_buyer_of = self._merge_record_lists(
+            self._closed_won_records(merged.get("primaryKeyBuyerOf")) if has_direct_relationship_signal else [],
+            self._closed_won_records(key_buyer.get("primaryKeyBuyerOf")),
+            identity_keys=("opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyer", "primaryKeyBuyerId"),
+        )
+        if trusted_primary_key_buyer_of:
+            merged["primaryKeyBuyerOf"] = trusted_primary_key_buyer_of
+        else:
+            merged.pop("primaryKeyBuyerOf", None)
         if not merged.get("relationshipOwner") and not merged.get("relationship_owner"):
             relationship_owner = key_buyer.get("relationshipOwner") or key_buyer.get("relationship_owner")
             if relationship_owner:
@@ -572,6 +679,31 @@ class ProConnectMovementService:
             self._list_names(merged.get("closeWonOpps") or merged.get("closeWonOpportunities")),
             self._relationship_owner(merged),
         )
+        return merged
+
+    @staticmethod
+    def _prefer_detail_profile_fields(payload: Dict[str, Any], detail: Dict[str, Any]) -> Dict[str, Any]:
+        merged = dict(payload)
+        for key in (
+            "name",
+            "firstName",
+            "lastName",
+            "title",
+            "titleExternal",
+            "location",
+            "linkedinUrl",
+            "linkedInUrl",
+            "emailAddress",
+            "email",
+            "phone",
+            "photoUrl",
+        ):
+            value = detail.get(key)
+            if value not in (None, "", [], {}):
+                merged[key] = value
+        connections = detail.get("connections")
+        if isinstance(connections, list) and connections:
+            merged["connections"] = connections
         return merged
 
     @staticmethod

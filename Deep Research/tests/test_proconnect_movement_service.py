@@ -528,6 +528,221 @@ def test_live_client_path_falls_back_to_org_chart_people_when_search_and_key_buy
     assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/john-roscoe"
 
 
+def test_live_client_path_prefers_person_detail_linkedin_and_connections_over_stale_search_fields():
+    class JasonDetailClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {"value": [{"document": {"accountId": "001-cap-one", "name": "Capital One"}}]},
+                }
+            if search_text == "Jason Dandridge":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-jason",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One",
+                                    "name": "Jason Dandridge",
+                                    "title": "Head of Operations",
+                                    "linkedinUrl": "https://linkedin.com/in/mike-gabbay",
+                                    "winCount": 10,
+                                    "closeWonOpps": [{"name": "Wrong Win"}],
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One",
+                    "keyBuyers": [],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-jason":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-jason",
+                        "accountId": "001-cap-one",
+                        "name": "Jason Dandridge",
+                        "title": "Chief Control Officer & Head of Enterprise Operations",
+                        "location": "Washington, DC, United States",
+                        "linkedinUrl": "https://linkedin.com/in/jason-dandridge",
+                        "connectedColleagues": [{"employee": {"name": "Taylor Smith"}}],
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    service = ProConnectMovementService(client=JasonDetailClient())
+    enriched = service.deep_enrich_movements([_row("Jason Dandridge")], max_rows=5)
+
+    assert enriched[0]["win_count"] == 0
+    assert enriched[0]["worked_with"] is False
+    assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/jason-dandridge"
+    assert enriched[0]["person_detail"]["internal_connections"] == ["Taylor Smith"]
+
+
+def test_live_client_path_does_not_use_unscoped_person_wins_without_matching_account_evidence():
+    class InflatedWinsClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {"value": [{"document": {"accountId": "001-cap-one", "name": "Capital One"}}]},
+                }
+            if search_text == "Danielle M. McCoy":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-danielle",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One",
+                                    "name": "Danielle Mccoy",
+                                    "title": "Senior Vice President, Deputy General Counsel & Deputy Corporate Secretary",
+                                    "winCount": 10,
+                                    "closeWonOpps": [
+                                        {"name": "Fannie Mae - IT Audit Support"},
+                                        {"name": "Fannie Mae - IA IT Staff Aug"},
+                                    ],
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One",
+                    "keyBuyers": [],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-danielle":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-danielle",
+                        "accountId": "001-cap-one",
+                        "name": "Danielle McCoy",
+                        "title": "Senior Vice President, Deputy General Counsel & Deputy Corporate Secretary",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    service = ProConnectMovementService(client=InflatedWinsClient())
+    enriched = service.deep_enrich_movements([_row("Danielle M. McCoy")], max_rows=5)
+
+    assert enriched[0]["project_count"] == 0
+    assert enriched[0]["win_count"] == 0
+    assert enriched[0]["worked_with"] is False
+
+
+def test_live_client_path_requires_name_match_for_key_buyer_merge():
+    class KeyBuyerBleedClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {"value": [{"document": {"accountId": "001-cap-one", "name": "Capital One"}}]},
+                }
+            if search_text == "Jason Dandridge":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-jason",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One",
+                                    "name": "Jason Dandridge",
+                                    "title": "Head of Operations",
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One",
+                    "keyBuyers": [
+                        {
+                            "id": "contact-jason",
+                            "firstName": "Mike",
+                            "lastName": "Gabbay",
+                            "title": "CIO",
+                            "linkedinUrl": "https://linkedin.com/in/mike-gabbay",
+                            "winCount": 7,
+                            "closeWonOpps": [{"name": "Wrong Buyer Win"}],
+                        }
+                    ],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-jason":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-jason",
+                        "accountId": "001-cap-one",
+                        "name": "Jason Dandridge",
+                        "title": "Chief Control Officer & Head of Enterprise Operations",
+                        "linkedinUrl": "https://linkedin.com/in/jason-dandridge",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    service = ProConnectMovementService(client=KeyBuyerBleedClient())
+    enriched = service.deep_enrich_movements([_row("Jason Dandridge")], max_rows=5)
+
+    assert enriched[0]["win_count"] == 0
+    assert enriched[0]["relationship_owner"] is None
+    assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/jason-dandridge"
+
+
 def test_person_loader_takes_precedence_over_live_client_support():
     class GuardedClient(_FakeLiveClient):
         def search_prospects(self, search_text):

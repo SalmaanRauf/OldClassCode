@@ -2539,7 +2539,7 @@ def extract_person_search_candidates(payload: Any) -> List[Dict[str, Any]]:
                 "winCount": first_non_empty(document, ["winCount", "win_count", "numberOfWins", "wins"]),
                 "projects": first_non_empty(document, ["projects"]),
                 "closeWonOpps": first_non_empty(document, ["closeWonOpps", "closeWonOpportunities"]),
-                "connections": first_non_empty(document, ["connections"]),
+                "connections": first_non_empty(document, ["connections", "connectedColleagues", "connectedColleague"]),
             }
         )
 
@@ -3279,7 +3279,7 @@ def extract_person_detail_fragment(
 
     projects = to_list_dicts(first_non_empty(node, ["projects"]))
     wins = to_list_dicts(first_non_empty(node, ["closeWonOpps", "closeWonOpportunities"]))
-    connections = to_list_dicts(first_non_empty(node, ["connections"]))
+    connections = to_list_dicts(first_non_empty(node, ["connections", "connectedColleagues", "connectedColleague"]))
     project_count = max(
         to_int(first_non_empty(node, ["projectCount", "project_count", "numberOfProjects"])) or 0,
         len(projects),
@@ -3377,7 +3377,7 @@ def parse_person_like_record(node: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         "winCount": first_non_empty(node, ["winCount", "win_count", "numberOfWins", "wins"]),
         "projects": first_non_empty(node, ["projects"]),
         "closeWonOpps": first_non_empty(node, ["closeWonOpps", "closeWonOpportunities"]),
-        "connections": first_non_empty(node, ["connections"]),
+        "connections": first_non_empty(node, ["connections", "connectedColleagues", "connectedColleague"]),
     }
 
 
