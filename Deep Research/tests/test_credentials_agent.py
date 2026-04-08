@@ -401,6 +401,35 @@ class TestResponseParsing:
         assert len(result.matches) == 1
         assert result.matches[0].title == "Recovered Credential"
 
+    def test_single_parse_partial_recovery_recovers_first_complete_match(self, agent):
+        raw = (
+            '{"matches":[{"title":"Recovered Credential","client_challenge":"Challenge",'
+            '"approach":"Approach","value_provided":"Value","industry":"Financial Services",'
+            '"technologies_used":[],"url":"https://ishare.protiviti.com/cred/recovered"},'
+            '{"title":"Truncated Credential"'
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity")
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 1
+        assert result.matches[0].title == "Recovered Credential"
+        assert result.diagnostics is not None
+        assert result.diagnostics.parse_outcome == "json_partial_recovery"
+
+    def test_single_parse_recovers_json_with_unescaped_newline_in_string(self, agent):
+        raw = (
+            '{"matches":[{"title":"Credential 1","client_challenge":"Challenge line 1\n'
+            'Challenge line 2","approach":"Approach","value_provided":"Value","industry":"Financial Services",'
+            '"technologies_used":[],"url":"https://ishare.protiviti.com/cred/1"}],"no_matches_found":false}'
+        )
+
+        result = agent._parse_response(raw, "Test Opportunity")
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 1
+        assert "Challenge line 2" in result.matches[0].client_challenge
+
     def test_single_parse_dedupes_duplicate_urls_and_caps_matches(self, agent):
         raw = json.dumps(
             {

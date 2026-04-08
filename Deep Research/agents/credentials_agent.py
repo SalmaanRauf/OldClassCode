@@ -1109,6 +1109,43 @@ class CredentialsAgent:
                     lookup_status="No Match",
                     diagnostics=diagnostics
                 )
+
+            recovered_matches = self._recover_single_matches(raw)
+            if recovered_matches:
+                matches, filtered_invalid_url_count = self._coerce_matches(
+                    recovered_matches,
+                    max_matches,
+                )
+                has_matches = len(matches) > 0
+                lookup_status = "Matched" if has_matches else "No Match"
+                diagnostics = CredentialsLookupDiagnostics(
+                    opportunity_id=opportunity_id,
+                    opportunity_title=opportunity_title,
+                    sector=sector,
+                    query_text=query_text,
+                    raw_response_text=raw,
+                    parse_outcome=(
+                        "json_partial_recovery"
+                        if has_matches
+                        else "json_partial_recovery_no_matches"
+                    ),
+                    lookup_status=lookup_status,
+                    error_message=(
+                        f"filtered_invalid_url_count={filtered_invalid_url_count}"
+                        if filtered_invalid_url_count > 0 and not has_matches
+                        else None
+                    ),
+                    duration_ms=duration_ms,
+                    match_count=len(matches),
+                )
+                return CredentialsResponse(
+                    opportunity_id=opportunity_id,
+                    opportunity_title=opportunity_title,
+                    matches=matches,
+                    no_matches_found=not has_matches,
+                    lookup_status=lookup_status,
+                    diagnostics=diagnostics,
+                )
             
             # Can't parse - log and return empty
             logger.warning(f"Could not parse credentials response: {raw[:200]}...")
@@ -1140,7 +1177,7 @@ class CredentialsAgent:
         primary_candidate = self._extract_json(raw)
         parse_error: Optional[json.JSONDecodeError] = None
         try:
-            payload = json.loads(primary_candidate)
+            payload = self._loads_json_with_repairs(primary_candidate)
             if isinstance(payload, dict):
                 return payload
         except json.JSONDecodeError as e:
@@ -1244,7 +1281,7 @@ class CredentialsAgent:
             if not candidate:
                 continue
             try:
-                payload = json.loads(candidate)
+                payload = self._loads_json_with_repairs(candidate)
             except json.JSONDecodeError:
                 continue
             if not isinstance(payload, dict):
@@ -1253,6 +1290,65 @@ class CredentialsAgent:
                 continue
             return payload
         return None
+
+    def _recover_single_matches(self, raw_response: str) -> List[Dict[str, object]]:
+        """Recover fully-formed match objects from a partially truncated single-response payload."""
+        extracted = self._extract_json(raw_response)
+        if not extracted:
+            return []
+
+        matches_idx = extracted.find('"matches"')
+        if matches_idx < 0:
+            return []
+        array_start = extracted.find("[", matches_idx)
+        if array_start < 0:
+            return []
+
+        recovered: List[Dict[str, object]] = []
+        in_string = False
+        escape = False
+        object_depth = 0
+        object_start: Optional[int] = None
+
+        for idx in range(array_start + 1, len(extracted)):
+            ch = extracted[idx]
+            if in_string:
+                if escape:
+                    escape = False
+                elif ch == "\\":
+                    escape = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+
+            if ch == "{":
+                if object_depth == 0:
+                    object_start = idx
+                object_depth += 1
+                continue
+
+            if ch == "}":
+                if object_depth > 0:
+                    object_depth -= 1
+                if object_depth == 0 and object_start is not None:
+                    candidate = extracted[object_start:idx + 1]
+                    try:
+                        parsed = self._loads_json_with_repairs(candidate)
+                        if isinstance(parsed, dict):
+                            recovered.append(parsed)
+                    except json.JSONDecodeError:
+                        pass
+                    object_start = None
+                continue
+
+            if ch == "]" and object_depth == 0:
+                break
+
+        return recovered
 
     def _extract_balanced_json_object(self, text: str, start_index: int) -> Optional[str]:
         """Return a balanced JSON object substring starting at start_index."""
@@ -1284,6 +1380,56 @@ class CredentialsAgent:
                 if depth == 0:
                     return text[start_index:idx + 1]
         return None
+
+    def _loads_json_with_repairs(self, text: str) -> object:
+        """Parse JSON with a small set of safe repairs for malformed string content."""
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as first_error:
+            repaired = self._escape_control_chars_in_json_strings(text)
+            if repaired != text:
+                return json.loads(repaired)
+            raise first_error
+
+    def _escape_control_chars_in_json_strings(self, text: str) -> str:
+        """Escape raw control characters that appear inside JSON strings."""
+        result: List[str] = []
+        in_string = False
+        escape = False
+
+        for ch in text:
+            if in_string:
+                if escape:
+                    result.append(ch)
+                    escape = False
+                    continue
+                if ch == "\\":
+                    result.append(ch)
+                    escape = True
+                    continue
+                if ch == '"':
+                    result.append(ch)
+                    in_string = False
+                    continue
+                if ch == "\n":
+                    result.append("\\n")
+                    continue
+                if ch == "\r":
+                    result.append("\\r")
+                    continue
+                if ch == "\t":
+                    result.append("\\t")
+                    continue
+                if ord(ch) < 0x20:
+                    continue
+                result.append(ch)
+                continue
+
+            if ch == '"':
+                in_string = True
+            result.append(ch)
+
+        return "".join(result)
 
     def _is_valid_credential_url(self, url: object) -> bool:
         if not isinstance(url, str):
