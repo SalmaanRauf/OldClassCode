@@ -430,6 +430,32 @@ class TestResponseParsing:
         assert len(result.matches) == 1
         assert "Challenge line 2" in result.matches[0].client_challenge
 
+    def test_single_parse_recovers_markdown_wrapped_json_with_invalid_backslash_escapes(self, agent):
+        raw = """```json
+{
+  "matches": [
+    {
+      "title": "Development and Implementation of Risk and Control Self-Assessment (RCSA) Program",
+      "client_challenge": "The client needed to stabilize the risk and control environment for a newly promoted leader\\'s first year in role.",
+      "approach": "Protiviti designed and implemented an enterprise RCSA program.",
+      "value_provided": "Improved governance, clearer risk ownership, and a stronger control environment.",
+      "industry": "Financial Services",
+      "technologies_used": [],
+      "why_relevant": "Supports Fannie Mae\\'s first-year controls agenda for a newly transitioned executive.",
+      "url": "https://roberthalf.sharepoint.com/sites/iShare-Client-Credentials/SitePages/Credential-Details.aspx?itemid=1732"
+    }
+  ],
+  "no_matches_found": false
+}
+```"""
+
+        result = agent._parse_response(raw, "Test Opportunity")
+
+        assert result.lookup_status == "Matched"
+        assert len(result.matches) == 1
+        assert "leader's first year" in result.matches[0].client_challenge
+        assert "Fannie Mae's first-year" in (result.matches[0].why_relevant or "")
+
     def test_single_parse_dedupes_duplicate_urls_and_caps_matches(self, agent):
         raw = json.dumps(
             {

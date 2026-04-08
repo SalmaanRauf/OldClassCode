@@ -539,3 +539,56 @@ def test_build_movement_brief_payload_named_mover_uses_list_evidence_when_counts
     assert payload["movement_rows"][0]["project_count"] == 3
     assert payload["movement_rows"][0]["win_count"] == 2
     assert payload["footer_actions"][0]["label"] == "Start New Scan"
+
+
+def test_build_movement_brief_payload_preserves_research_roles_for_matched_non_synthetic_rows():
+    brief = _brief(
+        [
+            MovementRecord(
+                person_name="Priscilla Almodóvar",
+                target_company="Fannie Mae",
+                previous_role="President & CEO",
+                new_role="Departed",
+                movement_type="Departure",
+                category="EXEC",
+                company_context="inbound",
+                evidence=MovementEvidence(
+                    evidence_quote="Priscilla Almodóvar stepped down as CEO.",
+                    source_url="https://example.com/priscilla",
+                    source_title="Issuer press release",
+                    corroborated=True,
+                    confidence_label="High",
+                ),
+                leverage=MovementLeverageSummary(
+                    known=True,
+                    worked_with=False,
+                    project_count=0,
+                    win_count=0,
+                    relationship_owner=None,
+                    person_match_status="matched",
+                ),
+            )
+        ],
+        [],
+    )
+
+    payload = build_movement_brief_payload(
+        brief,
+        request=_request(),
+        preflight=_preflight(),
+        person_details_by_name={
+            "Priscilla Almodóvar": {
+                "name": "Priscilla Almodóvar",
+                "title": "Former President & Chief Executive Officer",
+                "match_scope": "to",
+            }
+        },
+    )
+
+    row = payload["movement_rows"][0]
+    detail = payload["row_details_by_id"][row["detail_id"]]
+
+    assert row["person_name"] == "Priscilla Almodóvar"
+    assert row["previous_role"] == "President & CEO"
+    assert row["new_role"] == "Departed"
+    assert detail["person_detail"]["title"] == "Former President & Chief Executive Officer"

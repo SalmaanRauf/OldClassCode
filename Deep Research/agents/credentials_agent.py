@@ -1387,6 +1387,7 @@ class CredentialsAgent:
             return json.loads(text)
         except json.JSONDecodeError as first_error:
             repaired = self._escape_control_chars_in_json_strings(text)
+            repaired = self._repair_invalid_backslashes_in_json_strings(repaired)
             if repaired != text:
                 return json.loads(repaired)
             raise first_error
@@ -1428,6 +1429,60 @@ class CredentialsAgent:
             if ch == '"':
                 in_string = True
             result.append(ch)
+
+        return "".join(result)
+
+    def _repair_invalid_backslashes_in_json_strings(self, text: str) -> str:
+        """Drop stray backslashes inside JSON strings that do not form valid JSON escapes."""
+        result: List[str] = []
+        in_string = False
+        escape = False
+        idx = 0
+        valid_simple_escapes = {'"', "\\", "/", "b", "f", "n", "r", "t"}
+
+        while idx < len(text):
+            ch = text[idx]
+
+            if in_string:
+                if escape:
+                    result.append(ch)
+                    escape = False
+                    idx += 1
+                    continue
+
+                if ch == "\\":
+                    next_char = text[idx + 1] if idx + 1 < len(text) else ""
+                    if next_char in valid_simple_escapes:
+                        result.append(ch)
+                        escape = True
+                        idx += 1
+                        continue
+                    if (
+                        next_char == "u"
+                        and idx + 5 < len(text)
+                        and all(part in "0123456789abcdefABCDEF" for part in text[idx + 2:idx + 6])
+                    ):
+                        result.append(ch)
+                        escape = True
+                        idx += 1
+                        continue
+                    idx += 1
+                    continue
+
+                if ch == '"':
+                    result.append(ch)
+                    in_string = False
+                    idx += 1
+                    continue
+
+                result.append(ch)
+                idx += 1
+                continue
+
+            if ch == '"':
+                in_string = True
+            result.append(ch)
+            idx += 1
 
         return "".join(result)
 
