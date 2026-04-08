@@ -149,12 +149,14 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
     assert "co-coo" in package.system_prompt.lower()
     assert "chief control office" in package.system_prompt.lower()
     assert "enterprise operations leaders" in package.system_prompt.lower()
+    assert "head of enterprise operations" in package.system_prompt.lower()
     assert "legal name and common alias" in package.system_prompt.lower()
     assert "coverage checklist across the buyer centers and major executive lanes" in package.system_prompt.lower()
     assert "prefer recall over conservative pruning" in package.system_prompt.lower()
     assert "medium-confidence movers with explicit role-and-employer support" in package.system_prompt.lower()
     assert "downstream workflow ranks and prioritizes later" in package.system_prompt.lower()
     assert "do not compress multiple movers into prose" in package.system_prompt.lower()
+    assert "never include companies, partnerships, products, programs, or transactions as movers" in package.system_prompt.lower()
 
 
 def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
@@ -180,6 +182,7 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     assert "co-coo" in package.user_prompt.lower()
     assert "chief control office" in package.user_prompt.lower()
     assert "enterprise operations leaders" in package.user_prompt.lower()
+    assert "head of enterprise operations" in package.user_prompt.lower()
     assert "legal name and common alias" in package.user_prompt.lower()
     assert "\"Federal National Mortgage Association (Fannie Mae)\"" in package.user_prompt
     assert "\"Fannie Mae\"" in package.user_prompt
@@ -188,6 +191,7 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     assert "medium-confidence movers with explicit role-and-employer support" in package.user_prompt.lower()
     assert "downstream workflow ranks movers later" in package.user_prompt.lower()
     assert "do not compress movers into narrative-only prose" in package.user_prompt.lower()
+    assert "never include companies, partnerships, products, programs, or transactions as movers" in package.user_prompt.lower()
     assert "Jennifer Brady" not in package.user_prompt
     assert "Capital One" not in package.user_prompt
     assert "Chief Information Officer" not in package.user_prompt

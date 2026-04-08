@@ -25,6 +25,8 @@ Extract a strict JSON inventory of executive and buyer movement rows from the De
 11. Keep medium-confidence movers when the markdown explicitly supports the person, employer, and role change even if corroboration is unavailable.
 12. If `company_context` is not explicit in the markdown but the move is clearly tied to the target company, infer `company_context` as `internal` instead of dropping the row.
 13. If the markdown presents movers in compact inventory form, normalize each distinct mover instead of collapsing them into a shorter shortlist.
+14. Return only individual people as movers. Never include companies, partnerships, products, programs, or transactions as movers. Drop initiatives or deals instead of inventing pseudo-movers or fake person names.
+15. If the markdown does not tie the move to a named individual person, drop it instead of inventing a pseudo-mover.
 
 # Output Contract
 Return ONLY valid JSON:

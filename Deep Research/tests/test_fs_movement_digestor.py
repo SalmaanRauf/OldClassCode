@@ -160,6 +160,65 @@ async def test_digest_keeps_lower_formality_buyer_source_when_valid():
 
 
 @pytest.mark.asyncio
+async def test_digest_rejects_company_and_partnership_rows_while_preserving_real_people():
+    digestor = FSMovementDigestor(kernel=_FakeKernel({
+        "movement_records": [
+            {
+                "person_name": "Better Home & Finance",
+                "target_company": "Fannie Mae",
+                "previous_role": "Mortgage origination platform",
+                "new_role": "New product partnership",
+                "movement_type": "Partnership",
+                "category": "BUYER",
+                "company_context": "external",
+                "evidence_quote": "Better Home & Finance launched a new partnership.",
+                "source_url": "https://example.com/partnership",
+                "source_title": "Partnership announcement",
+            },
+            {
+                "person_name": "Coinbase",
+                "target_company": "Fannie Mae",
+                "previous_role": "Crypto partner",
+                "new_role": "New product relationship",
+                "movement_type": "Partnership",
+                "category": "BUYER",
+                "company_context": "external",
+                "evidence_quote": "Coinbase partnered on a mortgage product.",
+                "source_url": "https://example.com/coinbase",
+                "source_title": "Product update",
+            },
+            {
+                "person_name": "Jason Dandridge",
+                "target_company": "Fannie Mae",
+                "previous_role": "SVP",
+                "new_role": "Chief Control Officer & Head of Enterprise Operations",
+                "movement_type": "Promotion",
+                "category": "BUYER",
+                "company_context": "internal",
+                "evidence_quote": "Jason Dandridge was promoted to Chief Control Officer & Head of Enterprise Operations.",
+                "source_url": "https://example.com/jason-dandridge",
+                "source_title": "Leadership update",
+            },
+        ]
+    }))
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.BUYER.MOVEMENT"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find buyer movement at Fannie Mae.",
+        ),
+        deep_research_markdown="Movement notes here.",
+    )
+
+    assert [(row.person_name, row.new_role) for row in rows] == [
+        ("Jason Dandridge", "Chief Control Officer & Head of Enterprise Operations"),
+    ]
+    assert diagnostics["skip_reasons"]["invalid_person_name"] == 2
+
+
+@pytest.mark.asyncio
 async def test_digest_filters_peer_company_movement_not_tied_to_target_company():
     digestor = FSMovementDigestor(kernel=_FakeKernel({
         "movement_records": [

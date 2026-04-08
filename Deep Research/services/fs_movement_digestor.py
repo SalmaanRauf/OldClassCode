@@ -9,7 +9,7 @@ import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from models.bd_schemas import BDTrigger
 from models.movement_schemas import MovementEvidence, MovementRecord
@@ -21,6 +21,40 @@ PROMPT_PATH = Path(__file__).parent.parent / "sk_functions" / "BD_FS_Movement_Di
 
 class FSMovementDigestor:
     """Normalizes executive and buyer movement rows for movement-led briefs."""
+
+    _NON_PERSON_NAME_TERMS = {
+        "finance",
+        "financial",
+        "mortgage",
+        "capital",
+        "coinbase",
+        "company",
+        "corporation",
+        "corp",
+        "bank",
+        "group",
+        "holdings",
+        "partnership",
+        "partners",
+        "product",
+        "platform",
+        "program",
+        "initiative",
+        "association",
+    }
+    _NON_PERSON_MOVE_TERMS = (
+        "partnership",
+        "joint venture",
+        "collaboration",
+        "product launch",
+        "product partnership",
+        "alliance",
+        "integration",
+        "merger",
+        "acquisition",
+        "transaction",
+        "deal",
+    )
 
     PASS_PLAN = (
         (
@@ -88,6 +122,7 @@ class FSMovementDigestor:
             raw_responses: List[str] = []
             pass_results: List[Dict[str, Any]] = []
             aggregate_skip_reasons: Dict[str, int] = {}
+            aggregate_skip_signatures: Dict[str, Set[str]] = {}
 
             for focus, focus_instruction in self.PASS_PLAN:
                 prompt = self._render_prompt(
@@ -107,7 +142,7 @@ class FSMovementDigestor:
                     raw_response = str(result)
                     raw_responses.append(raw_response)
                     payload = json.loads(self._extract_json(raw_response))
-                    rows, skip_reasons = self._coerce_movements(
+                    rows, skip_reasons, skip_signatures = self._coerce_movements(
                         payload.get("movement_records", []),
                         trigger=trigger,
                         max_rows=max_rows,
@@ -116,6 +151,8 @@ class FSMovementDigestor:
                     combined_rows.extend(rows)
                     for reason, count in skip_reasons.items():
                         aggregate_skip_reasons[reason] = aggregate_skip_reasons.get(reason, 0) + count
+                    for reason, signatures in skip_signatures.items():
+                        aggregate_skip_signatures.setdefault(reason, set()).update(signatures)
                     pass_results.append({"focus": focus, "count": len(rows), "skip_reasons": skip_reasons})
                 except Exception as exc:
                     pass_results.append(
@@ -129,7 +166,10 @@ class FSMovementDigestor:
 
             diagnostics["raw_response_text"] = "\n\n".join(raw_responses).strip()
             diagnostics["pass_results"] = pass_results
-            diagnostics["skip_reasons"] = aggregate_skip_reasons
+            diagnostics["skip_reasons"] = {
+                reason: len(signatures)
+                for reason, signatures in aggregate_skip_signatures.items()
+            } or aggregate_skip_reasons
             movements = self._dedupe_rows(combined_rows, max_rows=max_rows)
             diagnostics["movements_returned"] = len(movements)
             diagnostics["status"] = "Succeeded" if movements else "Failed"
@@ -195,26 +235,29 @@ class FSMovementDigestor:
         trigger: BDTrigger,
         max_rows: int,
         target_company_aliases: Optional[List[str]] = None,
-    ) -> Tuple[List[MovementRecord], Dict[str, int]]:
+    ) -> Tuple[List[MovementRecord], Dict[str, int], Dict[str, Set[str]]]:
         if not isinstance(raw_items, list):
-            return [], {}
+            return [], {}, {}
 
         company_aliases = self._company_aliases(target_company_aliases or [trigger.company_focus])
         deduped_rows: Dict[Tuple[str, str, str, str], Tuple[int, int, MovementRecord]] = {}
         skip_reasons: Dict[str, int] = {}
+        skip_signatures: Dict[str, Set[str]] = {}
 
-        def skip(reason: str) -> None:
+        def skip(reason: str, signature: str) -> None:
             skip_reasons[reason] = skip_reasons.get(reason, 0) + 1
+            skip_signatures.setdefault(reason, set()).add(signature)
 
         for entry in raw_items:
+            entry_signature = self._entry_signature(entry)
             if not isinstance(entry, dict):
-                skip("non_dict_entry")
+                skip("non_dict_entry", entry_signature)
                 continue
 
             target_company = str(entry.get("target_company") or "").strip()
             normalized_target_aliases = self._company_aliases([target_company])
             if company_aliases and company_aliases.isdisjoint(normalized_target_aliases):
-                skip("target_company_mismatch")
+                skip("target_company_mismatch", entry_signature)
                 continue
 
             person_name = str(entry.get("person_name") or "").strip()
@@ -228,19 +271,25 @@ class FSMovementDigestor:
             source_url = str(entry.get("source_url") or "").strip()
 
             if not all([person_name, target_company, movement_type, category]):
-                skip("missing_required_fields")
+                skip("missing_required_fields", entry_signature)
+                continue
+            if not self._looks_like_person_name(person_name):
+                skip("invalid_person_name", entry_signature)
                 continue
             if not (previous_role or new_role):
-                skip("missing_roles")
+                skip("missing_roles", entry_signature)
                 continue
             if category not in {"EXEC", "BUYER"}:
-                skip("invalid_category")
+                skip("invalid_category", entry_signature)
+                continue
+            if not self._looks_like_person_movement(movement_type, previous_role, new_role):
+                skip("invalid_movement_type", entry_signature)
                 continue
             if not evidence_quote or not source_url:
-                skip("missing_source")
+                skip("missing_source", entry_signature)
                 continue
             if effective_date and not self._date_within_lookback(effective_date, trigger.time_window_days):
-                skip("outside_lookback")
+                skip("outside_lookback", entry_signature)
                 continue
 
             row = MovementRecord(
@@ -277,7 +326,7 @@ class FSMovementDigestor:
             item[2]
             for item in sorted(deduped_rows.values(), key=lambda payload: payload[0])
         ]
-        return rows[:max_rows], skip_reasons
+        return rows[:max_rows], skip_reasons, skip_signatures
 
     def _extract_json(self, text: str) -> str:
         cleaned = text.strip()
@@ -343,6 +392,48 @@ class FSMovementDigestor:
         if normalized in {"buyer", "buying", "buying_center", "buying center"}:
             return "BUYER"
         return str(value or "").strip().upper()
+
+    @classmethod
+    def _looks_like_person_name(cls, value: str) -> bool:
+        text = str(value or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        if any(symbol in text for symbol in ("&", "/", "|", "@")):
+            return False
+        if any(term in lowered for term in cls._NON_PERSON_MOVE_TERMS):
+            return False
+
+        normalized = unicodedata.normalize("NFKD", text)
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        tokens = re.findall(r"[A-Za-z][A-Za-z'.-]*", normalized)
+        if len(tokens) < 2 or len(tokens) > 6:
+            return False
+        if any(token.lower() in cls._NON_PERSON_NAME_TERMS for token in tokens):
+            return False
+        return True
+
+    @classmethod
+    def _looks_like_person_movement(cls, movement_type: str, previous_role: str, new_role: str) -> bool:
+        combined = " ".join(
+            part.strip().lower()
+            for part in (movement_type, previous_role, new_role)
+            if str(part or "").strip()
+        )
+        return not any(marker in combined for marker in cls._NON_PERSON_MOVE_TERMS)
+
+    @staticmethod
+    def _entry_signature(entry: Any) -> str:
+        if not isinstance(entry, dict):
+            return str(entry)
+        parts = [
+            str(entry.get("person_name") or "").strip().lower(),
+            str(entry.get("target_company") or "").strip().lower(),
+            str(entry.get("new_role") or "").strip().lower(),
+            str(entry.get("movement_type") or "").strip().lower(),
+            str(entry.get("source_url") or "").strip().lower(),
+        ]
+        return "|".join(parts)
 
     @classmethod
     def _movement_dedupe_key(cls, row: MovementRecord) -> Tuple[str, str, str, str]:

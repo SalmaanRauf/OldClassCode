@@ -24,10 +24,11 @@ NAMED_MOVE_OVERLAY = """
 - The downstream workflow ranks and prioritizes later. Optimize for recall here, not aggressive commercial pruning inside the research report.
 - Use both the destination account's legal name and common alias in searches whenever both exist.
 - Prefer recall over conservative pruning. When top-tier evidence is sparse, keep medium-confidence movers with explicit role-and-employer support from leadership pages, governance pages, conference bios, investor materials, or explicit self-disclosures rather than ending the inventory early.
+- Return only individual people as movers. Never include companies, partnerships, products, programs, or transactions as movers. Drop initiatives or deals instead of inventing pseudo-movers.
 - Preserve appointments, promotions, acting roles, external hires, scope expansions, and materially relevant departures, resignations, or terminations when they create a vacancy, successor decision, governance gap, or backfill opportunity.
 - Do not stop after finding only a few obvious names. Continue until the destination account has been checked across audit, finance, risk, compliance, legal, technology, security, data/AI, and operations/transformation buyer centers.
 - If buyer movement is materially thinner than executive movement, keep spending search effort on buyer-center discovery instead of ending early with an executive-heavy list.
-- Use title-family search expansion when buyer recall is thin. Explicitly search for and preserve moves involving General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Control Office leaders, Chief Compliance Officer, Chief Risk Officer, Chief Operating Officer, COO, co-COO, Chief Information Officer, Chief Information Security Officer, Chief Data/AI leaders, Enterprise Operations leaders, operations leaders, and Single-Family/Multifamily business leaders when they are tied to the destination account.
+- Use title-family search expansion when buyer recall is thin. Explicitly search for and preserve moves involving General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Control Office leaders, Head of Enterprise Operations, Chief Compliance Officer, Chief Risk Officer, Chief Operating Officer, COO, co-COO, Chief Information Officer, Chief Information Security Officer, Chief Data/AI leaders, Enterprise Operations leaders, operations leaders, and Single-Family/Multifamily business leaders when they are tied to the destination account.
 - Maintain a coverage checklist across the buyer centers and major executive lanes. Do not finalize the report until each lane has been checked with targeted title-family searches or the evidence is exhausted.
 - If the movement inventory is still below roughly 15 movers, continue targeted searches across issuer newsroom, leadership pages, governance pages, investor relations, conference bios, and corroborated self-disclosures before concluding that evidence is weak.
 - Do not compress multiple movers into prose when they can be listed explicitly in inventories.
@@ -108,6 +109,9 @@ class MovementPromptBuilder:
             "Prefer recall over conservative pruning. When top-tier evidence is sparse, include medium-confidence movers with explicit role-and-employer support from leadership pages, governance pages, conference bios, investor materials, or explicit self-disclosures rather than ending the inventory early."
         )
         lines.append(
+            "Return only individual people as movers. Never include companies, partnerships, products, programs, or transactions as movers. Drop initiatives or deals instead of inventing pseudo-movers."
+        )
+        lines.append(
             "Preserve appointments, promotions, acting roles, external hires, scope expansions, and materially relevant departures, resignations, or terminations that create a vacancy, successor decision, governance gap, or backfill opportunity."
         )
         lines.append(
@@ -117,7 +121,7 @@ class MovementPromptBuilder:
             "If buyer movement is materially thinner than executive movement, keep pushing buyer-center discovery instead of ending early with an executive-heavy list."
         )
         lines.append(
-            "If buyer recall is thin, expand title-family searches for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Control Office leaders, Chief Compliance Officer, Chief Risk Officer, Chief Operating Officer, COO, co-COO, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, operations leaders, and Single-Family or Multifamily business leaders."
+            "If buyer recall is thin, expand title-family searches for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Control Office leaders, Head of Enterprise Operations, Chief Compliance Officer, Chief Risk Officer, Chief Operating Officer, COO, co-COO, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, operations leaders, and Single-Family or Multifamily business leaders."
         )
         lines.append(
             "Maintain a coverage checklist across buyer centers and major executive lanes. Do not finalize until each lane has been checked with targeted title-family searches or the evidence is exhausted."

@@ -134,6 +134,8 @@ def test_build_movement_user_query_keeps_recall_first_guidance() -> None:
     assert "coo" in query
     assert "co-coo" in query
     assert "chief control office" in query
+    assert "head of enterprise operations" in query
+    assert "never include companies, partnerships, products, programs, or transactions as movers" in query
 
 
 def test_build_movement_request_accepts_nested_output_payload() -> None:

@@ -47,6 +47,7 @@ def test_financial_services_prompt_requires_recall_first_movement_inventory():
     assert "co-coo" in lowered
     assert "chief control office" in lowered
     assert "enterprise operations leaders" in lowered
+    assert "head of enterprise operations" in lowered
     assert "legal name and common alias" in lowered
     assert "coverage checklist across major executive lanes" in lowered
     assert "buyer-center coverage checklist" in lowered
@@ -55,3 +56,4 @@ def test_financial_services_prompt_requires_recall_first_movement_inventory():
     assert "downstream workflow will rank later" in lowered
     assert "do not compress multiple movers into prose" in lowered
     assert "do not move on unless you have found enough movers" in lowered
+    assert "never include companies, partnerships, products, programs, or transactions as movers" in lowered
