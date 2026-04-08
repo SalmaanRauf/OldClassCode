@@ -74,6 +74,11 @@ from services.transition_brief_formatter import (
     build_transition_brief,
 )
 from services.element_response_utils import extract_element_response_payload
+from services.chat_copy import (
+    build_company_intelligence_welcome_message,
+    build_mode_picker_message,
+    build_movement_mode_active_message,
+)
 from services.review_flow import run_review_action_loop
 from services.chainlit_render_utils import (
     build_movement_brief_fallback_markdown,
@@ -1390,17 +1395,7 @@ async def start():
         ctx = _get_ctx()
         
         # Send welcome message
-        welcome_msg = (
-            "**Company Intelligence (Chat)**\n\n"
-            "- Type a company (e.g., Capital One or ticker COF) for a full analysis.\n"
-            "- Then ask follow-ups (risk, competitors, regulatory, strategy, timeline, etc.).\n"
-            "- I'll remember the context and only search when needed.\n\n"
-            "**New capabilities:**\n"
-            "- Ask about any company (not just hardcoded ones)\n"
-            "- General research questions (e.g., 'What are the top financial companies?')\n"
-            "- Mixed requests (e.g., 'Tell me about Tesla and its competitors')"
-        )
-        await cl.Message(welcome_msg).send()
+        await cl.Message(build_company_intelligence_welcome_message()).send()
 
         current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY)
         if current_mode not in {"standard", "deep", MOVEMENT_MODE, TRANSITION_MODE}:
@@ -1446,7 +1441,7 @@ async def start():
                 ),
             ]
             await cl.Message(
-                content="**Step 1:** Select research mode:",
+                content=build_mode_picker_message(),
                 actions=actions
             ).send()
 
@@ -2142,7 +2137,7 @@ async def on_message(message: cl.Message):
 
             if _get_active_run(MOVEMENT_MODE):
                 await cl.Message(
-                    "People Movement Brief mode is active. Use the review actions to run research, view the prompt, or adjust the scenario."
+                    build_movement_mode_active_message()
                 ).send()
                 return
             await show_movement_form()

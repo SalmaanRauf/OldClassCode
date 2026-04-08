@@ -218,6 +218,8 @@ def test_build_movement_preflight_review_shows_move_context_and_prompt_actions()
     assert "180 days" in payload["content"]
     assert "Synthetic" in payload["content"]
     assert "AI governance program" in payload["content"]
+    assert "Likely destination opportunities" in payload["content"]
+    assert "Top hypotheses" not in payload["content"]
     assert payload["actions"] == [
         {"name": ACTION_RUN_MOVEMENT_RESEARCH, "label": "Run Research", "payload": {"run_id": "run-123", "mode": "movement"}},
         {"name": ACTION_EDIT_MOVEMENT_PROMPT, "label": "Edit Prompt", "payload": {"run_id": "run-123", "mode": "movement"}},
@@ -227,17 +229,19 @@ def test_build_movement_preflight_review_shows_move_context_and_prompt_actions()
     assert payload["view_prompt_action"]["payload"] == {"run_id": "run-123", "mode": "movement"}
 
 
-def test_build_movement_preflight_review_surfaces_match_and_review_diagnostics():
+def test_build_movement_preflight_review_hides_raw_diagnostics_but_keeps_candidate_suggestions():
     preflight = _preflight()
     preflight.person_resolution.match_status = "candidate"
     preflight.person_resolution.match_diagnostics = [
-        "No exact account-scoped match. Closest candidate is Jennifer A Brady via from key buyers (score 0.96)."
+        "No exact account-scoped match. Closest candidate is Jennifer A Brady via from key buyers (score 0.96).",
+        "Org chart C-Suite/Innovation & Digital failed with status 500.",
     ]
     preflight.person_resolution.candidate_suggestions = [
         "Jennifer A Brady (Senior Director of Technology Risk; from key buyers; score 0.96)"
     ]
     preflight.review_diagnostics = [
-        "Source account lookup did not resolve cleanly for Capital One; using raw company text."
+        "Org chart C-Suite/Marketing & Sales failed with status 500.",
+        "Source account lookup did not resolve cleanly for Capital One; using raw company text.",
     ]
 
     payload = build_movement_preflight_review(
@@ -252,10 +256,12 @@ def test_build_movement_preflight_review_surfaces_match_and_review_diagnostics()
     )
 
     content = payload["content"]
-    assert "Match diagnostics" in content
-    assert "Closest candidate is Jennifer A Brady" in content
     assert "Candidate suggestions" in content
-    assert "Review diagnostics" in content
+    assert "Jennifer A Brady" in content
+    assert "Match diagnostics" not in content
+    assert "Review diagnostics" not in content
+    assert "Org chart" not in content
+    assert "status 500" not in content
 
 
 def test_build_movement_brief_payload_caps_visible_rows_and_actions_and_keeps_detail_content():

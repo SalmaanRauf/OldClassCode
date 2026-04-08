@@ -331,7 +331,7 @@ def build_movement_progress_content(request: MovementBriefRequest | Dict[str, An
         f"Stage: {state['current_stage_label']}",
         f"Status: {state['current_status']}",
         "",
-        "**Pipeline:**",
+        "**Research stages:**",
     ]
 
     for label, status in state["pipeline"]:
@@ -361,9 +361,7 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
         ["Move validation", "pending"],
         ["Relationship context", "pending"],
         ["Research plan", "pending"],
-        ["Account signals", "not started"],
-        ["Executive movement", "not started"],
-        ["Buyer movement", "not started"],
+        ["Deep Research", "not started"],
         ["ProConnect matching/enrichment", "not started"],
         ["Credentials", "not started"],
         ["Brief assembly", "not started"],
@@ -395,35 +393,28 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
             elif idx == index:
                 item[1] = "complete" if latest_status == "complete" else "in progress"
 
-        if stage_key == "executive_movement":
+        if stage_key in {"account_signals", "executive_movement", "buyer_movement", "movement_rows"}:
+            pipeline[3][1] = "complete" if latest_status == "complete" else "in progress"
+        elif stage_key in {"proconnect", "proconnect_enrichment"}:
+            pipeline[3][1] = "complete"
             pipeline[4][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key == "buyer_movement":
+        elif stage_key in {"credentials", "validating_credentials"}:
+            pipeline[3][1] = "complete"
             pipeline[4][1] = "complete"
             pipeline[5][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key == "movement_rows":
-            movement_status = "complete" if latest_status == "complete" else "in progress"
-            pipeline[4][1] = movement_status
-            pipeline[5][1] = movement_status
-        elif stage_key in {"proconnect", "proconnect_enrichment"}:
+        elif stage_key in {"brief_assembly", "assembling_brief"}:
+            pipeline[3][1] = "complete"
             pipeline[4][1] = "complete"
             pipeline[5][1] = "complete"
             pipeline[6][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key in {"credentials", "validating_credentials"}:
-            pipeline[4][1] = "complete"
-            pipeline[5][1] = "complete"
-            pipeline[6][1] = "complete"
-            pipeline[7][1] = "complete" if latest_status == "complete" else "in progress"
-        elif stage_key in {"brief_assembly", "assembling_brief"}:
-            pipeline[4][1] = "complete"
-            pipeline[5][1] = "complete"
-            pipeline[6][1] = "complete"
-            pipeline[7][1] = "complete"
-            pipeline[8][1] = "complete" if latest_status == "complete" else "in progress"
 
     if last_index >= 0:
         for idx, item in enumerate(pipeline):
             if idx < last_index:
                 item[1] = "complete"
+
+    if deep_research_event and pipeline[3][1] == "not started":
+        pipeline[3][1] = "in progress"
 
     if last_index >= _stage_index("account_signals"):
         deep_research_event = None
@@ -463,7 +454,7 @@ def _derive_progress_state(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     if review_ready:
         header_title = "**People Movement Brief Ready for Review**"
         current_stage_label = "Review ready"
-        current_status = "Awaiting Run Research"
+        current_status = "Ready to run"
     else:
         header_title = "**People Movement Brief In Progress**"
         current_status = "In progress"
@@ -525,15 +516,15 @@ def _stage_index(stage_key: str) -> int:
         "building_relationship_context": 1,
         "generating_research_plan": 2,
         "account_signals": 3,
-        "executive_movement": 4,
-        "buyer_movement": 5,
-        "movement_rows": 4,
-        "proconnect": 6,
-        "proconnect_enrichment": 6,
-        "credentials": 7,
-        "validating_credentials": 7,
-        "brief_assembly": 8,
-        "assembling_brief": 8,
+        "executive_movement": 3,
+        "buyer_movement": 3,
+        "movement_rows": 3,
+        "proconnect": 4,
+        "proconnect_enrichment": 4,
+        "credentials": 5,
+        "validating_credentials": 5,
+        "brief_assembly": 6,
+        "assembling_brief": 6,
     }
     return order.get(stage_key, -1)
 

@@ -260,8 +260,10 @@ def test_build_movement_progress_content_marks_review_ready_after_preflight():
 
     assert "**People Movement Brief Ready for Review**" in content
     assert "Stage: Review ready" in content
-    assert "Status: Awaiting Run Research" in content
-    assert "- Account signals: not started" in content
+    assert "Status: Ready to run" in content
+    assert "**Research stages:**" in content
+    assert "**Pipeline:**" not in content
+    assert "- Deep Research: not started" in content
     assert "- Brief assembly: not started" in content
 
 
@@ -296,7 +298,8 @@ def test_build_movement_progress_content_switches_to_live_run_once_research_star
     assert "**People Movement Brief In Progress**" in content
     assert "Stage: Account signals" in content
     assert "Status: Normalizing financial-services signal evidence." in content
-    assert "- Account signals: in progress" in content
+    assert "**Research stages:**" in content
+    assert "- Deep Research: in progress" in content
 
 
 def test_build_transition_request_for_movement_reuses_named_move_transition_shape():
@@ -523,9 +526,7 @@ def test_build_movement_progress_content_tracks_pipeline_after_deep_research_han
     assert "Person: Jennifer Brady" in content
     assert "Move: Capital One -> Fannie Mae" in content
     assert "Lookback: 180 days" in content
-    assert "Account signals: complete" in content
-    assert "Executive movement: complete" in content
-    assert "Buyer movement: complete" in content
+    assert "Deep Research: complete" in content
     assert "ProConnect matching/enrichment: in progress" in content
     assert "Deep Research polling" not in content
     assert "Poll: #2" not in content
