@@ -72,8 +72,9 @@ class MovementRanker:
     def _score(self, item: Dict[str, Any]) -> float:
         movement = item["movement"]
         score = 0.0
+        is_departure = self._is_departure_move(movement)
         if item.get("known"):
-            score += 1.5
+            score += 4.0
         if item.get("worked_with"):
             score += 2.0
         score += min(float(item.get("project_count", 0)), 5.0) * 0.3
@@ -84,6 +85,8 @@ class MovementRanker:
             score += 1.0
         if str(movement.company_context).strip().lower() == "internal":
             score += 0.5
+        if item.get("known") and not is_departure:
+            score += 0.75
         score += self._movement_priority(movement)
         return score
 
@@ -108,6 +111,10 @@ class MovementRanker:
         if any(marker in text for marker in cls._ACTING_MARKERS):
             return 0.6
         return 0.0
+
+    @classmethod
+    def _is_departure_move(cls, movement: Any) -> bool:
+        return any(marker in cls._movement_text(movement) for marker in cls._DEPARTURE_MARKERS)
 
     @staticmethod
     def _movement_text(movement: Any) -> str:

@@ -177,7 +177,7 @@ def test_ranker_prefers_appointment_like_moves_over_departures_with_equal_levera
     assert ranked[0]["rank_score"] > ranked[1]["rank_score"]
 
 
-def test_ranker_keeps_known_departures_actionable_but_below_active_moves():
+def test_ranker_keeps_known_departures_actionable_and_above_unknown_active_moves():
     ranker = MovementRanker()
 
     ranked = ranker.rank([
@@ -210,4 +210,4 @@ def test_ranker_keeps_known_departures_actionable_but_below_active_moves():
     by_name = {item["movement"].person_name: item for item in ranked}
     assert by_name["Known Departure"]["action_posture"] == "Expansion Opportunity"
     assert by_name["Buyer Promotion"]["action_posture"] == "Expansion Opportunity"
-    assert ranked[0]["movement"].person_name == "Buyer Promotion"
+    assert ranked[0]["movement"].person_name == "Known Departure"
