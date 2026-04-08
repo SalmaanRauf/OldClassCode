@@ -415,6 +415,11 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
                     "name": "Jennifer Brady",
                     "title": "Senior Director of Technology Risk",
                     "company_scope": "from",
+                    "connections": [
+                        {"employee": {"name": "Bernadette Norrington"}},
+                        {"employee": {"name": "Maeve Raak"}},
+                        {"employee": {"name": "Shawn Marion"}},
+                    ],
                 },
             },
             "from_company_context": {
@@ -422,7 +427,7 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
                     "account_executive": {"name": "Bernadette Norrington"},
                 },
                 "relationship_network": {
-                    "connected_colleagues": {"items": [{"name": "Bernadette Norrington"}]},
+                    "connected_colleagues": {"items": [{"name": "Jenise Taylor"}]},
                     "protiviti_alumni": {"items": []},
                 },
             },
@@ -463,7 +468,11 @@ def test_build_movement_brief_payload_prepends_named_mover_board_row_from_prefli
     assert detail["source_url"] is None
     assert detail["person_detail"]["match_scope"] == "from"
     assert detail["lookup_status"] == "Matched"
-    assert detail["internal_connections"] == ["Bernadette Norrington"]
+    assert detail["internal_connections"] == [
+        "Bernadette Norrington",
+        "Maeve Raak",
+        "Shawn Marion",
+    ]
     assert detail["matched_credentials"][0]["why_relevant"] == (
         "Fits a new FS technology leader focused on controls modernization."
     )

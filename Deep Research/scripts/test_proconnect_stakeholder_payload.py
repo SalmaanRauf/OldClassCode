@@ -292,6 +292,37 @@ def test_build_person_profile_transition_recovers_project_and_win_counts_from_ac
     assert profile["win_count"] == 3
 
 
+def test_build_person_profile_transition_preserves_person_level_connections() -> None:
+    warnings: list[str] = []
+    profile = build_person_profile_transition(
+        person_requested="Jennifer Brady",
+        person_resolution={
+            "status": "matched",
+            "match_source": "from_key_buyers",
+            "match_scope": "from",
+            "matched": {
+                "name": "Jennifer Brady",
+                "title": "Senior Director of Technology Risk",
+                "connections": [
+                    {"employee": {"name": "Bernadette Norrington"}},
+                    {"employee": {"name": "Maeve Raak"}},
+                    {"employee": {"name": "Shawn Marion"}},
+                ],
+            },
+        },
+        candidate_people=[],
+        to_account=sample_account(),
+        from_account=sample_account(),
+        warnings=warnings,
+    )
+
+    assert profile["matched_person"]["connections"] == [
+        {"employee": {"name": "Bernadette Norrington"}},
+        {"employee": {"name": "Maeve Raak"}},
+        {"employee": {"name": "Shawn Marion"}},
+    ]
+
+
 def test_merge_person_candidates_prefers_richer_relationship_counts_over_zero_placeholders() -> None:
     merged = merge_person_candidates(
         candidates=[

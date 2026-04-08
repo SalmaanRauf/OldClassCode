@@ -627,18 +627,7 @@ def _build_named_mover_detail(
         "claim_policy_note": _normalize_text(person_profile.get("claim_policy_note")),
     }
     person_detail = {key: value for key, value in person_detail.items() if value}
-    scope_context = _clean_dict(named_mover_context.get("from_company_context"))
-    match_scope = _normalize_text(preflight.person_resolution.match_scope if preflight else "").lower()
-    if match_scope == "to":
-        scope_context = _clean_dict(named_mover_context.get("to_company_context"))
-    relationship_network = _clean_dict(scope_context.get("relationship_network"))
-    internal_connections = _normalize_name_list(
-        [
-            item.get("name")
-            for item in _clean_list(_clean_dict(relationship_network.get("connected_colleagues")).get("items"))
-            if isinstance(item, dict)
-        ]
-    )
+    internal_connections = _extract_connection_names(matched_person.get("connections"))
 
     return {
         "row_id": row_id,
@@ -726,6 +715,25 @@ def _normalize_name_list(value: Any, *, limit: int = 3) -> List[str]:
     normalized: List[str] = []
     for item in items:
         text = _normalize_text(item)
+        if text and text not in normalized:
+            normalized.append(text)
+        if len(normalized) >= limit:
+            break
+    return normalized
+
+
+def _extract_connection_names(value: Any, *, limit: int = 3) -> List[str]:
+    items = value if isinstance(value, list) else []
+    normalized: List[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        employee = item.get("employee") if isinstance(item.get("employee"), dict) else {}
+        text = _normalize_text(
+            item.get("name")
+            or employee.get("name")
+            or ""
+        )
         if text and text not in normalized:
             normalized.append(text)
         if len(normalized) >= limit:

@@ -1761,6 +1761,11 @@ def build_person_profile_transition(
         + scoped_wins,
         keys=["opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyerId", "primaryKeyBuyer"],
     )
+    merged_connections = dedupe_simple_records(
+        to_list_dicts(first_non_empty(matched, ["connections"]))
+        + to_list_dicts(first_non_empty(key_buyer_match, ["connections"])),
+        keys=["contactId", "id", "name", "employee"],
+    )
 
     project_count = max(
         to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])) or 0,
@@ -1790,6 +1795,7 @@ def build_person_profile_transition(
         "win_count": win_count,
         "projects": merged_projects,
         "closeWonOpps": merged_wins,
+        "connections": merged_connections,
         "score": 1.0,
     }
 
