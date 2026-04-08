@@ -43,6 +43,10 @@ def test_financial_services_prompt_requires_recall_first_movement_inventory():
     assert "do not stop after finding only a few examples" in lowered
     assert "roughly 15-18 total movers" in lowered
     assert "general counsel, deputy general counsel, corporate secretary" in lowered
+    assert "chief operating officer" in lowered
+    assert "co-coo" in lowered
+    assert "chief control office" in lowered
+    assert "enterprise operations leaders" in lowered
     assert "legal name and common alias" in lowered
     assert "coverage checklist across major executive lanes" in lowered
     assert "buyer-center coverage checklist" in lowered

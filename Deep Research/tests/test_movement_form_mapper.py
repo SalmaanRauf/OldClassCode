@@ -130,6 +130,10 @@ def test_build_movement_user_query_keeps_recall_first_guidance() -> None:
     assert "prefer recall over conservative pruning" in query
     assert "downstream workflow ranks movers later" in query
     assert "do not compress movers into narrative-only prose" in query
+    assert "chief operating officer" in query
+    assert "coo" in query
+    assert "co-coo" in query
+    assert "chief control office" in query
 
 
 def test_build_movement_request_accepts_nested_output_payload() -> None:

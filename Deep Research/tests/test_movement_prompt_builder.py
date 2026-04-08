@@ -145,6 +145,10 @@ def test_builder_appends_named_move_overlay_to_industry_prompt(tmp_path) -> None
     assert "buyer movement inventory" in package.system_prompt.lower()
     assert "roughly 15-18 total movers" in package.system_prompt.lower()
     assert "general counsel, deputy general counsel, corporate secretary" in package.system_prompt.lower()
+    assert "chief operating officer" in package.system_prompt.lower()
+    assert "co-coo" in package.system_prompt.lower()
+    assert "chief control office" in package.system_prompt.lower()
+    assert "enterprise operations leaders" in package.system_prompt.lower()
     assert "legal name and common alias" in package.system_prompt.lower()
     assert "coverage checklist across the buyer centers and major executive lanes" in package.system_prompt.lower()
     assert "prefer recall over conservative pruning" in package.system_prompt.lower()
@@ -171,6 +175,11 @@ def test_builder_generates_reviewable_move_led_user_prompt(tmp_path) -> None:
     assert "do not stop after finding only a few obvious names" in package.user_prompt.lower()
     assert "roughly 15-18 total movers" in package.user_prompt.lower()
     assert "general counsel, deputy general counsel, corporate secretary" in package.user_prompt.lower()
+    assert "chief operating officer" in package.user_prompt.lower()
+    assert "coo" in package.user_prompt.lower()
+    assert "co-coo" in package.user_prompt.lower()
+    assert "chief control office" in package.user_prompt.lower()
+    assert "enterprise operations leaders" in package.user_prompt.lower()
     assert "legal name and common alias" in package.user_prompt.lower()
     assert "\"Federal National Mortgage Association (Fannie Mae)\"" in package.user_prompt
     assert "\"Fannie Mae\"" in package.user_prompt

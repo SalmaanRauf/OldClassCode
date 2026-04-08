@@ -81,6 +81,7 @@ When the user requests research on any of the following signals, apply the corre
 - DO NOT MOVE ON UNLESS YOU HAVE FOUND ENOUGH MOVERS
 - Preserve appointments, promotions, acting roles, external hires, scope expansions, and materially relevant departures, resignations, and terminations when they create a successor decision, governance gap, or backfill opportunity
 - Do not let easy-to-find executive departures crowd out buyer movement coverage when stronger buyer-side moves exist
+- If executive recall is thin, expand title-family coverage and explicitly search for Chief Executive Officer, President, Co-President, Chief Operating Officer, COO, co-COO, Chief Control Officer, Chief Control Office leaders, Enterprise Operations leaders, operations leaders, and board committee leadership tied to the target account
 - Maintain a coverage checklist across major executive lanes and do not finalize until those lanes have been checked with targeted title-family searches or evidence is exhausted
 
 ---
@@ -103,7 +104,7 @@ When the user requests research on any of the following signals, apply the corre
 - Prefer recall over conservative pruning. When top-tier evidence is sparse, include medium-confidence movers with explicit role-and-employer support from leadership pages, governance pages, conference bios, investor materials, or explicit self-disclosures rather than ending the inventory early
 - Preserve appointments, promotions, acting roles, external hires, scope-expansion moves, and materially relevant departures when they clearly change budget, control scope, operating authority, program ownership, or create a real transition window
 - If buyer movement is still thin, keep searching buyer centers before ending early with an executive-heavy list
-- If buyer recall is thin, expand title-family coverage and explicitly search for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Compliance Officer, Chief Risk Officer, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, and Single-Family/Multifamily business leaders at the target account
+- If buyer recall is thin, expand title-family coverage and explicitly search for General Counsel, Deputy General Counsel, Corporate Secretary, Chief Audit Executive, Chief Control Officer, Chief Control Office leaders, Chief Compliance Officer, Chief Risk Officer, Chief Operating Officer, COO, co-COO, CIO, CISO, Chief Data/AI leaders, Enterprise Operations leaders, operations leaders, and Single-Family/Multifamily business leaders at the target account
 - Maintain a buyer-center coverage checklist and do not finalize until each buyer center has been checked with targeted title-family searches or evidence is exhausted
 - If the movement inventory is still below roughly 15 movers, continue targeted searches across issuer newsroom, leadership pages, governance pages, investor relations, conference bios, and corroborated self-disclosures before concluding that evidence is weak
 
