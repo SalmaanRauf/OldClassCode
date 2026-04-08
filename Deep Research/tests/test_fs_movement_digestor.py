@@ -497,6 +497,105 @@ async def test_digest_filters_rows_outside_requested_lookback_when_effective_dat
 
 
 @pytest.mark.asyncio
+async def test_digest_keeps_month_precision_rows_when_month_overlaps_lookback_window(monkeypatch):
+    from services import fs_movement_digestor as digestor_module  # noqa: E402
+
+    class _FrozenDate(digestor_module.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 4, 8)
+
+    monkeypatch.setattr(digestor_module, "date", _FrozenDate)
+
+    digestor = FSMovementDigestor(
+        kernel=_FakeKernel(
+            {
+                "movement_records": [
+                    {
+                        "person_name": "Jason Dandridge",
+                        "target_company": "Fannie Mae",
+                        "previous_role": "SVP",
+                        "new_role": "Chief Control Officer & Head of Enterprise Operations",
+                        "movement_type": "Role Expansion",
+                        "category": "BUYER",
+                        "company_context": "internal",
+                        "effective_date": "Oct 2025",
+                        "evidence_quote": "Jason Dandridge assumed the expanded Chief Control Officer & Head of Enterprise Operations role in October 2025.",
+                        "source_url": "https://example.com/jason-dandridge",
+                        "source_title": "Leadership update",
+                    }
+                ]
+            }
+        )
+    )
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.BUYER.MOVEMENT"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find buyer movement at Fannie Mae.",
+            time_window_days=180,
+        ),
+        deep_research_markdown="Movement notes here.",
+        target_company_aliases=["Fannie Mae"],
+    )
+
+    assert diagnostics["status"] == "Succeeded"
+    assert [row.person_name for row in rows] == ["Jason Dandridge"]
+    assert rows[0].effective_date == "2025-10-01"
+
+
+@pytest.mark.asyncio
+async def test_digest_filters_month_precision_rows_when_month_is_entirely_outside_lookback(monkeypatch):
+    from services import fs_movement_digestor as digestor_module  # noqa: E402
+
+    class _FrozenDate(digestor_module.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 4, 8)
+
+    monkeypatch.setattr(digestor_module, "date", _FrozenDate)
+
+    digestor = FSMovementDigestor(
+        kernel=_FakeKernel(
+            {
+                "movement_records": [
+                    {
+                        "person_name": "Older Mover",
+                        "target_company": "Fannie Mae",
+                        "previous_role": "Risk Executive",
+                        "new_role": "Chief Risk Officer",
+                        "movement_type": "Appointment",
+                        "category": "BUYER",
+                        "company_context": "internal",
+                        "effective_date": "Sep 2025",
+                        "evidence_quote": "Older Mover was appointed in September 2025.",
+                        "source_url": "https://example.com/older-mover",
+                        "source_title": "Leadership update",
+                    }
+                ]
+            }
+        )
+    )
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.BUYER.MOVEMENT"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find buyer movement at Fannie Mae.",
+            time_window_days=180,
+        ),
+        deep_research_markdown="Movement notes here.",
+        target_company_aliases=["Fannie Mae"],
+    )
+
+    assert rows == []
+    assert diagnostics["movements_returned"] == 0
+
+
+@pytest.mark.asyncio
 async def test_digest_defaults_missing_company_context_and_tracks_skip_reasons():
     digestor = FSMovementDigestor(
         kernel=_FakeKernel(

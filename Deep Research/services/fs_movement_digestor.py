@@ -6,7 +6,8 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
-from datetime import date, datetime
+from calendar import monthrange
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -266,7 +267,7 @@ class FSMovementDigestor:
             movement_type = str(entry.get("movement_type") or "").strip()
             category = self._normalize_category(entry.get("category"))
             company_context = str(entry.get("company_context") or "").strip() or "internal"
-            effective_date = self._normalize_effective_date(entry.get("effective_date"))
+            effective_date, effective_date_precision = self._normalize_effective_date(entry.get("effective_date"))
             evidence_quote = str(entry.get("evidence_quote") or "").strip()
             source_url = str(entry.get("source_url") or "").strip()
 
@@ -288,7 +289,11 @@ class FSMovementDigestor:
             if not evidence_quote or not source_url:
                 skip("missing_source", entry_signature)
                 continue
-            if effective_date and not self._date_within_lookback(effective_date, trigger.time_window_days):
+            if effective_date and not self._date_within_lookback(
+                effective_date,
+                trigger.time_window_days,
+                precision=effective_date_precision,
+            ):
                 skip("outside_lookback", entry_signature)
                 continue
 
@@ -572,27 +577,39 @@ class FSMovementDigestor:
         return re.sub(r"\s+", " ", text).strip()
 
     @staticmethod
-    def _normalize_effective_date(value: Any) -> Optional[str]:
+    def _normalize_effective_date(value: Any) -> Tuple[Optional[str], str]:
         text = str(value or "").strip()
         if not text:
-            return None
+            return None, "unknown"
         for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%B %d, %Y", "%b %d, %Y", "%Y-%m", "%B %Y", "%b %Y"):
             try:
                 parsed = datetime.strptime(text, fmt)
                 if fmt in {"%Y-%m", "%B %Y", "%b %Y"}:
                     parsed = parsed.replace(day=1)
-                return parsed.date().isoformat()
+                    return parsed.date().isoformat(), "month"
+                return parsed.date().isoformat(), "day"
             except ValueError:
                 continue
-        return None
+        return None, "unknown"
 
     @staticmethod
-    def _date_within_lookback(effective_date: str, lookback_days: int) -> bool:
+    def _date_within_lookback(
+        effective_date: str,
+        lookback_days: int,
+        *,
+        precision: str = "day",
+        today: Optional[date] = None,
+    ) -> bool:
         try:
             movement_date = date.fromisoformat(effective_date)
         except ValueError:
             return True
-        return (date.today() - movement_date).days <= int(lookback_days or 0)
+        reference_date = today or date.today()
+        cutoff = reference_date - timedelta(days=int(lookback_days or 0))
+        if precision == "month":
+            month_last_day = monthrange(movement_date.year, movement_date.month)[1]
+            movement_date = movement_date.replace(day=month_last_day)
+        return movement_date >= cutoff
 
     def _fallback_prompt(self) -> str:
         return (
