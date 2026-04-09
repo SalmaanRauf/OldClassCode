@@ -181,6 +181,11 @@ class ProConnectMovementService:
             person_name=person_name,
             trust_person_delivery_fields=trust_person_delivery_fields,
         )
+        payload = self._preserve_requested_identity(
+            payload=payload,
+            requested_name=person_name,
+            fallback=exact_person,
+        )
 
         logger.info(
             "ProConnect movement lookup matched person=%s company=%s account_id=%s projects=%s wins=%s owner=%s raw_project_count=%s raw_win_count=%s projects_list=%s wins_list=%s payload_debug=%s",
@@ -721,6 +726,58 @@ class ProConnectMovementService:
         if isinstance(connections, list) and connections:
             merged["connections"] = connections
         return merged
+
+    @classmethod
+    def _preserve_requested_identity(
+        cls,
+        *,
+        payload: Dict[str, Any],
+        requested_name: str,
+        fallback: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        requested_variants = cls._person_name_variants(requested_name)
+        payload_name = full_person_name(payload) or str(payload.get("name") or "").strip()
+        if cls._matches_name_exact(requested_variants, payload_name) or cls._matches_name_fallback(
+            requested_variants, payload_name
+        ):
+            return payload
+
+        restored = dict(payload)
+        fallback_name = full_person_name(fallback) or str(fallback.get("name") or "").strip()
+        if not (
+            cls._matches_name_exact(requested_variants, fallback_name)
+            or cls._matches_name_fallback(requested_variants, fallback_name)
+        ):
+            return payload
+
+        identity_fields = (
+            "name",
+            "firstName",
+            "lastName",
+            "title",
+            "titleExternal",
+            "location",
+            "linkedinUrl",
+            "linkedInUrl",
+            "emailAddress",
+            "email",
+            "phone",
+            "photoUrl",
+            "pastJobExperience",
+            "education",
+            "function",
+            "level",
+            "lastUpdated",
+            "connections",
+            "connectedColleagues",
+            "connectedColleague",
+        )
+        for key in identity_fields:
+            if key in fallback:
+                restored[key] = fallback.get(key)
+            else:
+                restored.pop(key, None)
+        return restored
 
     @staticmethod
     def _person_name_variants(person_name: str) -> List[str]:

@@ -1599,7 +1599,7 @@ def title_matches_hints(candidate_title: Any, title_hints: List[str]) -> bool:
 
 def _person_reference_ids(matched: Dict[str, Any]) -> set[str]:
     ids = set()
-    for key in ["id", "contactId", "personId", "prospectId", "primaryKeyBuyerId", "buyerId"]:
+    for key in ["id", "contactId", "personId", "prospectId"]:
         value = first_non_empty(matched, [key])
         text = str(value or "").strip()
         if text:
@@ -1626,14 +1626,33 @@ def _record_matches_person_reference(record: Dict[str, Any], person_name: str, p
 def _matching_key_buyer_record(
     account: Optional[Dict[str, Any]],
     person_name: str,
-    person_ids: set[str],
+    _person_ids: set[str],
 ) -> Dict[str, Any]:
     if not isinstance(account, dict):
         return {}
     for buyer in to_list_dicts(account.get("keyBuyers")):
-        if _record_matches_person_reference(buyer, person_name, person_ids):
+        buyer_name = full_person_name(buyer) or first_non_empty(buyer, ["name", "fullName"])
+        if buyer_name and (exact_name_equals(person_name, buyer_name) or same_first_last_name(person_name, buyer_name)):
             return buyer
     return {}
+
+
+def _closed_won_records(value: Any) -> List[Dict[str, Any]]:
+    wins: List[Dict[str, Any]] = []
+    for item in to_list_dicts(value):
+        stage = normalize_text(str(first_non_empty(item, ["opportunityStage", "stage"]) or ""))
+        if stage in {"closed won", "closed - won"}:
+            wins.append(item)
+    return wins
+
+
+def _should_trust_matched_delivery_fields(matched: Dict[str, Any]) -> bool:
+    source = str(first_non_empty(matched, ["_source"]) or "").strip().lower()
+    if "key_buyers" in source:
+        return True
+    if present(first_non_empty(matched, ["relationshipOwner", "relationship_owner"])) == "present":
+        return True
+    return bool(to_list_dicts(first_non_empty(matched, ["connections"])))
 
 
 def _matching_account_projects(
@@ -1749,15 +1768,22 @@ def build_person_profile_transition(
     key_buyer_match = _matching_key_buyer_record(scoped_account, matched_name, person_ids)
     scoped_projects = _matching_account_projects(scoped_account, matched_name, person_ids)
     scoped_wins = _matching_closed_won_opportunities(scoped_account, matched_name, person_ids)
+    trust_matched_delivery_fields = _should_trust_matched_delivery_fields(matched)
     merged_projects = dedupe_simple_records(
-        to_list_dicts(first_non_empty(matched, ["projects"]))
+        (to_list_dicts(first_non_empty(matched, ["projects"])) if trust_matched_delivery_fields else [])
         + to_list_dicts(first_non_empty(key_buyer_match, ["projects"]))
         + scoped_projects,
         keys=["projectId", "id", "name", "primaryKeyBuyerId", "primaryKeyBuyer"],
     )
     merged_wins = dedupe_simple_records(
-        to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"]))
+        (
+            to_list_dicts(first_non_empty(matched, ["closeWonOpps", "closeWonOpportunities"]))
+            + _closed_won_records(first_non_empty(matched, ["primaryKeyBuyerOf"]))
+            if trust_matched_delivery_fields
+            else []
+        )
         + to_list_dicts(first_non_empty(key_buyer_match, ["closeWonOpps", "closeWonOpportunities"]))
+        + _closed_won_records(first_non_empty(key_buyer_match, ["primaryKeyBuyerOf"]))
         + scoped_wins,
         keys=["opportunityId", "opportunityKey", "id", "name", "primaryKeyBuyerId", "primaryKeyBuyer"],
     )
@@ -1768,13 +1794,17 @@ def build_person_profile_transition(
     )
 
     project_count = max(
-        to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])) or 0,
+        (to_int(first_non_empty(matched, ["projectCount", "project_count", "numberOfProjects"])) or 0)
+        if trust_matched_delivery_fields
+        else 0,
         len(merged_projects),
         len(scoped_projects),
         to_int(first_non_empty(key_buyer_match, ["projectCount", "project_count", "numberOfProjects"])) or 0,
     )
     win_count = max(
-        to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,
+        (to_int(first_non_empty(matched, ["winCount", "win_count", "numberOfWins", "wins"])) or 0)
+        if trust_matched_delivery_fields
+        else 0,
         len(merged_wins),
         len(scoped_wins),
         to_int(first_non_empty(key_buyer_match, ["winCount", "win_count", "numberOfWins", "wins"])) or 0,

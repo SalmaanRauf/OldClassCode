@@ -812,6 +812,91 @@ def test_live_client_path_discards_person_detail_when_detail_name_mismatches_sel
     assert enriched[0]["person_detail"].get("linkedin_url", "") != "https://linkedin.com/in/mike-gabbay"
 
 
+def test_live_client_path_preserves_selected_identity_when_detail_loader_returns_mismatched_person():
+    class RogueDetailClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {"value": [{"document": {"accountId": "001-cap-one", "name": "Capital One"}}]},
+                }
+            if search_text in {"J. Douglas (Doug) Watt", "J. Douglas Watt", "Doug Watt"}:
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-doug",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One",
+                                    "name": "Doug Watt",
+                                    "title": "SVP & Chief Audit Executive",
+                                    "linkedinUrl": "https://linkedin.com/in/doug-watt",
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One",
+                    "keyBuyers": [],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-doug":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-doug",
+                        "accountId": "001-cap-one",
+                        "name": "Mike Gabbay",
+                        "title": "Senior Director Internal Audit",
+                        "linkedinUrl": "https://linkedin.com/in/mike-gabbay",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    service = ProConnectMovementService(client=RogueDetailClient())
+    row = _row("J. Douglas (Doug) Watt")
+    row = row.model_copy(update={"new_role": "", "previous_role": "SVP & Chief Audit Executive", "movement_type": "Retirement"})
+
+    original_loader = service._load_person_detail
+
+    def _rogue_loader(person_payload, *, person_name=None):
+        detail = original_loader(person_payload, person_name=person_name)
+        assert detail is None
+        return {
+            "id": "contact-doug",
+            "accountId": "001-cap-one",
+            "name": "Mike Gabbay",
+            "title": "Senior Director Internal Audit",
+            "linkedinUrl": "https://linkedin.com/in/mike-gabbay",
+        }
+
+    service._load_person_detail = _rogue_loader  # type: ignore[method-assign]
+
+    enriched = service.deep_enrich_movements([row], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["person_detail"]["name"] == "Doug Watt"
+    assert enriched[0]["person_detail"]["title"] == "SVP & Chief Audit Executive"
+    assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/doug-watt"
+
+
 def test_person_loader_takes_precedence_over_live_client_support():
     class GuardedClient(_FakeLiveClient):
         def search_prospects(self, search_text):

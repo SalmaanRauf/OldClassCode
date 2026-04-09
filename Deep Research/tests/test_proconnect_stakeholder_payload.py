@@ -330,3 +330,81 @@ def test_build_person_profile_transition_ignores_unaligned_detail_evidence_warni
     assert profile["project_count"] == 0
     assert profile["win_count"] == 0
     assert warnings == []
+
+
+def test_build_person_profile_transition_requires_name_match_for_key_buyer_merge() -> None:
+    matched = {
+        "id": "contact-jason",
+        "contactId": "contact-jason",
+        "name": "Jason Dandridge",
+        "title": "Head of Operations",
+        "_source": "person_search",
+        "_company_scope": "to",
+        "linked_account_id": "001-to",
+    }
+    person_resolution = {
+        "status": "matched",
+        "match_scope": "to",
+        "match_source": "person_search",
+        "matched": matched,
+    }
+    to_account = {
+        "keyBuyers": [
+            {
+                "id": "contact-jason",
+                "firstName": "Mike",
+                "lastName": "Gabbay",
+                "relationshipOwner": "Wrong Owner",
+                "winCount": 7,
+                "closeWonOpps": [{"opportunityId": "w-1", "name": "Wrong Win"}],
+            }
+        ],
+        "project": [],
+        "allOpportunity": [],
+    }
+
+    profile = build_person_profile_transition(
+        person_requested="Jason Dandridge",
+        person_resolution=person_resolution,
+        candidate_people=[matched],
+        to_account=to_account,
+        from_account=None,
+        warnings=[],
+    )
+
+    assert profile["win_count"] == 0
+    assert profile["relationship_owner"] is None
+    assert profile["matched_person"]["closeWonOpps"] == []
+
+
+def test_build_person_profile_transition_does_not_trust_unscoped_person_search_delivery_counts() -> None:
+    matched = {
+        "id": "contact-danielle",
+        "contactId": "contact-danielle",
+        "name": "Danielle McCoy",
+        "title": "Senior Vice President, Deputy General Counsel & Deputy Corporate Secretary",
+        "_source": "person_search",
+        "_company_scope": "to",
+        "linked_account_id": "001-to",
+        "winCount": 10,
+        "closeWonOpps": [{"opportunityId": "w-1", "name": "Wrong Win"}],
+    }
+    person_resolution = {
+        "status": "matched",
+        "match_scope": "to",
+        "match_source": "person_search",
+        "matched": matched,
+    }
+
+    profile = build_person_profile_transition(
+        person_requested="Danielle McCoy",
+        person_resolution=person_resolution,
+        candidate_people=[matched],
+        to_account={"keyBuyers": [], "project": [], "allOpportunity": []},
+        from_account=None,
+        warnings=[],
+    )
+
+    assert profile["project_count"] == 0
+    assert profile["win_count"] == 0
+    assert profile["matched_person"]["closeWonOpps"] == []
