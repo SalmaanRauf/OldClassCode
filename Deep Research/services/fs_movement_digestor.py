@@ -165,6 +165,19 @@ class FSMovementDigestor:
                         }
                     )
 
+            supplemental_rows, supplemental_skip_reasons, supplemental_skip_signatures = self._extract_inventory_rows_from_markdown(
+                deep_research_markdown,
+                trigger=trigger,
+                max_rows=max_rows,
+                target_company_aliases=target_company_aliases,
+            )
+            combined_rows.extend(supplemental_rows)
+            for reason, count in supplemental_skip_reasons.items():
+                aggregate_skip_reasons[reason] = aggregate_skip_reasons.get(reason, 0) + count
+            for reason, signatures in supplemental_skip_signatures.items():
+                aggregate_skip_signatures.setdefault(reason, set()).update(signatures)
+            diagnostics["supplemental_inventory_rows"] = len(supplemental_rows)
+
             diagnostics["raw_response_text"] = "\n\n".join(raw_responses).strip()
             diagnostics["pass_results"] = pass_results
             diagnostics["skip_reasons"] = {
@@ -333,6 +346,39 @@ class FSMovementDigestor:
         ]
         return rows[:max_rows], skip_reasons, skip_signatures
 
+    def _extract_inventory_rows_from_markdown(
+        self,
+        markdown: str,
+        *,
+        trigger: BDTrigger,
+        max_rows: int,
+        target_company_aliases: Optional[List[str]] = None,
+    ) -> Tuple[List[MovementRecord], Dict[str, int], Dict[str, Set[str]]]:
+        raw_items: List[Dict[str, Any]] = []
+        target_company = str(trigger.company_focus or "").strip()
+        fallback_sources = self._extract_section_source_entries(markdown)
+
+        for category, body in self._inventory_sections(markdown).items():
+            source_entries = self._extract_section_source_entries(body)
+            cleaned_body = re.split(r"(?im)^\s*#{2,3}\s+Section Sources\b", body, maxsplit=1)[0].strip()
+            blocks = [block.strip() for block in re.split(r"\n\s*\n", cleaned_body) if block.strip()]
+            for block in blocks:
+                item = self._parse_inventory_block(
+                    block,
+                    category=category,
+                    target_company=target_company,
+                    default_source=(source_entries[0] if source_entries else fallback_sources[0] if fallback_sources else ("", "")),
+                )
+                if item:
+                    raw_items.append(item)
+
+        return self._coerce_movements(
+            raw_items,
+            trigger=trigger,
+            max_rows=max_rows,
+            target_company_aliases=target_company_aliases,
+        )
+
     def _extract_json(self, text: str) -> str:
         cleaned = text.strip()
         if "```" in cleaned:
@@ -352,6 +398,85 @@ class FSMovementDigestor:
         if start >= 0 and end > start:
             return cleaned[start:end]
         return cleaned
+
+    @staticmethod
+    def _inventory_sections(markdown: str) -> Dict[str, str]:
+        sections: Dict[str, str] = {}
+        exec_match = re.search(
+            r"(?is)(?:^|\n)(?:#+\s*)?Executive Movement Inventory\b[:\s]*\n(?P<body>.*?)(?=(?:\n(?:#+\s*)?Buyer Movement Inventory\b|\Z))",
+            markdown,
+        )
+        if exec_match:
+            sections["EXEC"] = exec_match.group("body").strip()
+        buyer_match = re.search(
+            r"(?is)(?:^|\n)(?:#+\s*)?Buyer Movement Inventory\b[:\s]*\n(?P<body>.*?)(?=(?:\n(?:#+\s*)?(?:Sources|Why This Account Matters Now|Recommended Actions|Likely Destination Opportunities)\b|\Z))",
+            markdown,
+        )
+        if buyer_match:
+            sections["BUYER"] = buyer_match.group("body").strip()
+        return sections
+
+    @staticmethod
+    def _extract_section_source_entries(body: str) -> List[Tuple[str, str]]:
+        entries: List[Tuple[str, str]] = []
+        for match in re.finditer(r"(?im)^[•*-]\s*(?P<title>.+?):\s*(?P<url>https?://\S+)\s*$", body):
+            title = match.group("title").strip()
+            url = match.group("url").strip().rstrip(").,")
+            if url.startswith(("http://", "https://")):
+                entries.append((title, url))
+        return entries
+
+    def _parse_inventory_block(
+        self,
+        block: str,
+        *,
+        category: str,
+        target_company: str,
+        default_source: Tuple[str, str],
+    ) -> Optional[Dict[str, Any]]:
+        text = re.sub(r"\s+", " ", block).strip()
+        if not text or "section sources" in text.lower():
+            return None
+        match = re.match(r"(?P<person>.+?)\s+[–—-]\s+(?P<body>.+)$", text)
+        if not match:
+            return None
+
+        person_name = match.group("person").strip()
+        body = match.group("body").strip()
+        source_title, source_url = default_source
+        inline_url_match = re.search(r"https?://\S+", text)
+        if inline_url_match:
+            source_url = inline_url_match.group(0).rstrip(").,")
+        if not source_url:
+            return None
+
+        movement_type = self._extract_move_type(body)
+        previous_role, new_role = self._extract_roles_from_inventory_body(body)
+        effective_date = self._extract_effective_date_from_text(body)
+        evidence_quote = self._ensure_sentence(body.split("Why it matters:")[0].strip())
+        source_marker_match = re.search(r"【[^】]+†source】", text)
+
+        if not movement_type:
+            movement_type = self._infer_movement_type_from_text(body)
+        if not (previous_role or new_role or movement_type):
+            return None
+
+        return {
+            "person_name": person_name,
+            "target_company": target_company,
+            "previous_role": previous_role,
+            "new_role": new_role,
+            "movement_type": movement_type,
+            "category": category,
+            "company_context": "internal",
+            "effective_date": effective_date,
+            "evidence_quote": evidence_quote,
+            "source_url": source_url,
+            "source_title": source_title or None,
+            "source_marker": source_marker_match.group(0) if source_marker_match else None,
+            "corroborated": False,
+            "confidence_label": None,
+        }
 
     def _dedupe_rows(self, rows: List[MovementRecord], *, max_rows: int) -> List[MovementRecord]:
         deduped_rows: Dict[Tuple[str, str, str, str], Tuple[int, int, MovementRecord]] = {}
@@ -581,6 +706,8 @@ class FSMovementDigestor:
         text = str(value or "").strip()
         if not text:
             return None, "unknown"
+        text = text.replace("Sept.", "Sep.")
+        text = re.sub(r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\.\s", r"\1 ", text)
         for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%B %d, %Y", "%b %d, %Y", "%Y-%m", "%B %Y", "%b %Y"):
             try:
                 parsed = datetime.strptime(text, fmt)
@@ -610,6 +737,87 @@ class FSMovementDigestor:
             month_last_day = monthrange(movement_date.year, movement_date.month)[1]
             movement_date = movement_date.replace(day=month_last_day)
         return movement_date >= cutoff
+
+    @classmethod
+    def _extract_move_type(cls, text: str) -> str:
+        match = re.search(r"Move Type:\s*([^.;]+)", text, re.IGNORECASE)
+        return match.group(1).strip() if match else ""
+
+    @classmethod
+    def _infer_movement_type_from_text(cls, text: str) -> str:
+        lowered = text.lower()
+        if "retire" in lowered:
+            return "Retirement"
+        if any(marker in lowered for marker in ("departed", "stepped down", "resigned", "termination", "removed")):
+            return "Departure"
+        if any(marker in lowered for marker in ("promoted", "promotion", "scope expansion", "expanded remit")):
+            return "Promotion"
+        if any(marker in lowered for marker in ("appointed", "hired", "joined", "external appointment")):
+            return "Appointment"
+        return ""
+
+    @classmethod
+    def _extract_roles_from_inventory_body(cls, text: str) -> Tuple[str, str]:
+        previous_role = ""
+        new_role = ""
+
+        patterns = [
+            (r"stepped down as (?P<prev>.+?)(?:\(|\.|,)", "Departed", "prev"),
+            (r"departed as (?P<prev>.+?)(?:\(|\.|,)", "Departed", "prev"),
+            (r"retired from role as (?P<prev>.+?)(?:\(|\.|,)", "", "prev"),
+            (r"removed from role as (?P<prev>.+?)(?:\(|\.|,)", "", "prev"),
+        ]
+        for pattern, implied_new_role, group_name in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                previous_role = match.group(group_name).strip()
+                if implied_new_role:
+                    new_role = implied_new_role
+                break
+
+        new_role_patterns = [
+            r"promoted to (?P<new>.+?)(?:\(|\.|,)",
+            r"appointed (?:to )?(?P<new>.+?)(?:\(| in | effective |\.|,)",
+            r"hired as (?P<new>.+?)(?:\(| in | effective |\.|,)",
+            r"joined as (?P<new>.+?)(?:\(| in | effective |\.|,)",
+        ]
+        for pattern in new_role_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                new_role = match.group("new").strip()
+                break
+
+        if not previous_role:
+            prev_match = re.search(r"(?:formerly|added to (?:his|her|their) role as) (?P<prev>.+?)(?:\)|\.|,)", text, re.IGNORECASE)
+            if prev_match:
+                previous_role = prev_match.group("prev").strip()
+
+        return previous_role, new_role
+
+    @classmethod
+    def _extract_effective_date_from_text(cls, text: str) -> Optional[str]:
+        candidates = [
+            r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4}\b",
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{1,2},\s+\d{4}\b",
+            r"\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4}\b",
+            r"\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Sept|Oct|Nov|Dec)\.?\s+\d{4}\b",
+        ]
+        for pattern in candidates:
+            match = re.search(pattern, text)
+            if not match:
+                continue
+            raw_value = match.group(0).strip()
+            normalized, _precision = cls._normalize_effective_date(raw_value)
+            if normalized:
+                return raw_value
+        return None
+
+    @staticmethod
+    def _ensure_sentence(text: str) -> str:
+        cleaned = text.strip()
+        if not cleaned:
+            return ""
+        return cleaned if cleaned[-1] in ".!?" else f"{cleaned}."
 
     def _fallback_prompt(self) -> str:
         return (

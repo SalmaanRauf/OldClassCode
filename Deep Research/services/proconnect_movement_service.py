@@ -20,10 +20,10 @@ from scripts.proconnect_lookup_logic import (
 from scripts.proconnect_stakeholder_payload import (
     build_people_candidates_for_account,
     collect_org_chart_people,
-    extract_person_detail_candidate,
     extract_person_search_candidates,
     merge_person_candidates,
     select_best_candidate,
+    select_person_detail_candidate,
 )
 
 
@@ -162,7 +162,7 @@ class ProConnectMovementService:
             self._person_payload_cache[cache_key] = None
             return None
 
-        detail = self._load_person_detail(exact_person)
+        detail = self._load_person_detail(exact_person, person_name=person_name)
         payload = dict(exact_person)
         trust_person_delivery_fields = self._has_direct_person_relationship_signal(exact_person)
         if detail:
@@ -364,7 +364,12 @@ class ProConnectMovementService:
             matches.append(match)
         return matches
 
-    def _load_person_detail(self, person_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _load_person_detail(
+        self,
+        person_payload: Dict[str, Any],
+        *,
+        person_name: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         if not self.client:
             return None
 
@@ -380,7 +385,18 @@ class ProConnectMovementService:
             self._person_detail_cache[prospect_id] = None
             return None
 
-        detail = extract_person_detail_candidate(response.get("data"))
+        detail, _diagnostics = select_person_detail_candidate(
+            payload=response.get("data"),
+            person_name=person_name,
+            matched_person=person_payload,
+        )
+        if detail:
+            detail_name = full_person_name(detail) or str(detail.get("name") or "").strip()
+            requested_name = str(person_name or full_person_name(person_payload) or "").strip()
+            if requested_name and detail_name and not (
+                exact_name_equals(requested_name, detail_name) or same_first_last_name(requested_name, detail_name)
+            ):
+                detail = None
         self._person_detail_cache[prospect_id] = detail
         return detail
 

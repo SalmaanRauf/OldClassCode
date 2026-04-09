@@ -743,6 +743,75 @@ def test_live_client_path_requires_name_match_for_key_buyer_merge():
     assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/jason-dandridge"
 
 
+def test_live_client_path_discards_person_detail_when_detail_name_mismatches_selected_person():
+    class DougDetailMismatchClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            if search_text == "Capital One":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {"value": [{"document": {"accountId": "001-cap-one", "name": "Capital One"}}]},
+                }
+            if search_text in {"J. Douglas (Doug) Watt", "J. Douglas Watt", "Doug Watt"}:
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-doug",
+                                    "accountId": "001-cap-one",
+                                    "companyName": "Capital One",
+                                    "name": "Doug Watt",
+                                    "title": "SVP & Chief Audit Executive",
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-cap-one",
+                    "name": "Capital One",
+                    "keyBuyers": [],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-doug":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-doug",
+                        "accountId": "001-cap-one",
+                        "name": "Mike Gabbay",
+                        "title": "Senior Director Internal Audit",
+                        "linkedinUrl": "https://linkedin.com/in/mike-gabbay",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    service = ProConnectMovementService(client=DougDetailMismatchClient())
+    row = _row("J. Douglas (Doug) Watt")
+    row = row.model_copy(update={"new_role": "", "previous_role": "SVP & Chief Audit Executive", "movement_type": "Retirement"})
+    enriched = service.deep_enrich_movements([row], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["known"] is True
+    assert enriched[0]["person_detail"]["name"] == "Doug Watt"
+    assert enriched[0]["person_detail"]["title"] == "SVP & Chief Audit Executive"
+    assert enriched[0]["person_detail"].get("linkedin_url", "") != "https://linkedin.com/in/mike-gabbay"
+
+
 def test_person_loader_takes_precedence_over_live_client_support():
     class GuardedClient(_FakeLiveClient):
         def search_prospects(self, search_text):
