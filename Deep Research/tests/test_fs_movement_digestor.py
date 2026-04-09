@@ -670,6 +670,62 @@ Danielle M. McCoy – Departed as Senior Vice President & General Counsel (depar
 
 
 @pytest.mark.asyncio
+async def test_digest_supplements_header_style_inventory_rows_and_filters_position_labels(monkeypatch):
+    from services import fs_movement_digestor as digestor_module  # noqa: E402
+
+    class _FrozenDate(digestor_module.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 4, 8)
+
+    monkeypatch.setattr(digestor_module, "date", _FrozenDate)
+
+    markdown = """# Executive Summary
+Movement-led account brief.
+
+Executive Movement Inventory (Late 2025 – Early 2026)
+Peter Akwaboah – Chief Operating Officer (COO) – Appointment to Acting CEO: On Oct. 22, 2025, Fannie Mae’s Board appointed COO Peter Akwaboah as Acting Chief Executive Officer, succeeding Priscilla Almodovar. Move Type: Appointment. Why it matters: Interim succession.
+
+Buyer Movement Inventory (Key Functional & Governance Roles, Late 2025 – Early 2026)
+D. “Danielle” McCoy – Senior VP, General Counsel & Corporate Secretary – Departure (Resignation): Danielle McCoy exited as General Counsel and Corporate Secretary of Fannie Mae in late October 2025. Move Type: Resignation/Retirement. Why it matters: Governance gap.
+Michael P. McCarthy – Senior Vice President & General Counsel – External Hire (Permanent GC): By late 2025, Fannie Mae hired Michael McCarthy as Senior Vice President and General Counsel. Move Type: External Hire. Why it matters: Compliance rigor.
+Jason Dandridge – Senior VP, Chief Control Officer & Head of Enterprise Operations – New Role (Internal Promotion): Around Q4 2025, Fannie Mae assigned Jason Dandridge to the newly created role of Chief Control Officer & Head of Enterprise Operations as part of its reorganization. Move Type: Internal Promotion. Why it matters: Controls.
+Chief Compliance & Ethics Officer (CCO) – Position Eliminated: Notably, Fannie Mae has not had a dedicated Chief Compliance and Ethics Officer since early 2025. Move Type: Position Eliminated. Why it matters: Governance.
+
+## Sources
+• Fannie Mae leadership update: https://example.com/fannie-leadership
+"""
+
+    digestor = FSMovementDigestor(kernel=_FakeKernel({"movement_records": []}))
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.EXEC.TRANSITION", "FS.BUYER.MOVEMENT"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find movement at Fannie Mae.",
+            time_window_days=180,
+        ),
+        deep_research_markdown=markdown,
+        target_company_aliases=["Fannie Mae", "Federal National Mortgage Association (Fannie Mae)"],
+    )
+
+    assert [row.person_name for row in rows] == [
+        "Peter Akwaboah",
+        "D. “Danielle” McCoy",
+        "Michael P. McCarthy",
+        "Jason Dandridge",
+    ]
+    assert rows[0].previous_role == "Chief Operating Officer (COO)"
+    assert rows[0].new_role == "Acting CEO"
+    assert rows[1].previous_role == "Senior VP, General Counsel & Corporate Secretary"
+    assert rows[1].new_role == ""
+    assert rows[2].new_role == "Senior Vice President & General Counsel"
+    assert rows[3].new_role == "Senior VP, Chief Control Officer & Head of Enterprise Operations"
+    assert diagnostics["movements_returned"] == 4
+
+
+@pytest.mark.asyncio
 async def test_digest_filters_month_precision_rows_when_month_is_entirely_outside_lookback(monkeypatch):
     from services import fs_movement_digestor as digestor_module  # noqa: E402
 

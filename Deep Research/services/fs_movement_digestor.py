@@ -403,13 +403,13 @@ class FSMovementDigestor:
     def _inventory_sections(markdown: str) -> Dict[str, str]:
         sections: Dict[str, str] = {}
         exec_match = re.search(
-            r"(?is)(?:^|\n)(?:#+\s*)?Executive Movement Inventory\b[:\s]*\n(?P<body>.*?)(?=(?:\n(?:#+\s*)?Buyer Movement Inventory\b|\Z))",
+            r"(?is)(?:^|\n)(?:#+\s*)?Executive Movement Inventory\b(?:\s*\([^)\n]*\))?[:\s]*\n(?P<body>.*?)(?=(?:\n(?:#+\s*)?Buyer Movement Inventory\b(?:\s*\([^)\n]*\))?|\Z))",
             markdown,
         )
         if exec_match:
             sections["EXEC"] = exec_match.group("body").strip()
         buyer_match = re.search(
-            r"(?is)(?:^|\n)(?:#+\s*)?Buyer Movement Inventory\b[:\s]*\n(?P<body>.*?)(?=(?:\n(?:#+\s*)?(?:Sources|Why This Account Matters Now|Recommended Actions|Likely Destination Opportunities)\b|\Z))",
+            r"(?is)(?:^|\n)(?:#+\s*)?Buyer Movement Inventory\b(?:\s*\([^)\n]*\))?[:\s]*\n(?P<body>.*?)(?=(?:\n(?:#+\s*)?(?:Sources|Why This Account Matters Now|Recommended Actions|Likely Destination Opportunities)\b|\Z))",
             markdown,
         )
         if buyer_match:
@@ -439,6 +439,10 @@ class FSMovementDigestor:
             url = match.group("url").strip().rstrip(").,")
             if url.startswith(("http://", "https://")):
                 entries.append((title, url))
+        for match in re.finditer(r"(?im)^[•*-]\s*(?P<url>https?://\S+)\s*$", body):
+            url = match.group("url").strip().rstrip(").,")
+            if url.startswith(("http://", "https://")):
+                entries.append((url, url))
         return entries
 
     def _parse_inventory_block(
@@ -756,7 +760,12 @@ class FSMovementDigestor:
     @classmethod
     def _extract_move_type(cls, text: str) -> str:
         match = re.search(r"Move Type:\s*([^.;]+)", text, re.IGNORECASE)
-        return match.group(1).strip() if match else ""
+        if match:
+            return match.group(1).strip()
+        header_match = re.match(r"(?P<role>.+?)\s+[–—-]\s+(?P<label>.+?)(?::|$)", text)
+        if not header_match:
+            return ""
+        return cls._normalize_inventory_move_label(header_match.group("label"))
 
     @classmethod
     def _infer_movement_type_from_text(cls, text: str) -> str:
@@ -777,10 +786,10 @@ class FSMovementDigestor:
         new_role = ""
 
         patterns = [
-            (r"stepped down as (?P<prev>.+?)(?:\(|\.|,)", "Departed", "prev"),
-            (r"departed as (?P<prev>.+?)(?:\(|\.|,)", "Departed", "prev"),
-            (r"retired from role as (?P<prev>.+?)(?:\(|\.|,)", "", "prev"),
-            (r"removed from role as (?P<prev>.+?)(?:\(|\.|,)", "", "prev"),
+            (r"stepped down as (?P<prev>.+?)(?:\s+on\b|\(|\.|,)", "Departed", "prev"),
+            (r"departed as (?P<prev>.+?)(?:\s+on\b|\(|\.|,)", "Departed", "prev"),
+            (r"retired from role as (?P<prev>.+?)(?:\s+on\b|\(|\.|,)", "", "prev"),
+            (r"removed from role as (?P<prev>.+?)(?:\s+on\b|\(|\.|,)", "", "prev"),
         ]
         for pattern, implied_new_role, group_name in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -807,7 +816,94 @@ class FSMovementDigestor:
             if prev_match:
                 previous_role = prev_match.group("prev").strip()
 
+        if not previous_role or not new_role:
+            header_match = re.match(r"(?P<role>.+?)\s+[–—-]\s+(?P<label>.+?)(?::|$)", text)
+            if header_match:
+                role_candidate = cls._clean_inventory_role_fragment(header_match.group("role"))
+                label_candidate = header_match.group("label").strip()
+                lowered_label = label_candidate.lower()
+                to_role_match = re.search(
+                    r"\b(?:promotion|appointment|appointed|external appointment|external hire|internal promotion|new role|role expansion|scope change)\s+to\s+(?P<new>.+)$",
+                    label_candidate,
+                    re.IGNORECASE,
+                )
+                if to_role_match:
+                    previous_role = previous_role or role_candidate
+                    new_role = cls._clean_inventory_role_fragment(to_role_match.group("new"))
+                elif any(
+                    marker in lowered_label
+                    for marker in (
+                        "departure",
+                        "resignation",
+                        "retirement",
+                        "termination",
+                        "stepped down",
+                        "removed",
+                        "fired",
+                    )
+                ):
+                    previous_role = previous_role or role_candidate
+                elif any(
+                    marker in lowered_label
+                    for marker in (
+                        "external hire",
+                        "external appointment",
+                        "appointment",
+                        "new role",
+                        "internal promotion",
+                        "role expansion",
+                        "scope change",
+                        "promotion",
+                    )
+                ):
+                    new_role = new_role or role_candidate
+
         return previous_role, new_role
+
+    @staticmethod
+    def _clean_inventory_role_fragment(value: str) -> str:
+        text = str(value or "").strip().strip(" .,:;")
+        text = re.sub(r"^(?:former|outgoing|current)\s+", "", text, flags=re.IGNORECASE)
+        return text
+
+    @classmethod
+    def _normalize_inventory_move_label(cls, value: str) -> str:
+        label = re.sub(r"\s+", " ", str(value or "")).strip(" .,:;")
+        if not label:
+            return ""
+
+        inner_match = re.search(r"\(([^)]+)\)", label)
+        inner = inner_match.group(1).strip() if inner_match else ""
+        base = re.sub(r"\([^)]*\)", "", label).strip()
+
+        combined = " ".join(part for part in (base, inner) if part).lower()
+        if any(marker in combined for marker in ("resignation", "retirement", "termination", "departure", "stepped down", "removed", "fired")):
+            if "resignation" in combined:
+                return "Departure (Resignation)"
+            if "retirement" in combined or "retired" in combined:
+                return "Retirement"
+            if "termination" in combined or "terminated" in combined or "fired" in combined:
+                return "Departure (Termination)"
+            return "Departure"
+        if "rehire" in combined:
+            return "Rehire"
+        if "scope change" in combined:
+            return "Scope Change"
+        if "role expansion" in combined:
+            return "Role Expansion"
+        if "internal promotion" in combined:
+            return "Internal Promotion"
+        if "external hire" in combined:
+            return "External Hire"
+        if "external appointment" in combined:
+            return "External Appointment"
+        if "promotion" in combined:
+            return "Promotion"
+        if "appointment" in combined or "appointed" in combined:
+            return "Appointment"
+        if "new role" in combined:
+            return "New Role"
+        return label
 
     @classmethod
     def _extract_effective_date_from_text(cls, text: str) -> Optional[str]:
