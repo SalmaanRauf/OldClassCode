@@ -73,6 +73,24 @@ class ProConnectMovementService:
             for row in selected
         ]
 
+    def prime_company_account(
+        self,
+        *,
+        account_id: Optional[str],
+        company_names: List[str],
+    ) -> None:
+        """Seed the company-account cache from a known resolved account id."""
+        if not self.client:
+            return
+        account_id_text = str(account_id or "").strip()
+        if not account_id_text:
+            return
+        response = self.client.get_account_by_id(account_id_text)
+        account = response.get("data") if response.get("success") and isinstance(response.get("data"), dict) else None
+        if not account:
+            return
+        self._cache_company_account(account, company_names)
+
     def enrich_movement(
         self,
         row: MovementRecord,
@@ -207,13 +225,72 @@ class ProConnectMovementService:
         return payload
 
     def _resolve_company_account(self, person_name: str, target_company: str) -> Optional[Dict[str, Any]]:
-        cache_key = self._cache_key(target_company)
-        if cache_key in self._company_account_cache:
-            return self._company_account_cache[cache_key]
+        search_variants = self._company_search_variants(target_company)
+        for variant in search_variants:
+            cache_key = self._cache_key(variant)
+            if cache_key not in self._company_account_cache:
+                continue
+            cached = self._company_account_cache[cache_key]
+            if cached:
+                return cached
 
-        _, account, _ = resolve_company_and_account(self.client, target_company, key_person_name=person_name)
-        self._company_account_cache[cache_key] = account
-        return account
+        for variant in search_variants:
+            _, account, _ = resolve_company_and_account(self.client, variant, key_person_name=person_name)
+            if account:
+                self._cache_company_account(account, search_variants)
+                return account
+
+        for variant in search_variants:
+            self._company_account_cache[self._cache_key(variant)] = None
+        return None
+
+    def _cache_company_account(self, account: Dict[str, Any], company_names: List[str]) -> None:
+        account_name = str(account.get("name") or "").strip()
+        all_names = list(company_names)
+        if account_name:
+            all_names.append(account_name)
+        variants = self._company_search_variants(*all_names)
+        for variant in variants:
+            self._company_account_cache[self._cache_key(variant)] = account
+        self._invalidate_negative_person_cache(variants)
+
+    def _invalidate_negative_person_cache(self, company_names: List[str]) -> None:
+        company_keys = {
+            self._cache_key(variant)
+            for variant in self._company_search_variants(*company_names)
+        }
+        if not company_keys:
+            return
+        stale_keys = [
+            cache_key
+            for cache_key, cached_payload in self._person_payload_cache.items()
+            if cached_payload is None
+            and len(cache_key) >= 2
+            and cache_key[1] in company_keys
+        ]
+        for cache_key in stale_keys:
+            self._person_payload_cache.pop(cache_key, None)
+
+    @staticmethod
+    def _company_search_variants(*company_names: str) -> List[str]:
+        variants: List[str] = []
+
+        def _add(value: str) -> None:
+            candidate = " ".join(str(value or "").split()).strip()
+            if candidate and candidate not in variants:
+                variants.append(candidate)
+
+        for company_name in company_names:
+            raw = str(company_name or "").strip()
+            if not raw:
+                continue
+            _add(raw)
+            stripped = re.sub(r"\([^)]*\)", "", raw).strip()
+            _add(stripped)
+            for alias in re.findall(r"\(([^)]*)\)", raw):
+                _add(alias)
+
+        return variants
 
     def _resolve_exact_person(
         self,

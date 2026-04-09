@@ -170,6 +170,7 @@ async def test_orchestrator_builds_preflight_and_prompt_review_context():
 @pytest.mark.asyncio
 async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary():
     call_order = []
+    prime_calls = []
     preflight = _preflight()
 
     class FakeTransitionService:
@@ -214,6 +215,9 @@ async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary()
             )
 
     class FakeProConnectService:
+        def prime_company_account(self, *, account_id, company_names):
+            prime_calls.append({"account_id": account_id, "company_names": list(company_names)})
+
         def light_enrich_movements(self, movement_rows):
             call_order.append("light_enrich")
             return [
@@ -353,6 +357,22 @@ async def test_orchestrator_runs_pipeline_and_reuses_real_credentials_boundary()
     assert len(result.deep_enriched_rows) == 10
     assert len(result.movement_brief.movement_rows) == 10
     assert result.deep_research_markdown.startswith("### Executive Summary")
+    assert prime_calls == [
+        {
+            "account_id": "00130000000BYUIAA4",
+            "company_names": [
+                "Fannie Mae",
+                "Federal National Mortgage Association (Fannie Mae)",
+            ],
+        },
+        {
+            "account_id": "00130000000BYU2AAO",
+            "company_names": [
+                "Capital One",
+                "Capital One Financial Corporation",
+            ],
+        },
+    ]
     assert result.credentials_lookup.status_counts["Matched"] == 1
     assert assembled["preflight"] is preflight
     assert assembled["derived_opportunities"][0].person_name == "Person 0"
@@ -1210,6 +1230,37 @@ def test_target_company_aliases_scope_to_destination_account_only():
     assert "Federal National Mortgage Association (Fannie Mae)" in aliases
     assert "Capital One" not in aliases
     assert "Capital One Financial Corporation" not in aliases
+
+
+def test_prime_proconnect_accounts_uses_resolved_source_and_destination_accounts():
+    calls = []
+
+    class FakeProConnectService:
+        def prime_company_account(self, *, account_id, company_names):
+            calls.append({"account_id": account_id, "company_names": list(company_names)})
+
+    MovementBriefOrchestrator._prime_proconnect_accounts(
+        FakeProConnectService(),
+        _request(),
+        _preflight(),
+    )
+
+    assert calls == [
+        {
+            "account_id": "00130000000BYUIAA4",
+            "company_names": [
+                "Fannie Mae",
+                "Federal National Mortgage Association (Fannie Mae)",
+            ],
+        },
+        {
+            "account_id": "00130000000BYU2AAO",
+            "company_names": [
+                "Capital One",
+                "Capital One Financial Corporation",
+            ],
+        },
+    ]
 
 
 @pytest.mark.asyncio

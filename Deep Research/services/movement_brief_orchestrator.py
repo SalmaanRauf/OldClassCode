@@ -298,6 +298,7 @@ class MovementBriefOrchestrator:
             run_id=reviewed_run_id,
         )
         proconnect_service = self._get_proconnect_service()
+        self._prime_proconnect_accounts(proconnect_service, request, preflight)
         light_enriched_rows = proconnect_service.light_enrich_movements(movement_rows)
         light_enriched_rows = self._refresh_named_mover_enrichment(
             light_enriched_rows,
@@ -1179,6 +1180,32 @@ class MovementBriefOrchestrator:
                 return text
         return ""
 
+    @classmethod
+    def _prime_proconnect_accounts(
+        cls,
+        proconnect_service: Any,
+        request: MovementBriefRequest,
+        preflight: TransitionPreflight,
+    ) -> None:
+        prime_account = getattr(proconnect_service, "prime_company_account", None)
+        if not callable(prime_account):
+            return
+
+        for account_id, aliases in (
+            (
+                preflight.to_account.account_id,
+                cls._account_aliases(request.to_company, preflight.to_account.company_name),
+            ),
+            (
+                preflight.from_account.account_id,
+                cls._account_aliases(request.from_company, preflight.from_account.company_name),
+            ),
+        ):
+            account_id_text = str(account_id or "").strip()
+            if not account_id_text or not aliases:
+                continue
+            prime_account(account_id=account_id_text, company_names=aliases)
+
     @staticmethod
     def _target_company_aliases(
         request: MovementBriefRequest,
@@ -1189,6 +1216,15 @@ class MovementBriefOrchestrator:
             request.to_company,
             preflight.to_account.company_name,
         ):
+            text = str(candidate or "").strip()
+            if text and text not in aliases:
+                aliases.append(text)
+        return aliases
+
+    @staticmethod
+    def _account_aliases(*candidates: Optional[str]) -> List[str]:
+        aliases: List[str] = []
+        for candidate in candidates:
             text = str(candidate or "").strip()
             if text and text not in aliases:
                 aliases.append(text)

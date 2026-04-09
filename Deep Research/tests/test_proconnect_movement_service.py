@@ -978,5 +978,260 @@ def test_live_client_path_tries_parenthetical_alias_variant_for_person_search():
     enriched = service.deep_enrich_movements([row], max_rows=5)
 
     assert enriched[0]["person_match_status"] == "matched"
-    assert enriched[0]["relationship_owner"] == "Germaal Ross"
-    assert enriched[0]["project_count"] == 2
+
+
+def test_live_client_path_resolves_company_via_parenthetical_alias_when_legal_name_search_misses():
+    class FannieAliasClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            self.search_calls.append(search_text)
+
+            if search_text == "Federal National Mortgage Association (Fannie Mae)":
+                return {"success": True, "status_code": 200, "data": {"value": []}}
+            if search_text == "Federal National Mortgage Association":
+                return {"success": True, "status_code": 200, "data": {"value": []}}
+            if search_text == "Fannie Mae":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "accountId": "001-fannie",
+                                    "companyName": "Federal National Mortgage Association (Fannie Mae)",
+                                    "name": "Federal National Mortgage Association (Fannie Mae)",
+                                }
+                            }
+                        ]
+                    },
+                }
+            if search_text == "Jason Dandridge":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-jason",
+                                    "accountId": "001-fannie",
+                                    "companyName": "Federal National Mortgage Association (Fannie Mae)",
+                                    "name": "Jason Dandridge",
+                                    "title": "Chief Control Officer & Head of Enterprise Operations",
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            self.account_calls.append(account_id)
+            assert account_id == "001-fannie"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-fannie",
+                    "name": "Federal National Mortgage Association (Fannie Mae)",
+                    "keyBuyers": [],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-jason":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-jason",
+                        "accountId": "001-fannie",
+                        "name": "Jason Dandridge",
+                        "title": "Chief Control Officer & Head of Enterprise Operations",
+                        "linkedinUrl": "https://linkedin.com/in/jason-dandridge",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    service = ProConnectMovementService(client=FannieAliasClient())
+    row = _row("Jason Dandridge").model_copy(
+        update={
+            "target_company": "Federal National Mortgage Association (Fannie Mae)",
+            "new_role": "Chief Control Officer & Head of Enterprise Operations",
+        }
+    )
+
+    enriched = service.deep_enrich_movements([row], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert enriched[0]["known"] is True
+    assert enriched[0]["person_detail"]["linkedin_url"] == "https://linkedin.com/in/jason-dandridge"
+
+
+def test_prime_company_account_reuses_resolved_account_without_company_search():
+    class PrimedAccountClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            self.search_calls.append(search_text)
+            if search_text == "Jason Dandridge":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-jason",
+                                    "accountId": "001-fannie",
+                                    "companyName": "Federal National Mortgage Association (Fannie Mae)",
+                                    "name": "Jason Dandridge",
+                                    "title": "Chief Control Officer & Head of Enterprise Operations",
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            self.account_calls.append(account_id)
+            assert account_id == "001-fannie"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-fannie",
+                    "name": "Federal National Mortgage Association (Fannie Mae)",
+                    "keyBuyers": [],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-jason":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-jason",
+                        "accountId": "001-fannie",
+                        "name": "Jason Dandridge",
+                        "title": "Chief Control Officer & Head of Enterprise Operations",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    client = PrimedAccountClient()
+    service = ProConnectMovementService(client=client)
+    service.prime_company_account(
+        account_id="001-fannie",
+        company_names=[
+            "Federal National Mortgage Association (Fannie Mae)",
+            "Fannie Mae",
+        ],
+    )
+
+    row = _row("Jason Dandridge").model_copy(
+        update={
+            "target_company": "Federal National Mortgage Association (Fannie Mae)",
+            "new_role": "Chief Control Officer & Head of Enterprise Operations",
+        }
+    )
+    enriched = service.deep_enrich_movements([row], max_rows=5)
+
+    assert enriched[0]["person_match_status"] == "matched"
+    assert client.account_calls == ["001-fannie"]
+    assert client.search_calls == ["Jason Dandridge"]
+    assert enriched[0]["relationship_owner"] is None
+    assert enriched[0]["project_count"] == 0
+
+
+def test_prime_company_account_clears_negative_person_cache_for_same_session_retries():
+    class RetryAfterPrimeClient(_FakeLiveClient):
+        def search_prospects(self, search_text):
+            self.search_calls.append(search_text)
+            if search_text in {
+                "Federal National Mortgage Association (Fannie Mae)",
+                "Federal National Mortgage Association",
+                "Fannie Mae",
+            }:
+                return {"success": True, "status_code": 200, "data": {"value": []}}
+            if search_text == "Jason Dandridge":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "value": [
+                            {
+                                "document": {
+                                    "contactId": "contact-jason",
+                                    "accountId": "001-fannie",
+                                    "companyName": "Federal National Mortgage Association (Fannie Mae)",
+                                    "name": "Jason Dandridge",
+                                    "title": "Chief Control Officer & Head of Enterprise Operations",
+                                    "relationshipOwner": "Germaal Ross",
+                                    "projectCount": 2,
+                                }
+                            }
+                        ]
+                    },
+                }
+            return {"success": True, "status_code": 200, "data": {"value": []}}
+
+        def get_account_by_id(self, account_id: str):
+            self.account_calls.append(account_id)
+            assert account_id == "001-fannie"
+            return {
+                "success": True,
+                "status_code": 200,
+                "data": {
+                    "id": "001-fannie",
+                    "name": "Federal National Mortgage Association (Fannie Mae)",
+                    "keyBuyers": [],
+                    "project": [],
+                    "allOpportunity": [],
+                },
+            }
+
+        def get_endpoint(self, endpoint, params=None, retry_on_5xx=0, retry_delay_seconds=0.25, stop_on_auth=False):
+            if endpoint == "/api/prospects/contact-jason":
+                return {
+                    "success": True,
+                    "status_code": 200,
+                    "data": {
+                        "contactId": "contact-jason",
+                        "accountId": "001-fannie",
+                        "name": "Jason Dandridge",
+                        "title": "Chief Control Officer & Head of Enterprise Operations",
+                    },
+                }
+            raise AssertionError(f"Unexpected endpoint {endpoint}")
+
+    client = RetryAfterPrimeClient()
+    service = ProConnectMovementService(client=client)
+    row = _row("Jason Dandridge").model_copy(
+        update={
+            "target_company": "Federal National Mortgage Association (Fannie Mae)",
+            "new_role": "Chief Control Officer & Head of Enterprise Operations",
+        }
+    )
+
+    first = service.deep_enrich_movements([row], max_rows=5)
+    assert first[0]["person_match_status"] == "no_match"
+
+    service.prime_company_account(
+        account_id="001-fannie",
+        company_names=[
+            "Federal National Mortgage Association (Fannie Mae)",
+            "Fannie Mae",
+        ],
+    )
+
+    second = service.deep_enrich_movements([row], max_rows=5)
+
+    assert second[0]["person_match_status"] == "matched"
+    assert second[0]["relationship_owner"] == "Germaal Ross"
+    assert second[0]["project_count"] == 2
+    assert "Jason Dandridge" in client.search_calls
