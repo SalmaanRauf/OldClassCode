@@ -361,7 +361,7 @@ class FSMovementDigestor:
         for category, body in self._inventory_sections(markdown).items():
             source_entries = self._extract_section_source_entries(body)
             cleaned_body = re.split(r"(?im)^\s*#{2,3}\s+Section Sources\b", body, maxsplit=1)[0].strip()
-            blocks = [block.strip() for block in re.split(r"\n\s*\n", cleaned_body) if block.strip()]
+            blocks = self._inventory_blocks(cleaned_body)
             for block in blocks:
                 item = self._parse_inventory_block(
                     block,
@@ -415,6 +415,21 @@ class FSMovementDigestor:
         if buyer_match:
             sections["BUYER"] = buyer_match.group("body").strip()
         return sections
+
+    @staticmethod
+    def _inventory_blocks(body: str) -> List[str]:
+        cleaned = str(body or "").strip()
+        if not cleaned:
+            return []
+
+        entry_pattern = re.compile(
+            r"(?ms)(?P<block>^\s*(?:[•*-]\s*)?(?P<person>[A-Z][^\n]{1,160}?)\s+[–—-]\s+.*?)(?=^\s*(?:[•*-]\s*)?[A-Z][^\n]{1,160}?\s+[–—-]\s+|\Z)"
+        )
+        blocks = [match.group("block").strip() for match in entry_pattern.finditer(cleaned)]
+        if blocks:
+            return blocks
+
+        return [block.strip() for block in re.split(r"\n\s*\n", cleaned) if block.strip()]
 
     @staticmethod
     def _extract_section_source_entries(body: str) -> List[Tuple[str, str]]:

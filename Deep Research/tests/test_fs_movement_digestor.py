@@ -620,6 +620,56 @@ Danielle M. McCoy – Departed as Senior Vice President & General Counsel (depar
 
 
 @pytest.mark.asyncio
+async def test_digest_supplements_inventory_rows_without_blank_lines_between_entries(monkeypatch):
+    from services import fs_movement_digestor as digestor_module  # noqa: E402
+
+    class _FrozenDate(digestor_module.date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 4, 8)
+
+    monkeypatch.setattr(digestor_module, "date", _FrozenDate)
+
+    markdown = """# Executive Summary
+Movement-led account brief.
+
+Executive Movement Inventory
+Priscilla Almodovar – Stepped down as President and Chief Executive Officer (departure effective Oct. 22, 2025). Move Type: Resignation/termination. Why it matters: Leadership shake-up.
+Peter Akwaboah – Appointed Acting Chief Executive Officer (added to his role as Chief Operating Officer) in Oct. 2025. Move Type: Interim promotion (scope expansion). Why it matters: Interim succession.
+Buyer Movement Inventory
+Danielle M. McCoy – Departed as Senior Vice President & General Counsel (departure, Oct. 2025). Move Type: Resignation/Retirement. Why it matters: Governance gap.
+
+## Sources
+• Fannie Mae leadership update: https://example.com/fannie-leadership
+"""
+
+    digestor = FSMovementDigestor(
+        kernel=_FakeKernel({"movement_records": []})
+    )
+
+    rows, diagnostics = await digestor.digest(
+        trigger=BDTrigger(
+            sector="Financial Services",
+            signals=["FS.EXEC.TRANSITION", "FS.BUYER.MOVEMENT"],
+            company_focus="Fannie Mae",
+            user_prompt_context="Find movement at Fannie Mae.",
+            time_window_days=180,
+        ),
+        deep_research_markdown=markdown,
+        target_company_aliases=["Fannie Mae", "Federal National Mortgage Association (Fannie Mae)"],
+    )
+
+    assert [row.person_name for row in rows] == [
+        "Priscilla Almodovar",
+        "Peter Akwaboah",
+        "Danielle M. McCoy",
+    ]
+    assert rows[1].new_role == "Acting Chief Executive Officer"
+    assert rows[2].previous_role == "Senior Vice President & General Counsel"
+    assert diagnostics["movements_returned"] == 3
+
+
+@pytest.mark.asyncio
 async def test_digest_filters_month_precision_rows_when_month_is_entirely_outside_lookback(monkeypatch):
     from services import fs_movement_digestor as digestor_module  # noqa: E402
 
