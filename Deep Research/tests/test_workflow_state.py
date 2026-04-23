@@ -56,6 +56,16 @@ def test_create_workflow_run_defaults_status_and_created_at():
     assert run.artifacts == {}
 
 
+def test_create_workflow_run_supports_proconnect_deep_research_mode():
+    run = create_workflow_run(
+        mode="proconnect_deep_research",
+        request={"account_name": "BAE Systems"},
+    )
+
+    assert run.mode == "proconnect_deep_research"
+    assert run.request["account_name"] == "BAE Systems"
+
+
 def test_persist_and_load_workflow_run_round_trips():
     session = FakeSession()
     context = _context()
