@@ -52,6 +52,7 @@ class PublicAccountPromptBuilder:
                 company_name=resolved_company,
                 focus_hint=focus_hint,
                 industry_key=industry_key,
+                include_industry_context=bool(str(industry or "").strip()),
             ),
         )
 
@@ -68,14 +69,16 @@ class PublicAccountPromptBuilder:
         company_name: str,
         focus_hint: str | None,
         industry_key: str,
+        include_industry_context: bool,
     ) -> str:
         lines = [
             f"Build a public-account research brief for {company_name}.",
             "",
             "## Scope",
             f"Company: {company_name}",
-            f"Industry: {self._format_industry_label(industry_key)}",
         ]
+        if include_industry_context:
+            lines.append(f"Industry: {self._format_industry_label(industry_key)}")
         normalized_focus_hint = str(focus_hint or "").strip()
         if normalized_focus_hint:
             lines.append(f"Focus hint: {normalized_focus_hint}")

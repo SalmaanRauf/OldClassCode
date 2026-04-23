@@ -88,3 +88,17 @@ def test_builder_generates_deterministic_public_only_prompt(tmp_path) -> None:
     ]
     for banned in banned_terms:
         assert banned not in combined_prompt
+
+
+def test_builder_omits_industry_line_when_no_explicit_industry_is_provided(tmp_path) -> None:
+    loader = _write_prompt_fixture(tmp_path)
+    builder = PublicAccountPromptBuilder(prompt_loader=loader)
+
+    package = builder.build(
+        company_name="BAE Systems",
+        focus_hint=None,
+        industry=None,
+    )
+
+    assert package.industry_key == "general"
+    assert "Industry:" not in package.user_prompt
