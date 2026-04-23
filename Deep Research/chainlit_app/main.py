@@ -78,6 +78,14 @@ from services.chat_copy import (
     build_company_intelligence_welcome_message,
     build_mode_picker_message,
     build_movement_mode_active_message,
+    build_proconnect_deep_research_active_message,
+)
+from services.account_brief_formatter import format_account_brief_markdown
+from services.account_brief_orchestrator import AccountBriefOrchestrator
+from services.account_research_input import (
+    AccountResearchInput,
+    AccountResearchInputError,
+    parse_account_research_input,
 )
 from services.review_flow import run_review_action_loop
 from services.chainlit_render_utils import (
@@ -145,6 +153,7 @@ DEFAULT_MODE = "standard"
 DEFAULT_INDUSTRY = "general"
 MOVEMENT_MODE = "movement"
 TRANSITION_MODE = "transition"
+PROCONNECT_DEEP_RESEARCH_MODE = "proconnect_deep_research"
 ACTION_START_NEW_MOVEMENT_SCAN = "movement_new_scan"
 BD_TRACES_DIR = Path(__file__).parent.parent / "traces"
 
@@ -488,6 +497,14 @@ def _clear_mode_runtime_state(mode: str) -> None:
         cl.user_session.set(MOVEMENT_PROGRESS_SESSION_KEY, [])
 
 
+def _clear_pending_prompt_edit_state(mode: str) -> None:
+    _set_pending_edit_run_id(mode, None)
+    if mode == TRANSITION_MODE:
+        cl.user_session.set(TRANSITION_EDIT_PENDING_SESSION_KEY, False)
+    elif mode == MOVEMENT_MODE:
+        cl.user_session.set(MOVEMENT_EDIT_PENDING_SESSION_KEY, False)
+
+
 def _get_active_run(mode: str) -> Optional[WorkflowRunContext]:
     run = resolve_run_context(cl.user_session, mode=mode)
     return run
@@ -635,6 +652,137 @@ def _get_movement_orchestrator():
         orchestrator = MovementBriefOrchestrator()
         cl.user_session.set("movement_brief_orchestrator", orchestrator)
     return orchestrator
+
+
+def _get_account_brief_orchestrator():
+    orchestrator = cl.user_session.get("account_brief_orchestrator")
+    if orchestrator is None:
+        orchestrator = AccountBriefOrchestrator()
+        cl.user_session.set("account_brief_orchestrator", orchestrator)
+    return orchestrator
+
+
+def _load_account_research_request_from_run(run: Optional[WorkflowRunContext]) -> Optional[AccountResearchInput]:
+    if run is None:
+        return None
+    payload = run.request or {}
+    account_name = str(payload.get("account_name") or "").strip()
+    raw_input = str(payload.get("raw_input") or account_name).strip()
+    if not account_name:
+        return None
+    focus_hint = str(payload.get("focus_hint") or "").strip() or None
+    return AccountResearchInput(
+        account_name=account_name,
+        raw_input=raw_input,
+        focus_hint=focus_hint,
+    )
+
+
+def _build_account_brief_progress_content(request_payload: Dict[str, Any], events: List[Dict[str, Any]]) -> str:
+    account_name = str(request_payload.get("account_name") or "Target Account").strip() or "Target Account"
+    lines = [f"**ProConnect + Deep Research**", "", f"Account: `{account_name}`", ""]
+    if not events:
+        lines.append("- Initializing account brief workflow.")
+        return "\n".join(lines)
+
+    stage_labels = {
+        "resolving_account": "Resolving account",
+        "collecting_proconnect_context": "Collecting ProConnect context",
+        "running_public_research": "Running public research",
+        "running_deep_research": "Deep Research activity",
+        "synthesizing_account_brief": "Synthesizing analyst brief",
+        "account_brief_complete": "Account brief ready",
+    }
+    for event in events[-8:]:
+        stage = str(event.get("stage") or "account_brief").strip()
+        label = stage_labels.get(stage, stage.replace("_", " ").title())
+        status = str(event.get("status") or "in_progress").replace("_", " ")
+        message = str(event.get("message") or "").strip()
+        if message:
+            lines.append(f"- **{label}** ({status}): {message}")
+        else:
+            lines.append(f"- **{label}** ({status})")
+    return "\n".join(lines)
+
+
+def _build_account_brief_progress_callback(progress_msg: cl.Message, request_payload: Dict[str, Any]):
+    events: List[Dict[str, Any]] = []
+
+    async def _progress_callback(event: Dict[str, Any]):
+        try:
+            normalized = dict(event or {})
+            events.append(normalized)
+            progress_msg.content = _build_account_brief_progress_content(request_payload, events)
+            await progress_msg.update()
+        except Exception as exc:
+            logger.warning("Account brief progress callback error: %s", exc)
+
+    return events, _progress_callback
+
+
+async def _run_account_brief_flow(run_id: str) -> None:
+    run = load_workflow_run(cl.user_session, run_id)
+    if run is None:
+        await cl.Message("That account brief run is no longer available. Please submit the account again.").send()
+        return
+
+    request = _load_account_research_request_from_run(run)
+    if request is None:
+        await cl.Message("The account brief request is incomplete. Please submit one account name again.").send()
+        return
+
+    request_payload = _dump_model(request)
+    progress_msg = cl.Message(content=_build_account_brief_progress_content(request_payload, []))
+    await progress_msg.send()
+    events, progress_cb = _build_account_brief_progress_callback(progress_msg, request_payload)
+
+    try:
+        update_workflow_run(cl.user_session, run_id, status=WorkflowRunStatus.RUNNING, progress=[])
+        result = await _get_account_brief_orchestrator().run(
+            request,
+            progress_cb=progress_cb,
+        )
+        result["run_id"] = run_id
+        artifacts = {
+            "account_brief_markdown": format_account_brief_markdown(
+                company_name=str(result.get("company") or request.account_name),
+                synthesis=result.get("synthesis") or {},
+                proconnect_summary=result.get("proconnect_summary") or {},
+                deep_research_summary=result.get("deep_research_summary") or {},
+            )
+        }
+        update_workflow_run(
+            cl.user_session,
+            run_id,
+            artifacts=artifacts,
+            progress=[dict(event) for event in events],
+            status=WorkflowRunStatus.COMPLETE,
+        )
+        progress_msg.content = _build_account_brief_progress_content(request_payload, events)
+        await progress_msg.update()
+        await present_enhanced_response(result)
+    except Exception as exc:
+        logger.exception("Account brief flow failed: %s", exc)
+        update_workflow_run(
+            cl.user_session,
+            run_id,
+            progress=[dict(event) for event in events],
+            status=WorkflowRunStatus.FAILED,
+        )
+        progress_msg.content = _build_account_brief_progress_content(
+            request_payload,
+            events + [
+                {
+                    "stage": "account_brief_complete",
+                    "message": "Account brief generation failed.",
+                    "status": "failed",
+                }
+            ],
+        )
+        await progress_msg.update()
+        await cl.Message(
+            "Account brief generation failed. Confirm ProConnect access and Deep Research availability, then retry."
+        ).send()
 
 
 def _build_transition_progress_callback(progress_msg: cl.Message, request_payload: Dict[str, Any]):
@@ -1018,6 +1166,31 @@ async def present_enhanced_response(response: Dict[str, Any]) -> None:
                 await cl.Message(" " + " | ".join(meta_bits)).send()
             return
 
+        if response_type == "account_brief":
+            markdown = format_account_brief_markdown(
+                company_name=str(response.get("company") or "Target Account"),
+                synthesis=response.get("synthesis") or {},
+                proconnect_summary=response.get("proconnect_summary") or {},
+                deep_research_summary=response.get("deep_research_summary") or {},
+            )
+            run_id = str(response.get("run_id") or "").strip()
+            actions = []
+            if run_id:
+                actions.append(
+                    cl.Action(
+                        name=ACTION_VIEW_ARTIFACT,
+                        label="View Saved Brief",
+                        payload={
+                            "run_id": run_id,
+                            "mode": PROCONNECT_DEEP_RESEARCH_MODE,
+                            "artifact_key": "account_brief_markdown",
+                            "artifact_type": "account brief",
+                        },
+                    )
+                )
+            await cl.Message(markdown, actions=actions).send()
+            return
+
         profiles_cache = cl.user_session.get("company_profiles") or {}
 
         def _lookup_profile(name: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1398,7 +1571,7 @@ async def start():
         await cl.Message(build_company_intelligence_welcome_message()).send()
 
         current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY)
-        if current_mode not in {"standard", "deep", MOVEMENT_MODE, TRANSITION_MODE}:
+        if current_mode not in {"standard", "deep", MOVEMENT_MODE, TRANSITION_MODE, PROCONNECT_DEEP_RESEARCH_MODE}:
             current_mode = "deep" if AppConfig.ENABLE_DEEP_RESEARCH else DEFAULT_MODE
             cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, current_mode)
         logger.info(
@@ -1439,6 +1612,11 @@ async def start():
                     label="Transition Playbook",
                     payload={"mode": TRANSITION_MODE},
                 ),
+                cl.Action(
+                    name="set_mode",
+                    label="ProConnect + Deep Research",
+                    payload={"mode": PROCONNECT_DEEP_RESEARCH_MODE},
+                ),
             ]
             await cl.Message(
                 content=build_mode_picker_message(),
@@ -1466,14 +1644,14 @@ async def update_mode(action: cl.Action):
         selected,
         session_id,
     )
-    if selected in {"deep", TRANSITION_MODE} and not AppConfig.ENABLE_DEEP_RESEARCH:
+    if selected in {"deep", TRANSITION_MODE, MOVEMENT_MODE, PROCONNECT_DEEP_RESEARCH_MODE} and not AppConfig.ENABLE_DEEP_RESEARCH:
         await cl.Message("Deep Research is not enabled in this environment.").send()
         cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
         return
-    if selected == MOVEMENT_MODE and not AppConfig.ENABLE_DEEP_RESEARCH:
-        await cl.Message("People Movement Brief mode is not available in this environment.").send()
-        cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
-        return
+
+    for mode in (MOVEMENT_MODE, TRANSITION_MODE):
+        if selected != mode:
+            _clear_pending_prompt_edit_state(mode)
 
     cl.user_session.set(DEEP_RESEARCH_SESSION_KEY, selected)
     logger.info(
@@ -1485,6 +1663,7 @@ async def update_mode(action: cl.Action):
         "deep": "Deep Research",
         MOVEMENT_MODE: "People Movement Brief",
         TRANSITION_MODE: "Transition Playbook",
+        PROCONNECT_DEEP_RESEARCH_MODE: "ProConnect + Deep Research",
     }.get(selected, "Standard Analysis")
     await cl.Message(f"✓ Mode: **{label}**").send()
     
@@ -1495,6 +1674,8 @@ async def update_mode(action: cl.Action):
         await show_movement_form()
     elif selected == TRANSITION_MODE:
         await show_transition_form()
+    elif selected == PROCONNECT_DEEP_RESEARCH_MODE:
+        await cl.Message(build_proconnect_deep_research_active_message()).send()
 
 
 async def show_research_form():
@@ -2069,6 +2250,17 @@ async def on_message(message: cl.Message):
             return
 
         current_mode = cl.user_session.get(DEEP_RESEARCH_SESSION_KEY, DEFAULT_MODE)
+
+        if current_mode == PROCONNECT_DEEP_RESEARCH_MODE:
+            try:
+                request = parse_account_research_input(user_text)
+            except AccountResearchInputError as exc:
+                await cl.Message(str(exc)).send()
+                return
+
+            run = _create_mode_run(PROCONNECT_DEEP_RESEARCH_MODE, request)
+            await _run_account_brief_flow(run.run_id)
+            return
 
         if current_mode == TRANSITION_MODE:
             pending_run_id = _get_pending_edit_run_id(TRANSITION_MODE)

@@ -18,7 +18,7 @@ except Exception:  # pragma: no cover
         return None
 
 
-WorkflowMode = Literal["movement", "transition"]
+WorkflowMode = Literal["movement", "transition", "proconnect_deep_research"]
 
 
 class WorkflowRunStatus(str, Enum):
@@ -30,6 +30,10 @@ class WorkflowRunStatus(str, Enum):
 
 
 class WorkflowStage(str, Enum):
+    RESOLVING_ACCOUNT = "resolving_account"
+    COLLECTING_PROCONNECT_CONTEXT = "collecting_proconnect_context"
+    RUNNING_PUBLIC_RESEARCH = "running_public_research"
+    SYNTHESIZING_ACCOUNT_BRIEF = "synthesizing_account_brief"
     RESOLVING_TRANSITION = "resolving_transition"
     RESOLVING_NAMED_MOVE = "resolving_named_move"
     BUILDING_RELATIONSHIP_CONTEXT = "building_relationship_context"

@@ -23,3 +23,11 @@ def build_movement_mode_active_message() -> str:
         "People Movement Brief mode is active. Validate a named move, research broader "
         "executive and buyer movement, then surface leverage and next actions."
     )
+
+
+def build_proconnect_deep_research_active_message() -> str:
+    """Return the helper copy shown when the account-brief mode is already active."""
+    return (
+        "ProConnect + Deep Research mode is active. Type one target account name to "
+        "collect ProConnect facts, run public Deep Research, and synthesize a short brief."
+    )
