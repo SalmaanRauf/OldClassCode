@@ -14,6 +14,7 @@ from azure.ai.agents.models import (
     DeepResearchToolDefinition,
     DeepResearchDetails,
     DeepResearchBingGroundingConnection,
+    DeepResearchTool,
     MessageRole,
 )
 
@@ -124,14 +125,7 @@ class DeepResearchClient:
             
             enhanced_instructions = base_instructions + self._source_policy_instructions()
             
-            deep_tool = DeepResearchToolDefinition(
-                deep_research=DeepResearchDetails(
-                    deep_research_model=self._deep_model,
-                    deep_research_bing_grounding_connections=[
-                        DeepResearchBingGroundingConnection(connection_id=self._bing_connection)
-                    ],
-                )
-            )
+            deep_tools = self._build_deep_research_tool_definitions()
             logger.info(
                 "Creating Deep Research agent with %s industry focus (%s source policy)",
                 self._industry,
@@ -141,7 +135,7 @@ class DeepResearchClient:
                 model=self._primary_model,
                 name=f"deep-research-{self._industry}",
                 instructions=enhanced_instructions,
-                tools=[deep_tool],
+                tools=deep_tools,
             )
             self._agent_id = agent.id
             logger.info("Deep Research agent created: %s", agent.id)
@@ -167,6 +161,35 @@ class DeepResearchClient:
         except Exception as e:
             logger.error("Unexpected error creating Deep Research agent: %s", str(e))
             raise
+
+    def _build_deep_research_tool_definitions(self) -> List[Any]:
+        """
+        Build Deep Research tool definitions through the SDK helper.
+
+        Azure's preview SDK has changed the raw DeepResearchDetails model
+        shape across versions. The DeepResearchTool helper is the documented
+        Python API and normalizes the underlying wire format for the installed
+        azure-ai-agents package.
+        """
+        try:
+            return DeepResearchTool(
+                bing_grounding_connection_id=self._bing_connection,
+                deep_research_model=self._deep_model,
+            ).definitions
+        except ImportError:
+            logger.warning(
+                "DeepResearchTool helper unavailable; falling back to legacy DeepResearchDetails construction"
+            )
+            return [
+                DeepResearchToolDefinition(
+                    deep_research=DeepResearchDetails(
+                        deep_research_model=self._deep_model,
+                        deep_research_bing_grounding_connections=[
+                            DeepResearchBingGroundingConnection(connection_id=self._bing_connection)
+                        ],
+                    )
+                )
+            ]
 
     def _extract_text_from_message(self, msg) -> Optional[str]:
         """Safely extract text content from a message object."""
