@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 from pathlib import Path
+import re
 from typing import Any, Dict, List, Optional
 
 from config.config import Config as AppConfig
@@ -76,7 +77,7 @@ class AccountBriefOrchestrator:
         )
         deep_research_result = await self._get_public_research_orchestrator().run(
             company_name=resolved_company_name,
-            focus_hint=request.focus_hint,
+            focus_hint=self._public_focus_hint(request.focus_hint),
             industry=industry_key or None,
             progress_cb=progress_cb,
         )
@@ -316,6 +317,37 @@ class AccountBriefOrchestrator:
         token, _ = resolve_runtime_bearer_token(token_file=token_file, fallback_paths=fallback_paths)
         client = ProConnectClient(base_url=base_url, bearer_token=token)
         return ProConnectAccountResearchService(client=client)
+
+    @staticmethod
+    def _public_focus_hint(focus_hint: Optional[str]) -> Optional[str]:
+        text = " ".join(str(focus_hint or "").split()).strip()
+        if not text:
+            return None
+
+        internal_patterns = [
+            r"\bproconnect\b",
+            r"\bprotiviti\b",
+            r"\brobert\s+half\b",
+            r"\brhi\b",
+            r"\bpro\b",
+            r"\bmsa\b",
+            r"\bno\s+known\s+work\b",
+            r"\bknown\s+work\b",
+            r"\bworked\s+before\b",
+            r"\baccount\s+team\b",
+            r"\brelationship\s+(?:owner|owners|gap|gaps|route|routes|mapping|status|context|network)\b",
+            r"\bconnected\s+colleagues?\b",
+            r"\bwarm\s+intro\b",
+            r"\binternal\s+(?:buyer|buyers|pipeline|relationship|relationships|opportunity|opportunities)\b",
+            r"\bopen\s+opportunit(?:y|ies)\b",
+            r"\bpast\s+work\b",
+            r"\bpipeline\b",
+            r"\bpgp\s+elite\b",
+            r"\benterprise\s+revenue\s+acceleration\b",
+        ]
+        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in internal_patterns):
+            return None
+        return text
 
     @staticmethod
     def _merge_coverage_gaps(*groups: List[str]) -> List[str]:

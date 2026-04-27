@@ -13,7 +13,7 @@ PUBLIC_ACCOUNT_OVERLAY = """
 - This research run supports a public-account brief rather than a generic company briefing.
 - Ground the work in publicly accessible reporting, filings, company materials, regulatory disclosures, and reputable news coverage.
 - Prioritize current business pressure, leadership context, likely buyer priorities, and credible opportunity areas supported by public evidence.
-- Do not make claims about account ownership, relationship status, MSA status, prior delivery history, buyer ownership, or pipeline.
+- Do not infer private commercial relationships, contracts, delivery history, or active sales activity that is not supported by public sources.
 - Call out coverage gaps when public evidence is thin, conflicting, or absent.
 - Keep observed facts separate from clearly labeled inference.
 """.strip()

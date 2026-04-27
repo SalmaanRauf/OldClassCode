@@ -99,6 +99,60 @@ async def test_account_brief_orchestrator_runs_three_stage_pipeline() -> None:
 
 
 @pytest.mark.asyncio
+async def test_account_brief_orchestrator_sanitizes_internal_focus_hint_for_public_research() -> None:
+    captured_public_focus_hints = []
+    captured_synthesis_contexts = []
+
+    class FakeProConnectService:
+        def collect_account_research(self, account_name: str):
+            return {
+                "account_resolution": {"resolved_name": account_name},
+                "account_status": {"summary": "No known ProConnect work found."},
+                "coverage_gaps": [],
+            }
+
+    class FakePublicResearchOrchestrator:
+        async def run(self, *, company_name: str, focus_hint=None, industry=None, progress_cb=None):
+            captured_public_focus_hints.append(focus_hint)
+
+            class FakeResult:
+                deep_research_response = {"coverage_gaps": [], "citations": []}
+
+            return FakeResult()
+
+    class FakeSynthesizer:
+        def build_input(self, **kwargs):
+            captured_synthesis_contexts.append(kwargs["request_context"])
+            return kwargs
+
+        async def synthesize(self, synthesis_input):
+            return AccountBriefSynthesisResult(
+                account_summary="Brief",
+                signal_summary=["Signals"],
+                opportunity_summary=["Opportunity"],
+                suggested_plays=[],
+                takeaway="Takeaway",
+            )
+
+    orchestrator = AccountBriefOrchestrator(
+        proconnect_service=FakeProConnectService(),
+        public_research_orchestrator=FakePublicResearchOrchestrator(),
+        synthesizer=FakeSynthesizer(),
+    )
+
+    await orchestrator.run(
+        AccountResearchInput(
+            account_name="Danaher",
+            raw_input="Danaher, check PRO/RHI relationship gaps",
+            focus_hint="check PRO/RHI relationship gaps",
+        )
+    )
+
+    assert captured_public_focus_hints == [None]
+    assert captured_synthesis_contexts[0]["focus_hint"] == "check PRO/RHI relationship gaps"
+
+
+@pytest.mark.asyncio
 async def test_account_brief_orchestrator_combines_coverage_gaps_from_both_sources() -> None:
     class FakeProConnectService:
         def collect_account_research(self, account_name: str):

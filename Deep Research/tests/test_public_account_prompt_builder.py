@@ -84,6 +84,11 @@ def test_builder_generates_deterministic_public_only_prompt(tmp_path) -> None:
         "warm intro",
         "relationship owner",
         "internal",
+        "msa",
+        "pipeline",
+        "prior delivery",
+        "buyer ownership",
+        "account ownership",
         "salesforce",
     ]
     for banned in banned_terms:
