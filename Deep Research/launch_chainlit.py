@@ -6,12 +6,37 @@ Ensures env is present and runs Chainlit.
 import os
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
 import subprocess
 
-def main():
-    root = Path(__file__).parent
+
+def _validate_python_runtime() -> None:
+    if sys.version_info < (3, 11) or sys.version_info >= (3, 14):
+        print("ERROR: Unsupported Python runtime for this project.")
+        print(f"Current Python: {sys.version.split()[0]}")
+        print(f"Current executable: {sys.executable}")
+        print("Use Python 3.11 or 3.12, then recreate the project virtual environment.")
+        print('Windows example: py -3.12 -m venv .venv')
+        sys.exit(1)
+
+
+def _load_dotenv(root: Path) -> None:
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        print("ERROR: python-dotenv is not installed in the active Python environment.")
+        print(f"Current executable: {sys.executable}")
+        print("Activate the project virtual environment and run:")
+        print("  python -m pip install -r requirements.txt")
+        sys.exit(1)
+
     load_dotenv(root / ".env")
+
+
+def main():
+    _validate_python_runtime()
+
+    root = Path(__file__).parent
+    _load_dotenv(root)
 
     required = [
         "OPENAI_API_KEY", "BASE_URL", "PROJECT_ID", "API_VERSION", "MODEL",

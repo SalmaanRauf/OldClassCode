@@ -5,7 +5,11 @@ This package is a clean, self-contained version of your Chainlit chat workflow f
 ## Quickstart
 
 - Create a `.env` from `env.example` and fill in the Azure/ATLAS keys.
-- Install: `pip install -r requirements.txt`
+- Use Python 3.11 or 3.12. Do not use Python 3.14 for this project; several pinned dependencies may try to build native wheels on Windows.
+- Create and activate a virtual environment.
+  - Windows: `py -3.12 -m venv .venv` then `.\.venv\Scripts\Activate.ps1`
+  - macOS/Linux: `python3.12 -m venv .venv` then `source .venv/bin/activate`
+- Install: `python -m pip install -r requirements.txt`
 - Run: `python launch_chainlit.py`
 - Open: http://localhost:8000
 
