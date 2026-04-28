@@ -153,6 +153,68 @@ async def test_account_brief_orchestrator_sanitizes_internal_focus_hint_for_publ
 
 
 @pytest.mark.asyncio
+async def test_account_brief_orchestrator_can_skip_proconnect_for_known_no_work_accounts() -> None:
+    class ProConnectShouldNotRun:
+        def collect_account_research(self, account_name: str):
+            raise AssertionError("ProConnect should be skipped")
+
+    class FakePublicResearchOrchestrator:
+        async def run(self, *, company_name: str, focus_hint=None, industry=None, progress_cb=None):
+            assert company_name == "BAE Systems"
+
+            class FakeResult:
+                deep_research_response = {
+                    "summary": "Fresh public pursuit signals.",
+                    "coverage_gaps": [],
+                    "citations": [],
+                }
+
+            return FakeResult()
+
+    class FakeSynthesizer:
+        captured_input = None
+
+        def build_input(self, **kwargs):
+            self.captured_input = kwargs
+            return kwargs
+
+        async def synthesize(self, synthesis_input):
+            return AccountBriefSynthesisResult(
+                account_summary="Public-only account brief",
+                signal_summary=["Fresh signal"],
+                opportunity_summary=["Opportunity area"],
+                suggested_plays=[],
+                takeaway="Use public evidence.",
+            )
+
+    synthesizer = FakeSynthesizer()
+    events = []
+
+    async def progress_cb(event):
+        events.append(event)
+
+    orchestrator = AccountBriefOrchestrator(
+        proconnect_service=ProConnectShouldNotRun(),
+        public_research_orchestrator=FakePublicResearchOrchestrator(),
+        synthesizer=synthesizer,
+    )
+
+    result = await orchestrator.run(
+        AccountResearchInput(account_name="BAE Systems", raw_input="BAE Systems"),
+        use_proconnect=False,
+        proconnect_skip_reason="Stakeholder identified no known work / no MSA.",
+        progress_cb=progress_cb,
+    )
+
+    assert result["company"] == "BAE Systems"
+    assert result["proconnect_summary"]["diagnostics"]["proconnect_skipped"] is True
+    assert "skipped" in result["synthesis"]["relationship_posture"].lower()
+    assert "skipped" in result["synthesis"]["buyer_posture"].lower()
+    assert any(event["stage"] == "skipping_proconnect_context" for event in events)
+    assert synthesizer.captured_input["proconnect_summary"]["diagnostics"]["proconnect_skipped"] is True
+
+
+@pytest.mark.asyncio
 async def test_account_brief_orchestrator_combines_coverage_gaps_from_both_sources() -> None:
     class FakeProConnectService:
         def collect_account_research(self, account_name: str):

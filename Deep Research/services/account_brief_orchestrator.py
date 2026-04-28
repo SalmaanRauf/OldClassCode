@@ -49,20 +49,37 @@ class AccountBriefOrchestrator:
         *,
         industry_key: Optional[str] = None,
         progress_cb=None,
+        use_proconnect: bool = True,
+        proconnect_skip_reason: Optional[str] = None,
+        proconnect_summary_override: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        await self._emit_progress(
-            progress_cb,
-            stage="resolving_account",
-            message=f"Resolving {request.account_name} in ProConnect.",
-            status="running",
-        )
-        await self._emit_progress(
-            progress_cb,
-            stage="collecting_proconnect_context",
-            message=f"Collecting internal ProConnect context for {request.account_name}.",
-            status="running",
-        )
-        proconnect_summary = await self._collect_proconnect_summary(request)
+        if proconnect_summary_override is not None:
+            proconnect_summary = dict(proconnect_summary_override or {})
+        elif use_proconnect:
+            await self._emit_progress(
+                progress_cb,
+                stage="resolving_account",
+                message=f"Resolving {request.account_name} in ProConnect.",
+                status="running",
+            )
+            await self._emit_progress(
+                progress_cb,
+                stage="collecting_proconnect_context",
+                message=f"Collecting internal ProConnect context for {request.account_name}.",
+                status="running",
+            )
+            proconnect_summary = await self._collect_proconnect_summary(request)
+        else:
+            await self._emit_progress(
+                progress_cb,
+                stage="skipping_proconnect_context",
+                message=f"Skipping ProConnect context for {request.account_name}.",
+                status="skipped",
+            )
+            proconnect_summary = self._build_skipped_proconnect_summary(
+                request,
+                reason=proconnect_skip_reason,
+            )
         resolved_company_name = self._first_text(
             ((proconnect_summary.get("account_resolution") or {}).get("company_name")),
             ((proconnect_summary.get("account_resolution") or {}).get("resolved_name")),
@@ -157,6 +174,67 @@ class AccountBriefOrchestrator:
             raise TypeError("ProConnect account collection must be synchronous.")
         return dict(result or {})
 
+    @staticmethod
+    def _build_skipped_proconnect_summary(
+        request: AccountResearchInput,
+        *,
+        reason: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        normalized_reason = " ".join(str(reason or "ProConnect intentionally skipped for this batch run.").split())
+        return {
+            "account_resolution": {
+                "query": request.account_name,
+                "resolved": True,
+                "account_id": None,
+                "company_name": request.account_name,
+                "selected_candidate": None,
+                "selected_score": None,
+                "search_status_code": None,
+                "account_fetch_status_code": None,
+            },
+            "account_status": {
+                "summary": f"ProConnect was skipped for this run. Reason: {normalized_reason}",
+                "worked_before": None,
+                "account_activity_status": "skipped",
+                "is_client": None,
+                "is_msa": None,
+            },
+            "known_protiviti_team": {},
+            "known_relationships": {
+                "protiviti_alumni": {"items": []},
+                "connected_colleagues": {"items": []},
+                "warm_intro_path_available": False,
+                "relationship_routes": [],
+            },
+            "known_buyers": [],
+            "open_opportunities": [],
+            "past_work": {
+                "total_projects": 0,
+                "projects": [],
+                "solutions_list": [],
+                "most_recent_engagement_date": None,
+                "closed_won_opportunities": [],
+            },
+            "org_chart_coverage": {
+                "available": False,
+                "people_count": 0,
+                "focus_department": None,
+                "items": [],
+                "warnings": [],
+                "diagnostics": {"proconnect_skipped": True},
+            },
+            "optional_internal_signals": None,
+            "coverage_gaps": [
+                f"Internal ProConnect account context was skipped. Reason: {normalized_reason}"
+            ],
+            "diagnostics": {
+                "warnings": [],
+                "resolution": {},
+                "proconnect_skipped": True,
+                "proconnect_skip_reason": normalized_reason,
+            },
+        }
+
     def _get_proconnect_service(self) -> ProConnectAccountResearchService:
         if self.proconnect_service is None:
             if self._owns_proconnect_service:
@@ -227,6 +305,9 @@ class AccountBriefOrchestrator:
 
     @classmethod
     def _build_relationship_posture(cls, proconnect_summary: Dict[str, Any]) -> str:
+        if cls._proconnect_was_skipped(proconnect_summary):
+            reason = cls._first_text((proconnect_summary.get("diagnostics") or {}).get("proconnect_skip_reason"))
+            return f"ProConnect was skipped for this run{': ' + reason if reason else '.'}"
         relationships = dict(proconnect_summary.get("known_relationships") or {})
         alumni = list(((relationships.get("protiviti_alumni") or {}).get("items") or []))
         connected = list(((relationships.get("connected_colleagues") or {}).get("items") or []))
@@ -240,6 +321,8 @@ class AccountBriefOrchestrator:
 
     @classmethod
     def _build_buyer_posture(cls, proconnect_summary: Dict[str, Any]) -> str:
+        if cls._proconnect_was_skipped(proconnect_summary):
+            return "Internal buyer history was not checked because ProConnect was skipped for this run."
         buyers = list(proconnect_summary.get("known_buyers") or [])
         if not buyers:
             return "Known buyer coverage is thin in ProConnect."
@@ -254,6 +337,11 @@ class AccountBriefOrchestrator:
         proconnect_summary: Dict[str, Any],
         deep_research_summary: Dict[str, Any],
     ) -> str:
+        if cls._proconnect_was_skipped(proconnect_summary):
+            public_sections = list(deep_research_summary.get("sections") or [])
+            if public_sections:
+                return f"Leadership coverage is public-research-only across {len(public_sections)} public section(s)."
+            return "Leadership coverage is public-research-only; no ProConnect org chart was checked."
         org_chart = dict(proconnect_summary.get("org_chart_coverage") or {})
         org_people_count = int(org_chart.get("people_count") or 0)
         public_sections = list(deep_research_summary.get("sections") or [])
@@ -271,6 +359,14 @@ class AccountBriefOrchestrator:
         if public_titles:
             return f"Leadership coverage relies on public research sections such as {', '.join(public_titles[:3])}."
         return "Leadership coverage is limited across both internal and public sources."
+
+    @staticmethod
+    def _proconnect_was_skipped(proconnect_summary: Dict[str, Any]) -> bool:
+        diagnostics = proconnect_summary.get("diagnostics") if isinstance(proconnect_summary, dict) else {}
+        if isinstance(diagnostics, dict) and diagnostics.get("proconnect_skipped") is True:
+            return True
+        account_status = proconnect_summary.get("account_status") if isinstance(proconnect_summary, dict) else {}
+        return isinstance(account_status, dict) and str(account_status.get("account_activity_status") or "").lower() == "skipped"
 
     @classmethod
     def _normalize_top_openings(

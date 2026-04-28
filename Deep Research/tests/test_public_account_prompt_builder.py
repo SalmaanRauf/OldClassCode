@@ -95,6 +95,25 @@ def test_builder_generates_deterministic_public_only_prompt(tmp_path) -> None:
         assert banned not in combined_prompt
 
 
+def test_builder_forces_current_pursuit_research_window(tmp_path) -> None:
+    loader = _write_prompt_fixture(tmp_path)
+    builder = PublicAccountPromptBuilder(prompt_loader=loader)
+
+    package = builder.build(
+        company_name="BAE Systems",
+        focus_hint="Find active pursuit triggers for managing directors.",
+        industry="general",
+        as_of_date="2026-04-27",
+    )
+
+    combined_prompt = f"{package.system_prompt}\n{package.user_prompt}"
+    assert "Current as of: 2026-04-27" in package.user_prompt
+    assert "last 180 days" in combined_prompt
+    assert "last 30-90 days" in combined_prompt
+    assert "Do not rely on stale 2024-only material" in combined_prompt
+    assert "upcoming pursuit" in combined_prompt.lower()
+
+
 def test_builder_omits_industry_line_when_no_explicit_industry_is_provided(tmp_path) -> None:
     loader = _write_prompt_fixture(tmp_path)
     builder = PublicAccountPromptBuilder(prompt_loader=loader)

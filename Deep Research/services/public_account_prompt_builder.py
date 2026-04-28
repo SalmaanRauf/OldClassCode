@@ -3,6 +3,7 @@ Prompt composition for public-account Deep Research runs.
 """
 from __future__ import annotations
 
+from datetime import date
 from dataclasses import dataclass
 
 from services.prompt_loader import PromptLoader
@@ -13,6 +14,8 @@ PUBLIC_ACCOUNT_OVERLAY = """
 - This research run supports a public-account brief rather than a generic company briefing.
 - Ground the work in publicly accessible reporting, filings, company materials, regulatory disclosures, and reputable news coverage.
 - Prioritize current business pressure, leadership context, likely buyer priorities, and credible opportunity areas supported by public evidence.
+- This is for an upcoming pursuit. Prioritize the last 180 days, with special attention to the last 30-90 days when evidence exists.
+- Do not rely on stale 2024-only material unless it directly explains a still-active current initiative, and label that limitation clearly.
 - Do not infer private commercial relationships, contracts, delivery history, or active sales activity that is not supported by public sources.
 - Call out coverage gaps when public evidence is thin, conflicting, or absent.
 - Keep observed facts separate from clearly labeled inference.
@@ -38,6 +41,7 @@ class PublicAccountPromptBuilder:
         company_name: str,
         focus_hint: str | None = None,
         industry: str | None = None,
+        as_of_date: str | None = None,
     ) -> PublicAccountPromptPackage:
         resolved_company = str(company_name or "").strip()
         if not resolved_company:
@@ -53,6 +57,7 @@ class PublicAccountPromptBuilder:
                 focus_hint=focus_hint,
                 industry_key=industry_key,
                 include_industry_context=bool(str(industry or "").strip()),
+                as_of_date=as_of_date or date.today().isoformat(),
             ),
         )
 
@@ -70,12 +75,14 @@ class PublicAccountPromptBuilder:
         focus_hint: str | None,
         industry_key: str,
         include_industry_context: bool,
+        as_of_date: str,
     ) -> str:
         lines = [
-            f"Build a public-account research brief for {company_name}.",
+            f"Build a public-account research brief for an upcoming pursuit at {company_name}.",
             "",
             "## Scope",
             f"Company: {company_name}",
+            f"Current as of: {as_of_date}",
         ]
         if include_industry_context:
             lines.append(f"Industry: {self._format_industry_label(industry_key)}")
@@ -87,13 +94,15 @@ class PublicAccountPromptBuilder:
                 "",
                 "## Required Output",
                 "1. A concise headline that explains the company's current public pressure profile.",
-                "2. A grounded why-now summary based on current public evidence.",
-                "3. A buyer and leadership posture summary tied to the available public record.",
-                "4. Credible opportunity areas supported by explicit source-backed evidence.",
-                "5. Clear coverage gaps where public reporting is thin or missing.",
+                "2. A grounded why-now summary based on recent public evidence, prioritizing the last 180 days and last 30-90 days.",
+                "3. A leadership and buyer-center map covering C-suite, finance, IT, legal, risk, operations, and relevant business-unit leaders where public evidence exists.",
+                "4. Current public initiatives, investments, leadership changes, risk/compliance issues, technology modernization, procurement, partnerships, or market events that could support an MD-level pursuit.",
+                "5. Suggested pursuit angles and analyst follow-ups clearly tied to cited evidence.",
+                "6. Clear coverage gaps where recent public reporting is thin or missing.",
                 "",
                 "## Research Standard",
                 "Use explicit section headings and preserve source-backed evidence throughout the report.",
+                "Do not rely on stale 2024-only material unless it directly explains a still-active current initiative.",
             ]
         )
         return "\n".join(lines).strip()
