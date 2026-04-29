@@ -52,9 +52,10 @@ def test_builder_uses_prompt_loader_and_appends_public_overlay(tmp_path) -> None
     )
 
     assert package.industry_key == "financial_services"
-    assert "FINANCIAL SERVICES BASE PROMPT" in package.system_prompt
-    assert "Public Account Overlay" in package.system_prompt
-    assert "public-account brief" in package.system_prompt.lower()
+    assert "Public Account Pursuit Research" in package.system_prompt
+    assert "Industry Source Guidance" in package.system_prompt
+    assert "Financial Services" in package.system_prompt
+    assert "financial" in package.system_prompt.lower()
 
 
 def test_builder_generates_deterministic_public_only_prompt(tmp_path) -> None:
@@ -90,6 +91,9 @@ def test_builder_generates_deterministic_public_only_prompt(tmp_path) -> None:
         "buyer ownership",
         "account ownership",
         "salesforce",
+        "protiviti",
+        "robert half",
+        "rhi",
     ]
     for banned in banned_terms:
         assert banned not in combined_prompt
@@ -112,6 +116,16 @@ def test_builder_forces_current_pursuit_research_window(tmp_path) -> None:
     assert "last 30-90 days" in combined_prompt
     assert "Do not rely on stale 2024-only material" in combined_prompt
     assert "upcoming pursuit" in combined_prompt.lower()
+    assert "## People to Pursue" in combined_prompt
+    assert "## Company Snapshot" in combined_prompt
+    assert "## Filings, Financials, and Risk Signals" in combined_prompt
+    assert "10-K" in combined_prompt
+    assert "8-K" in combined_prompt
+    assert "## Competitive and Market Context" in combined_prompt
+    assert "## Likely Needs / White-Space Hypotheses" in combined_prompt
+    assert "## Recent People Moves" in combined_prompt
+    assert "## Buying Committee Map" in combined_prompt
+    assert "## Recommended MD Actions This Week" in combined_prompt
 
 
 def test_builder_omits_industry_line_when_no_explicit_industry_is_provided(tmp_path) -> None:

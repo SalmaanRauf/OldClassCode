@@ -4,6 +4,7 @@ Tests for the financial-services movement digestor.
 import json
 import os
 import sys
+from datetime import date
 
 import pytest
 
@@ -428,7 +429,8 @@ async def test_digest_dedupes_same_person_same_source_even_if_role_text_varies()
                     },
                 ]
             }
-        )
+        ),
+        reference_date=date(2026, 4, 20),
     )
 
     rows, diagnostics = await digestor.digest(
@@ -483,7 +485,8 @@ async def test_digest_filters_rows_outside_requested_lookback_when_effective_dat
                     },
                 ]
             }
-        )
+        ),
+        reference_date=date(2026, 4, 20),
     )
 
     rows, diagnostics = await digestor.digest(

@@ -14,7 +14,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from services.pursuit_research_batch import (  # noqa: E402
     PursuitAccount,
     PursuitResearchBatchRunner,
+    apply_proconnect_policy,
     default_stakeholder_pursuit_accounts,
+    filter_accounts,
 )
 
 
@@ -116,7 +118,7 @@ def test_default_stakeholder_accounts_encode_known_proconnect_strategy() -> None
 
 
 @pytest.mark.asyncio
-async def test_batch_runner_downgrades_mixed_industry_batches_to_sequential(tmp_path) -> None:
+async def test_batch_runner_allows_mixed_industry_concurrency_after_client_isolation(tmp_path) -> None:
     class FakeOrchestrator:
         async def run(self, request, **kwargs):
             return {
@@ -139,4 +141,57 @@ async def test_batch_runner_downgrades_mixed_industry_batches_to_sequential(tmp_
     )
 
     assert summary["requested_concurrency"] == 2
-    assert summary["concurrency"] == 1
+    assert summary["concurrency"] == 2
+
+
+@pytest.mark.asyncio
+async def test_batch_runner_resume_skips_existing_success(tmp_path) -> None:
+    calls = []
+    existing_path = tmp_path / "01-bae-systems.json"
+    existing_path.write_text(
+        json.dumps({"type": "account_brief", "company": "BAE Systems", "synthesis": {}}),
+        encoding="utf-8",
+    )
+
+    class FakeOrchestrator:
+        async def run(self, request, **kwargs):
+            calls.append(request.account_name)
+            return {
+                "type": "account_brief",
+                "company": request.account_name,
+                "proconnect_summary": {"known_protiviti_team": {}},
+                "deep_research_summary": {},
+                "synthesis": {"headline": request.account_name},
+            }
+
+    runner = PursuitResearchBatchRunner(
+        output_dir=tmp_path,
+        orchestrator_factory=lambda: FakeOrchestrator(),
+        concurrency=1,
+        resume=True,
+    )
+    summary = await runner.run(
+        [PursuitAccount("BAE Systems", "Campaign", "Fresh", output_slug="bae-systems")]
+    )
+
+    assert calls == []
+    assert summary["skipped"] == 1
+    assert summary["results"][0]["skip_reason"] == "completed_existing_output"
+
+
+def test_batch_filters_and_proconnect_policy_overrides() -> None:
+    accounts = default_stakeholder_pursuit_accounts()
+
+    filtered = filter_accounts(accounts, ["BAE Systems", "carefirst-bcbs-pgp"])
+    assert [account.account_name for account in filtered] == [
+        "BAE Systems",
+        "CareFirst BlueCross BlueShield",
+    ]
+
+    none_policy = apply_proconnect_policy(filtered, "none")
+    assert all(account.use_proconnect is False for account in none_policy)
+    assert all(account.proconnect_skip_reason for account in none_policy)
+
+    all_policy = apply_proconnect_policy(filtered, "all")
+    assert all(account.use_proconnect is True for account in all_policy)
+    assert all(account.proconnect_skip_reason is None for account in all_policy)

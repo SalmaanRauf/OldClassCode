@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import inspect
 import re
+from datetime import date
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional
 
@@ -179,7 +180,21 @@ class PublicAccountResearchOrchestrator:
                             or section.get("points")
                             or content
                         ),
-                    )
+	                    )
+
+        summary_text = cls._first_text(
+            payload.get("summary"),
+            payload.get("executive_summary"),
+            payload.get("headline"),
+            payload.get("account_status_summary"),
+        )
+        parsed_summary_sections = cls._parse_markdown_sections(summary_text)
+        if parsed_summary_sections:
+            existing_titles = {cls._normalize_heading(item.get("title")) for item in sections}
+            for section in parsed_summary_sections:
+                if cls._normalize_heading(section.get("title")) in existing_titles:
+                    continue
+                sections.append(section)
 
         coverage_gaps = cls._merge_unique_text(
             coverage_gaps,
@@ -199,19 +214,119 @@ class PublicAccountResearchOrchestrator:
             cls._normalize_citations(metadata.get("discovery_sources")),
             cls._normalize_citations(metadata.get("confirmation_sources")),
         )
+        freshness = cls._build_freshness_assessment(
+            "\n\n".join(
+                [summary_text]
+                + [str(section.get("content") or "") for section in sections]
+            )
+        )
+        if freshness.get("coverage_gap"):
+            coverage_gaps = cls._merge_unique_text(
+                coverage_gaps,
+                [str(freshness["coverage_gap"])],
+            )
 
         return {
             "type": str(payload.get("type") or "deep_research"),
             "company_name": str(company_name or "").strip(),
             "focus_hint": str(focus_hint or "").strip(),
             "industry_key": str(industry_key or "general").strip() or "general",
-            "summary": cls._first_text(
-                payload.get("summary"),
-                payload.get("executive_summary"),
-                payload.get("headline"),
-                payload.get("account_status_summary"),
-            ),
+            "summary": cls._best_summary(summary_text, sections),
             "sections": sections,
+            "public_company_snapshot": cls._compact_text(
+                cls._find_section_content(
+                    sections,
+                    ["company snapshot", "company overview", "business overview"],
+                ),
+                max_chars=1200,
+            ),
+            "public_strategy_priorities": cls._extract_section_items(
+                sections,
+                [
+                    "strategy priorities and operating pressure",
+                    "strategic priorities",
+                    "operating pressure",
+                    "strategy and priorities",
+                ],
+                limit=10,
+            ),
+            "public_filing_financial_signals": cls._extract_section_items(
+                sections,
+                [
+                    "filings financials and risk signals",
+                    "filings and financials",
+                    "financial and risk signals",
+                    "risk signals",
+                ],
+                limit=10,
+            ),
+            "public_competitive_context": cls._extract_section_items(
+                sections,
+                [
+                    "competitive and market context",
+                    "competitive context",
+                    "market context",
+                    "competitors",
+                ],
+                limit=10,
+            ),
+            "public_customer_contract_signals": cls._extract_section_items(
+                sections,
+                [
+                    "customer contract and procurement signals",
+                    "customer and contract signals",
+                    "contract and procurement signals",
+                    "procurement signals",
+                ],
+                limit=10,
+            ),
+            "public_likely_needs": cls._extract_section_items(
+                sections,
+                [
+                    "likely needs white space hypotheses",
+                    "likely needs",
+                    "white space hypotheses",
+                    "white-space hypotheses",
+                    "needs and white space",
+                ],
+                limit=10,
+            ),
+            "public_people_targets": cls._extract_section_items(
+                sections,
+                ["people to pursue", "leadership coverage", "public leadership"],
+                limit=12,
+            ),
+            "public_people_moves": cls._extract_section_items(
+                sections,
+                ["recent people moves", "executive and buyer moves", "leadership changes"],
+                limit=12,
+            ),
+            "public_buyer_map": cls._extract_section_items(
+                sections,
+                ["buying committee map", "buyer center map", "org map"],
+                limit=12,
+            ),
+            "public_buying_triggers": cls._extract_section_items(
+                sections,
+                ["why now current triggers", "why now", "current triggers"],
+                limit=10,
+            ),
+            "public_initiatives": cls._extract_section_items(
+                sections,
+                ["recent initiatives public signals", "recent initiatives", "public signals"],
+                limit=10,
+            ),
+            "public_relationship_hooks": cls._extract_section_items(
+                sections,
+                ["public relationship hooks warm path hypotheses", "public relationship hooks", "warm path hypotheses"],
+                limit=8,
+            ),
+            "public_recommended_actions": cls._extract_section_items(
+                sections,
+                ["recommended md actions this week", "recommended actions", "analyst follow ups"],
+                limit=8,
+            ),
+            "freshness_assessment": freshness,
             "citations": citations,
             "coverage_gaps": coverage_gaps,
             "metadata": metadata,
@@ -224,6 +339,137 @@ class PublicAccountResearchOrchestrator:
             if text:
                 return text
         return default
+
+    @classmethod
+    def _best_summary(cls, summary_text: str, sections: List[Dict[str, Any]]) -> str:
+        thesis = cls._find_section_content(sections, ["executive pursuit thesis"])
+        if thesis:
+            return cls._compact_text(thesis, max_chars=900)
+        return cls._compact_text(summary_text, max_chars=900)
+
+    @staticmethod
+    def _compact_text(value: Any, max_chars: int = 900) -> str:
+        text = re.sub(r"\s+", " ", str(value or "").strip())
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 3].rsplit(" ", 1)[0].rstrip(" ,;:") + "..."
+
+    @classmethod
+    def _parse_markdown_sections(cls, text: str) -> List[Dict[str, Any]]:
+        lines = str(text or "").splitlines()
+        sections: List[Dict[str, Any]] = []
+        current_title: Optional[str] = None
+        current_lines: List[str] = []
+
+        def flush() -> None:
+            nonlocal current_title, current_lines
+            if not current_title:
+                current_lines = []
+                return
+            content = "\n".join(current_lines).strip()
+            if content:
+                sections.append(
+                    {
+                        "title": current_title.strip(),
+                        "content": content,
+                        "citations": cls._normalize_citations(cls._extract_urls_from_text(content)),
+                    }
+                )
+            current_lines = []
+
+        for line in lines:
+            match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
+            if match:
+                flush()
+                current_title = re.sub(r"[*_`]+", "", match.group(1)).strip()
+                continue
+            if current_title:
+                current_lines.append(line)
+        flush()
+        return sections
+
+    @classmethod
+    def _find_section_content(cls, sections: List[Dict[str, Any]], aliases: List[str]) -> str:
+        aliases_normalized = {cls._normalize_heading(alias) for alias in aliases}
+        for section in list(sections or []):
+            title = cls._normalize_heading(section.get("title"))
+            if title in aliases_normalized:
+                return str(section.get("content") or "").strip()
+        return ""
+
+    @classmethod
+    def _extract_section_items(
+        cls,
+        sections: List[Dict[str, Any]],
+        aliases: List[str],
+        *,
+        limit: int = 8,
+    ) -> List[str]:
+        content = cls._find_section_content(sections, aliases)
+        if not content:
+            return []
+        rows: List[str] = []
+        for raw_line in content.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if re.match(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?$", line):
+                continue
+            line = re.sub(r"^\s*[-*]\s+", "", line).strip()
+            line = re.sub(r"^\s*\d+[.)]\s+", "", line).strip()
+            if not line:
+                continue
+            if line.startswith("|") and line.endswith("|"):
+                cells = [cell.strip() for cell in line.strip("|").split("|")]
+                if cells and all(cls._normalize_heading(cell) in {"person", "current role", "buyer lane", "why this person matters now", "evidence date source", "move", "date", "why it matters", "source", "buyer role", "named person or public role", "evidence", "likely concern", "follow up needed", "source date", "signal", "pursuit implication", "need or hypothesis", "likely buyer lane", "confidence", "analyst validation step"} for cell in cells):
+                    continue
+                line = " | ".join(cell for cell in cells if cell)
+            if line and line.lower() not in {"none found", "not found", "n/a"}:
+                rows.append(line)
+            if len(rows) >= limit:
+                break
+        return cls._merge_unique_text([], rows)
+
+    @staticmethod
+    def _normalize_heading(value: Any) -> str:
+        text = re.sub(r"[*_`]+", "", str(value or "").lower())
+        text = text.replace("/", " ")
+        text = re.sub(r"[^a-z0-9]+", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    @staticmethod
+    def _extract_urls_from_text(text: str) -> List[str]:
+        urls = re.findall(r"https?://[^\s)\]>\"']+", str(text or ""))
+        return [url.rstrip(".,;:") for url in urls]
+
+    @classmethod
+    def _build_freshness_assessment(cls, text: str) -> Dict[str, Any]:
+        current_year = date.today().year
+        years = sorted(
+            {
+                int(match)
+                for match in re.findall(r"\b(20[0-9]{2})\b", str(text or ""))
+                if 2000 <= int(match) <= current_year
+            }
+        )
+        newest_year = years[-1] if years else None
+        stale_only = bool(years) and newest_year <= current_year - 2
+        needs_review = stale_only or not years
+        coverage_gap = ""
+        if stale_only:
+            coverage_gap = (
+                f"Public research appears stale-only; newest detected evidence year is {newest_year}."
+            )
+        elif not years:
+            coverage_gap = "Public research did not expose explicit evidence dates; verify freshness before MD use."
+        return {
+            "current_year": current_year,
+            "year_mentions": years,
+            "newest_year": newest_year,
+            "stale_only": stale_only,
+            "needs_review": needs_review,
+            "coverage_gap": coverage_gap,
+        }
 
     @classmethod
     def _normalize_citations(cls, raw: Any) -> List[Dict[str, str]]:

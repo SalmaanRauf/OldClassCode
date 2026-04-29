@@ -67,6 +67,7 @@ async def initialize_kernel():
 # For synchronous compatibility
 _kernel = None
 _exec_settings = None
+_kernel_locks = {}
 
 
 def get_kernel():
@@ -90,7 +91,14 @@ async def get_kernel_async():
    """Get kernel and execution settings for async contexts."""
    global _kernel, _exec_settings
    if _kernel is None or _exec_settings is None:
-       _kernel, _exec_settings = await initialize_kernel()
+       loop = asyncio.get_running_loop()
+       lock = _kernel_locks.get(id(loop))
+       if lock is None:
+           lock = asyncio.Lock()
+           _kernel_locks[id(loop)] = lock
+       async with lock:
+           if _kernel is None or _exec_settings is None:
+               _kernel, _exec_settings = await initialize_kernel()
    return _kernel, _exec_settings
 # Test function
 async def test_kernel_connection():

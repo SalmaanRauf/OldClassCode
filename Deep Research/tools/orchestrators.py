@@ -2,7 +2,7 @@
 Tool-centric orchestrators for the Chainlit chat experience.
 """
 from __future__ import annotations
-from typing import List, Tuple, Optional, Callable, Awaitable, Dict
+from typing import Any, List, Tuple, Optional, Callable, Awaitable, Dict
 import logging
 import re
 import asyncio
@@ -18,6 +18,13 @@ from services.deep_research_client import get_deep_research_client
 logger = logging.getLogger(__name__)
 
 _briefing_cache = TTLCache(maxsize=64, ttl_seconds=1800)
+
+
+async def _maybe_await(value: Any) -> Any:
+    """Support both async implementations and synchronous test doubles."""
+    if hasattr(value, "__await__"):
+        return await value
+    return value
 
 def _analysis_items_from_gwbs(bundle: FullGWBS) -> List[AnalysisItem]:
     items: List[AnalysisItem] = []
@@ -494,7 +501,7 @@ async def enhanced_user_request_handler(
         if progress:
             await progress(" Analyzing your request...")
         
-        intent_type, intent_plan = await enhanced_router.route_enhanced(user_input, context)
+        intent_type, intent_plan = await _maybe_await(enhanced_router.route_enhanced(user_input, context))
 
         logger.info(f"Resolved intent: {intent_type.value} with {len(intent_plan.tasks)} tasks")
 
@@ -514,8 +521,8 @@ async def enhanced_user_request_handler(
         if progress:
             await progress(f" Executing {len(intent_plan.tasks)} task(s)...")
         
-        execution_result = await task_executor.execute_plan(
-            intent_plan, context, bing_agent, analyst_agent
+        execution_result = await _maybe_await(
+            task_executor.execute_plan(intent_plan, context, bing_agent, analyst_agent)
         )
         
         # Format response

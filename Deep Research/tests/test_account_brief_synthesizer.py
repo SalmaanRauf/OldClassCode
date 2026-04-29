@@ -263,6 +263,45 @@ def test_coerce_result_extracts_json_from_markdown_wrappers():
     )
 
 
+def test_coerce_result_preserves_people_first_optional_fields():
+    synthesizer = AccountBriefSynthesizer()
+
+    result = synthesizer._coerce_result(  # noqa: SLF001
+        {
+            "account_summary": "BAE has named public buyer targets.",
+            "signal_summary": ["Current modernization signal."],
+            "opportunity_summary": ["Technology risk opening."],
+            "company_overview": "BAE is a defense contractor with current public modernization pressure.",
+            "strategic_priorities": ["Modernization | public strategy signal"],
+            "financial_filing_signals": ["2026 filing | cyber risk | CISO lane"],
+            "competitive_context": ["Competes in systems integration | delivery pressure"],
+            "customer_contract_signals": ["2026 contract award | program delivery lane"],
+            "likely_needs": ["Cyber compliance support | risk disclosure | CISO | Medium"],
+            "people_to_prioritize": ["Jane Doe | CIO | Owns modernization"],
+            "recent_people_moves": ["John Smith | Appointed CFO | 2026"],
+            "buying_triggers": ["2026 modernization announcement | CIO lane"],
+            "relationship_hooks": ["Board overlap hypothesis | public source"],
+            "recommended_asks": ["Ask for CIO intro path."],
+            "analyst_follow_ups": ["Validate direct reports."],
+            "suggested_plays": [],
+            "takeaway": "Prioritize people mapping before outreach.",
+        }
+    )
+
+    assert result.company_overview == "BAE is a defense contractor with current public modernization pressure."
+    assert result.strategic_priorities == ["Modernization | public strategy signal"]
+    assert result.financial_filing_signals == ["2026 filing | cyber risk | CISO lane"]
+    assert result.competitive_context == ["Competes in systems integration | delivery pressure"]
+    assert result.customer_contract_signals == ["2026 contract award | program delivery lane"]
+    assert result.likely_needs == ["Cyber compliance support | risk disclosure | CISO | Medium"]
+    assert result.people_to_prioritize == ["Jane Doe | CIO | Owns modernization"]
+    assert result.recent_people_moves == ["John Smith | Appointed CFO | 2026"]
+    assert result.buying_triggers == ["2026 modernization announcement | CIO lane"]
+    assert result.relationship_hooks == ["Board overlap hypothesis | public source"]
+    assert result.recommended_asks == ["Ask for CIO intro path."]
+    assert result.analyst_follow_ups == ["Validate direct reports."]
+
+
 def test_coerce_result_requires_full_output_contract():
     synthesizer = AccountBriefSynthesizer()
 

@@ -37,7 +37,19 @@ class AccountBriefSynthesisResult:
     signal_summary: List[str]
     opportunity_summary: List[str]
     takeaway: str
+    company_overview: str = ""
+    strategic_priorities: List[str] = field(default_factory=list)
+    financial_filing_signals: List[str] = field(default_factory=list)
+    competitive_context: List[str] = field(default_factory=list)
+    customer_contract_signals: List[str] = field(default_factory=list)
+    likely_needs: List[str] = field(default_factory=list)
     suggested_plays: List[SynthesizedSuggestedPlay] = field(default_factory=list)
+    people_to_prioritize: List[str] = field(default_factory=list)
+    recent_people_moves: List[str] = field(default_factory=list)
+    buying_triggers: List[str] = field(default_factory=list)
+    relationship_hooks: List[str] = field(default_factory=list)
+    recommended_asks: List[str] = field(default_factory=list)
+    analyst_follow_ups: List[str] = field(default_factory=list)
 
 
 class AccountBriefSynthesizer:
@@ -263,7 +275,19 @@ class AccountBriefSynthesizer:
                 signal_summary=self._coerce_text_list(getattr(response, "signal_summary", [])),
                 opportunity_summary=self._coerce_text_list(getattr(response, "opportunity_summary", [])),
                 takeaway=self._normalize_text(getattr(response, "takeaway", "")),
+                company_overview=self._normalize_text(getattr(response, "company_overview", "")),
+                strategic_priorities=self._coerce_text_list(getattr(response, "strategic_priorities", []), max_items=8),
+                financial_filing_signals=self._coerce_text_list(getattr(response, "financial_filing_signals", []), max_items=8),
+                competitive_context=self._coerce_text_list(getattr(response, "competitive_context", []), max_items=8),
+                customer_contract_signals=self._coerce_text_list(getattr(response, "customer_contract_signals", []), max_items=8),
+                likely_needs=self._coerce_text_list(getattr(response, "likely_needs", []), max_items=8),
                 suggested_plays=[item for item in suggested_plays if item],
+                people_to_prioritize=self._coerce_text_list(getattr(response, "people_to_prioritize", []), max_items=8),
+                recent_people_moves=self._coerce_text_list(getattr(response, "recent_people_moves", []), max_items=8),
+                buying_triggers=self._coerce_text_list(getattr(response, "buying_triggers", []), max_items=8),
+                relationship_hooks=self._coerce_text_list(getattr(response, "relationship_hooks", []), max_items=6),
+                recommended_asks=self._coerce_text_list(getattr(response, "recommended_asks", []), max_items=6),
+                analyst_follow_ups=self._coerce_text_list(getattr(response, "analyst_follow_ups", []), max_items=6),
             )
             if not result.account_summary or not result.signal_summary or not result.opportunity_summary or not result.takeaway:
                 return None
@@ -282,7 +306,19 @@ class AccountBriefSynthesizer:
             signal_summary=self._coerce_text_list(payload.get("signal_summary") or []),
             opportunity_summary=self._coerce_text_list(payload.get("opportunity_summary") or []),
             takeaway=self._normalize_text(payload.get("takeaway")),
+            company_overview=self._normalize_text(payload.get("company_overview")),
+            strategic_priorities=self._coerce_text_list(payload.get("strategic_priorities") or [], max_items=8),
+            financial_filing_signals=self._coerce_text_list(payload.get("financial_filing_signals") or [], max_items=8),
+            competitive_context=self._coerce_text_list(payload.get("competitive_context") or [], max_items=8),
+            customer_contract_signals=self._coerce_text_list(payload.get("customer_contract_signals") or [], max_items=8),
+            likely_needs=self._coerce_text_list(payload.get("likely_needs") or [], max_items=8),
             suggested_plays=[item for item in suggested_plays if item],
+            people_to_prioritize=self._coerce_text_list(payload.get("people_to_prioritize") or [], max_items=8),
+            recent_people_moves=self._coerce_text_list(payload.get("recent_people_moves") or [], max_items=8),
+            buying_triggers=self._coerce_text_list(payload.get("buying_triggers") or [], max_items=8),
+            relationship_hooks=self._coerce_text_list(payload.get("relationship_hooks") or [], max_items=6),
+            recommended_asks=self._coerce_text_list(payload.get("recommended_asks") or [], max_items=6),
+            analyst_follow_ups=self._coerce_text_list(payload.get("analyst_follow_ups") or [], max_items=6),
         )
         if not result.account_summary or not result.signal_summary or not result.opportunity_summary or not result.takeaway:
             return None
@@ -369,12 +405,12 @@ class AccountBriefSynthesizer:
         return cleaned
 
     @staticmethod
-    def _coerce_text_list(items: Any) -> List[str]:
+    def _coerce_text_list(items: Any, *, max_items: int = 3) -> List[str]:
         if isinstance(items, str):
             text = AccountBriefSynthesizer._normalize_text(items)
             return [text] if text else []
         output: List[str] = []
-        for item in list(items or [])[:3]:
+        for item in list(items or [])[:max_items]:
             text = AccountBriefSynthesizer._normalize_text(item)
             if text:
                 output.append(text)
@@ -424,7 +460,7 @@ class AccountBriefSynthesizer:
             "You are generating a compact analyst account brief.\n"
             "Use only the facts in the provided JSON evidence pack.\n"
             "Suggested plays may infer a next best move from the stated evidence, but must not introduce new facts.\n"
-            "Return only valid JSON with keys account_summary, signal_summary, opportunity_summary, suggested_plays, takeaway.\n"
+            "Return only valid JSON with keys account_summary, signal_summary, opportunity_summary, company_overview, strategic_priorities, financial_filing_signals, competitive_context, customer_contract_signals, likely_needs, people_to_prioritize, recent_people_moves, buying_triggers, relationship_hooks, suggested_plays, recommended_asks, analyst_follow_ups, takeaway.\n"
             "Keep it concise, facts-first, and avoid citations or markdown.\n\n"
             "Evidence pack:\n{{$synthesis_input_json}}\n"
         )

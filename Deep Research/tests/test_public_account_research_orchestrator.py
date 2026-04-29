@@ -101,7 +101,9 @@ async def test_orchestrator_runs_public_research_and_normalizes_output() -> None
         "Limited disclosure on buyer owners",
         "No public budget timing",
         "No verified budget detail",
+        "Public research did not expose explicit evidence dates; verify freshness before MD use.",
     ]
+    assert normalized["freshness_assessment"]["needs_review"] is True
 
 
 @pytest.mark.asyncio
@@ -124,14 +126,104 @@ async def test_orchestrator_wraps_string_responses_into_public_shape() -> None:
 
     result = await orchestrator.run(company_name="BAE Systems")
 
-    assert result.deep_research_response == {
-        "type": "deep_research",
-        "company_name": "BAE Systems",
-        "focus_hint": "",
-        "industry_key": "general",
-        "summary": "Plain public summary",
-        "sections": [],
-        "citations": [],
-        "coverage_gaps": [],
-        "metadata": {},
-    }
+    response = result.deep_research_response
+    assert response["type"] == "deep_research"
+    assert response["company_name"] == "BAE Systems"
+    assert response["focus_hint"] == ""
+    assert response["industry_key"] == "general"
+    assert response["summary"] == "Plain public summary"
+    assert response["sections"] == []
+    assert response["citations"] == []
+    assert response["public_people_targets"] == []
+    assert response["freshness_assessment"]["needs_review"] is True
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_extracts_people_first_sections_from_markdown_summary() -> None:
+    class FakePromptBuilder:
+        def build(self, *, company_name, focus_hint=None, industry=None):
+            return PublicAccountPromptPackage(
+                industry_key="general",
+                system_prompt="PUBLIC SYSTEM PROMPT",
+                user_prompt="PUBLIC USER PROMPT",
+            )
+
+    async def fake_deep_research_runner(query, industry="general", progress_callback=None, **kwargs):
+        return {
+            "summary": """
+## Executive Pursuit Thesis
+BAE Systems has current 2026 pursuit triggers.
+
+## Company Snapshot
+BAE Systems is a global defense contractor with public sector end-market exposure.
+
+## Strategy, Priorities, and Operating Pressure
+- 2026 defense modernization demand | program execution and cyber pressure
+
+## Filings, Financials, and Risk Signals
+| Source/date | Signal | Why it matters | Pursuit implication |
+| --- | --- | --- | --- |
+| 2026 annual report | Cyber and program execution risk | Risk leaders may need support | Risk/compliance lane |
+
+## Competitive and Market Context
+- Competes in defense electronics and systems integration where modernization and delivery performance matter.
+
+## Customer, Contract, and Procurement Signals
+- 2026 contract activity | government customer demand | procurement and program delivery lane
+
+## Likely Needs / White-Space Hypotheses
+| Need or hypothesis | Evidence | Likely buyer lane | Confidence | Analyst validation step |
+| --- | --- | --- | --- | --- |
+| Cyber compliance support | defense modernization and risk disclosure | CISO/risk | Medium | Validate active programs |
+
+## People to Pursue
+| Person | Current role | Buyer lane | Why this person matters now | Evidence date/source |
+| --- | --- | --- | --- | --- |
+| Jane Doe | CIO | Technology | Owns modernization | 2026 company source |
+
+## Recent People Moves
+- John Smith | Appointed CFO | 2026 | Finance transformation trigger | Company release
+
+## Buying Committee Map
+- Economic buyer | CFO office | 2026 proxy | Budget and risk | Confirm reporting line
+
+## Why Now / Current Triggers
+- 2026 modernization announcement | technology advisory relevance | CIO lane
+
+## Recommended MD Actions This Week
+- Ask analyst to validate CIO direct reports and recent procurement.
+""",
+            "citations": [{"title": "Company release", "url": "https://example.com/release"}],
+        }
+
+    orchestrator = PublicAccountResearchOrchestrator(
+        prompt_builder=FakePromptBuilder(),
+        deep_research_runner=fake_deep_research_runner,
+    )
+
+    result = await orchestrator.run(company_name="BAE Systems")
+    response = result.deep_research_response
+
+    assert response["summary"] == "BAE Systems has current 2026 pursuit triggers."
+    assert response["public_company_snapshot"] == "BAE Systems is a global defense contractor with public sector end-market exposure."
+    assert response["public_strategy_priorities"] == [
+        "2026 defense modernization demand | program execution and cyber pressure"
+    ]
+    assert response["public_filing_financial_signals"] == [
+        "2026 annual report | Cyber and program execution risk | Risk leaders may need support | Risk/compliance lane"
+    ]
+    assert response["public_competitive_context"][0].startswith("Competes in defense electronics")
+    assert response["public_customer_contract_signals"][0].startswith("2026 contract activity")
+    assert response["public_likely_needs"] == [
+        "Cyber compliance support | defense modernization and risk disclosure | CISO/risk | Medium | Validate active programs"
+    ]
+    assert response["public_people_targets"] == [
+        "Jane Doe | CIO | Technology | Owns modernization | 2026 company source"
+    ]
+    assert response["public_people_moves"][0].startswith("John Smith | Appointed CFO")
+    assert response["public_buyer_map"][0].startswith("Economic buyer | CFO office")
+    assert response["public_buying_triggers"][0].startswith("2026 modernization announcement")
+    assert response["public_recommended_actions"] == [
+        "Ask analyst to validate CIO direct reports and recent procurement."
+    ]
+    assert response["freshness_assessment"]["stale_only"] is False

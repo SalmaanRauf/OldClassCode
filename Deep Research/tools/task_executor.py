@@ -6,16 +6,24 @@ synthesizes the results into a unified response.
 """
 from __future__ import annotations
 import asyncio
+import inspect
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple, Union
 from services.intent_resolver import Task, TaskType, IntentPlan
 from services.conversation_manager import ConversationContext
 from models.schemas import CompanyRef, Citation, Briefing, GWBSSection
-from tools.orchestrators import full_company_analysis, follow_up_research, competitor_analysis, general_research
+from tools.orchestrators import follow_up_research, competitor_analysis, general_research
 from tools.general_research_orchestrator import GeneralResearchOrchestrator
 
 logger = logging.getLogger(__name__)
+
+
+async def _maybe_await(value: Any) -> Any:
+    """Allow production async calls and lightweight synchronous test doubles."""
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 @dataclass
 class TaskResult:
@@ -156,10 +164,14 @@ class TaskExecutor:
                 ticker=task.parameters.get("ticker")
             )
             
-            briefing = await full_company_analysis(
-                company_ref,
-                bing_agent=bing_agent,
-                analyst_agent=analyst_agent
+            from tools import orchestrators
+
+            briefing = await _maybe_await(
+                orchestrators.full_company_analysis(
+                    company_ref,
+                    bing_agent=bing_agent,
+                    analyst_agent=analyst_agent,
+                )
             )
             
             # Collect citations from briefing
@@ -254,10 +266,14 @@ class TaskExecutor:
             briefings = []
             for company in companies:
                 company_ref = CompanyRef(name=company)
-                briefing = await full_company_analysis(
-                    company_ref,
-                    bing_agent=bing_agent,
-                    analyst_agent=analyst_agent
+                from tools import orchestrators
+
+                briefing = await _maybe_await(
+                    orchestrators.full_company_analysis(
+                        company_ref,
+                        bing_agent=bing_agent,
+                        analyst_agent=analyst_agent,
+                    )
                 )
                 briefings.append(briefing)
             

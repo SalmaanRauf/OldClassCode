@@ -72,10 +72,11 @@ class FSMovementDigestor:
         ),
     )
 
-    def __init__(self, kernel=None, exec_settings=None):
+    def __init__(self, kernel=None, exec_settings=None, reference_date: Optional[date] = None):
         self._kernel = kernel
         self._exec_settings = exec_settings
         self._prompt_template: Optional[str] = None
+        self._reference_date = reference_date
 
     async def _ensure_kernel(self):
         if self._kernel is None:
@@ -235,7 +236,7 @@ class FSMovementDigestor:
             trigger_parts.append(f"User Prompt: {trigger.user_prompt_context}")
 
         prompt = template.replace("{{$trigger_summary}}", "; ".join(trigger_parts))
-        prompt = prompt.replace("{{$current_date_iso}}", datetime.now().date().isoformat())
+        prompt = prompt.replace("{{$current_date_iso}}", (self._reference_date or date.today()).isoformat())
         prompt = prompt.replace("{{$max_rows}}", str(max_rows))
         prompt = prompt.replace("{{$deep_research_markdown}}", markdown)
         if focus_instruction:
@@ -306,6 +307,7 @@ class FSMovementDigestor:
                 effective_date,
                 trigger.time_window_days,
                 precision=effective_date_precision,
+                today=self._reference_date,
             ):
                 skip("outside_lookback", entry_signature)
                 continue

@@ -148,7 +148,7 @@ async def test_account_brief_orchestrator_sanitizes_internal_focus_hint_for_publ
         )
     )
 
-    assert captured_public_focus_hints == [None]
+    assert captured_public_focus_hints == ["check public relationship context"]
     assert captured_synthesis_contexts[0]["focus_hint"] == "check PRO/RHI relationship gaps"
 
 
@@ -165,6 +165,9 @@ async def test_account_brief_orchestrator_can_skip_proconnect_for_known_no_work_
             class FakeResult:
                 deep_research_response = {
                     "summary": "Fresh public pursuit signals.",
+                    "public_people_targets": ["Jane Doe | CIO | Technology | 2026 source"],
+                    "public_buying_triggers": ["2026 modernization trigger | CIO lane"],
+                    "public_recommended_actions": ["Ask analyst to map CIO direct reports."],
                     "coverage_gaps": [],
                     "citations": [],
                 }
@@ -210,6 +213,9 @@ async def test_account_brief_orchestrator_can_skip_proconnect_for_known_no_work_
     assert result["proconnect_summary"]["diagnostics"]["proconnect_skipped"] is True
     assert "skipped" in result["synthesis"]["relationship_posture"].lower()
     assert "skipped" in result["synthesis"]["buyer_posture"].lower()
+    assert result["synthesis"]["people_to_prioritize"] == ["Jane Doe | CIO | Technology | 2026 source"]
+    assert result["synthesis"]["buying_triggers"] == ["2026 modernization trigger | CIO lane"]
+    assert result["synthesis"]["recommended_asks"] == ["Ask analyst to map CIO direct reports."]
     assert any(event["stage"] == "skipping_proconnect_context" for event in events)
     assert synthesizer.captured_input["proconnect_summary"]["diagnostics"]["proconnect_skipped"] is True
 

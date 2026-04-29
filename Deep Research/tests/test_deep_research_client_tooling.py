@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from services import deep_research_client as dr_module  # noqa: E402
 from services.deep_research_client import DeepResearchClient  # noqa: E402
 
 
@@ -32,3 +33,27 @@ def test_deep_research_client_uses_sdk_tool_helper_shape() -> None:
     assert payload["type"] == "deep_research"
     assert deep_research["deep_research_model"] == "o3-deep-research"
     assert deep_research["bing_grounding_connections"][0]["connection_id"] == client._bing_connection
+
+
+def test_deep_research_client_registry_is_keyed_by_prompt(monkeypatch) -> None:
+    created = []
+
+    class FakeClient:
+        def __init__(self, industry="general", instructions_override=None):
+            self._industry = industry
+            self._instructions_override = instructions_override
+            created.append((industry, instructions_override))
+
+    monkeypatch.setattr(dr_module, "DeepResearchClient", FakeClient)
+    dr_module._deep_research_clients.clear()
+    dr_module.deep_research_client = None
+
+    first = dr_module.get_deep_research_client("general", "prompt-a")
+    second = dr_module.get_deep_research_client("general", "prompt-a")
+    third = dr_module.get_deep_research_client("general", "prompt-b")
+    fourth = dr_module.get_deep_research_client("healthcare", "prompt-a")
+
+    assert first is second
+    assert third is not first
+    assert fourth is not first
+    assert len(created) == 3

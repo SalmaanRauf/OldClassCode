@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
+import os
 import re
+import threading
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Set, Callable
+from typing import Any, Dict, Iterable, List, Optional, Set, Callable, Tuple
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from azure.identity.aio import DefaultAzureCredential
@@ -28,6 +31,7 @@ DEEP_RESEARCH_MAX_RETRY_ATTEMPTS = 1
 # Status-only by default for docs compliance. Set to True only if we want to
 # restore the older active message/step polling experiment.
 DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING = False
+DEFAULT_DEEP_RESEARCH_MAX_CONCURRENT_RUNS = 2
 
 
 class _RetryableDeepResearchRunError(RuntimeError):
@@ -659,32 +663,34 @@ class DeepResearchClient:
         
         assert self._client and self._agent_id
 
-        attempt = 0
-        live_progress_enabled = DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING
-        while True:
-            attempt += 1
-            try:
-                report = await self._run_once(
-                    query,
-                    progress_callback=progress_callback if live_progress_enabled else None,
-                    live_progress_enabled=live_progress_enabled,
-                    attempt=attempt,
-                )
-                break
-            except _RetryableDeepResearchRunError as exc:
-                if attempt > DEEP_RESEARCH_MAX_RETRY_ATTEMPTS:
-                    raise RuntimeError(
-                        f"Deep Research run incomplete: {exc.status}\n"
-                        f"Details: {exc.error_details if exc.error_details else 'No additional details available'}"
-                    ) from exc
-                logger.warning(
-                    "Retrying Deep Research after retryable failure attempt=%s/%s industry=%s details=%s",
-                    attempt,
-                    DEEP_RESEARCH_MAX_RETRY_ATTEMPTS + 1,
-                    self._industry,
-                    exc.error_details,
-                )
-                live_progress_enabled = False
+        semaphore = _get_deep_research_run_semaphore()
+        async with semaphore:
+            attempt = 0
+            live_progress_enabled = DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING
+            while True:
+                attempt += 1
+                try:
+                    report = await self._run_once(
+                        query,
+                        progress_callback=progress_callback if live_progress_enabled else None,
+                        live_progress_enabled=live_progress_enabled,
+                        attempt=attempt,
+                    )
+                    break
+                except _RetryableDeepResearchRunError as exc:
+                    if attempt > DEEP_RESEARCH_MAX_RETRY_ATTEMPTS:
+                        raise RuntimeError(
+                            f"Deep Research run incomplete: {exc.status}\n"
+                            f"Details: {exc.error_details if exc.error_details else 'No additional details available'}"
+                        ) from exc
+                    logger.warning(
+                        "Retrying Deep Research after retryable failure attempt=%s/%s industry=%s details=%s",
+                        attempt,
+                        DEEP_RESEARCH_MAX_RETRY_ATTEMPTS + 1,
+                        self._industry,
+                        exc.error_details,
+                    )
+                    live_progress_enabled = False
 
         thread_id = str(report.metadata.get("thread_id") or "")
         run_id = str(report.metadata.get("run_id") or "")
@@ -1184,6 +1190,9 @@ class DeepResearchClient:
 
 # Global client management
 deep_research_client: Optional[DeepResearchClient] = None
+_deep_research_clients: Dict[Tuple[str, str], DeepResearchClient] = {}
+_deep_research_registry_lock = threading.Lock()
+_deep_research_run_semaphores: Dict[int, asyncio.Semaphore] = {}
 
 
 def get_deep_research_client(
@@ -1202,23 +1211,58 @@ def get_deep_research_client(
     """
     global deep_research_client
     
+    key = (
+        str(industry or "general").strip() or "general",
+        _instructions_override_key(instructions_override),
+    )
     logger.info(
         f"get_deep_research_client called: requested_industry={industry}, "
-        f"existing_client={'None' if deep_research_client is None else deep_research_client._industry}"
+        f"registry_size={len(_deep_research_clients)}"
     )
     
-    # Create new client if none exists or if industry changed
-    if (
-        deep_research_client is None
-        or deep_research_client._industry != industry
-        or deep_research_client._instructions_override != instructions_override
-    ):
-        logger.info(f"Creating NEW Deep Research client for industry={industry}")
-        deep_research_client = DeepResearchClient(
-            industry=industry,
-            instructions_override=instructions_override,
-        )
-    else:
-        logger.info(f"Reusing existing Deep Research client for industry={industry}")
-    
-    return deep_research_client
+    with _deep_research_registry_lock:
+        client = _deep_research_clients.get(key)
+        if client is None:
+            logger.info("Creating NEW Deep Research client for industry=%s key=%s", key[0], key[1])
+            client = DeepResearchClient(
+                industry=key[0],
+                instructions_override=instructions_override,
+            )
+            _deep_research_clients[key] = client
+        else:
+            logger.info("Reusing existing Deep Research client for industry=%s key=%s", key[0], key[1])
+
+        # Preserve the legacy module variable for older diagnostics/tests.
+        deep_research_client = client
+        return client
+
+
+def _instructions_override_key(instructions_override: Optional[str]) -> str:
+    text = str(instructions_override or "")
+    if not text:
+        return "default"
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+
+
+def _get_deep_research_run_semaphore() -> asyncio.Semaphore:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    loop_key = id(loop)
+    limit = _deep_research_max_concurrent_runs()
+    semaphore = _deep_research_run_semaphores.get(loop_key)
+    if semaphore is None or getattr(semaphore, "_pursuit_limit", None) != limit:
+        semaphore = asyncio.Semaphore(limit)
+        setattr(semaphore, "_pursuit_limit", limit)
+        _deep_research_run_semaphores[loop_key] = semaphore
+    return semaphore
+
+
+def _deep_research_max_concurrent_runs() -> int:
+    raw = os.getenv("DEEP_RESEARCH_MAX_CONCURRENT_RUNS", str(DEFAULT_DEEP_RESEARCH_MAX_CONCURRENT_RUNS))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = DEFAULT_DEEP_RESEARCH_MAX_CONCURRENT_RUNS
+    return max(1, min(value, 6))

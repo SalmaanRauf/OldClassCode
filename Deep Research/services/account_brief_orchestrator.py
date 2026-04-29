@@ -123,6 +123,8 @@ class AccountBriefOrchestrator:
                 "light_inference": True,
                 "facts_first": True,
                 "preserve_uncertainty": True,
+                "people_first": True,
+                "preserve_account_context": True,
             },
         )
         await self._emit_progress(
@@ -281,11 +283,24 @@ class AccountBriefOrchestrator:
                 "headline": account_status.get("summary") or deep_research_summary.get("summary") or "Account brief assembled from available evidence.",
                 "account_status_summary": account_status.get("summary") or "Internal account status is partially available.",
                 "why_now": deep_research_summary.get("summary") or "Public why-now evidence is limited.",
+                "company_overview": cls._first_text(deep_research_summary.get("public_company_snapshot")),
+                "strategic_priorities": cls._public_items(deep_research_summary, "public_strategy_priorities", limit=8),
+                "financial_filing_signals": cls._public_items(deep_research_summary, "public_filing_financial_signals", limit=8),
+                "competitive_context": cls._public_items(deep_research_summary, "public_competitive_context", limit=8),
+                "customer_contract_signals": cls._public_items(deep_research_summary, "public_customer_contract_signals", limit=8),
+                "likely_needs": cls._public_items(deep_research_summary, "public_likely_needs", limit=8),
                 "relationship_posture": cls._build_relationship_posture(proconnect_summary),
                 "buyer_posture": cls._build_buyer_posture(proconnect_summary),
                 "leadership_coverage_summary": cls._build_leadership_coverage_summary(proconnect_summary, deep_research_summary),
                 "top_openings": cls._fallback_top_openings(opportunities),
+                "people_to_prioritize": cls._fallback_people_to_prioritize(proconnect_summary, deep_research_summary),
+                "recent_people_moves": cls._public_items(deep_research_summary, "public_people_moves", limit=8),
+                "buying_committee_map": cls._public_items(deep_research_summary, "public_buyer_map", limit=8),
+                "buying_triggers": cls._public_items(deep_research_summary, "public_buying_triggers", limit=8),
+                "relationship_hooks": cls._public_items(deep_research_summary, "public_relationship_hooks", limit=6),
                 "suggested_plays": [],
+                "recommended_asks": cls._public_items(deep_research_summary, "public_recommended_actions", limit=6),
+                "analyst_follow_ups": cls._fallback_analyst_follow_ups(proconnect_summary, deep_research_summary),
                 "key_gaps": list(coverage_gaps or []),
                 "takeaway": "Use the sourced internal and public evidence directly while final analyst synthesis is unavailable.",
             }
@@ -294,11 +309,36 @@ class AccountBriefOrchestrator:
             "headline": synthesis_result.account_summary,
             "account_status_summary": account_status.get("summary") or synthesis_result.account_summary,
             "why_now": cls._join_text_list(synthesis_result.signal_summary),
+            "company_overview": synthesis_result.company_overview
+            or cls._first_text(deep_research_summary.get("public_company_snapshot")),
+            "strategic_priorities": synthesis_result.strategic_priorities
+            or cls._public_items(deep_research_summary, "public_strategy_priorities", limit=8),
+            "financial_filing_signals": synthesis_result.financial_filing_signals
+            or cls._public_items(deep_research_summary, "public_filing_financial_signals", limit=8),
+            "competitive_context": synthesis_result.competitive_context
+            or cls._public_items(deep_research_summary, "public_competitive_context", limit=8),
+            "customer_contract_signals": synthesis_result.customer_contract_signals
+            or cls._public_items(deep_research_summary, "public_customer_contract_signals", limit=8),
+            "likely_needs": synthesis_result.likely_needs
+            or cls._public_items(deep_research_summary, "public_likely_needs", limit=8),
             "relationship_posture": cls._build_relationship_posture(proconnect_summary),
             "buyer_posture": cls._build_buyer_posture(proconnect_summary),
             "leadership_coverage_summary": cls._build_leadership_coverage_summary(proconnect_summary, deep_research_summary),
             "top_openings": cls._normalize_top_openings(synthesis_result.opportunity_summary, opportunities),
+            "people_to_prioritize": synthesis_result.people_to_prioritize
+            or cls._fallback_people_to_prioritize(proconnect_summary, deep_research_summary),
+            "recent_people_moves": synthesis_result.recent_people_moves
+            or cls._public_items(deep_research_summary, "public_people_moves", limit=8),
+            "buying_committee_map": cls._public_items(deep_research_summary, "public_buyer_map", limit=8),
+            "buying_triggers": synthesis_result.buying_triggers
+            or cls._public_items(deep_research_summary, "public_buying_triggers", limit=8),
+            "relationship_hooks": synthesis_result.relationship_hooks
+            or cls._public_items(deep_research_summary, "public_relationship_hooks", limit=6),
             "suggested_plays": cls._normalize_suggested_plays(synthesis_result.suggested_plays),
+            "recommended_asks": synthesis_result.recommended_asks
+            or cls._public_items(deep_research_summary, "public_recommended_actions", limit=6),
+            "analyst_follow_ups": synthesis_result.analyst_follow_ups
+            or cls._fallback_analyst_follow_ups(proconnect_summary, deep_research_summary),
             "key_gaps": list(coverage_gaps or []),
             "takeaway": synthesis_result.takeaway,
         }
@@ -338,10 +378,15 @@ class AccountBriefOrchestrator:
         deep_research_summary: Dict[str, Any],
     ) -> str:
         if cls._proconnect_was_skipped(proconnect_summary):
-            public_sections = list(deep_research_summary.get("sections") or [])
-            if public_sections:
-                return f"Leadership coverage is public-research-only across {len(public_sections)} public section(s)."
-            return "Leadership coverage is public-research-only; no ProConnect org chart was checked."
+            public_people = list(deep_research_summary.get("public_people_targets") or [])
+            public_buyer_map = list(deep_research_summary.get("public_buyer_map") or [])
+            if public_people or public_buyer_map:
+                return (
+                    "Leadership coverage is public-research-only: "
+                    f"{len(public_people)} named people/target row(s), "
+                    f"{len(public_buyer_map)} buyer-map row(s)."
+                )
+            return "Leadership coverage is public-research-only; no ProConnect org chart was checked and public people coverage is thin."
         org_chart = dict(proconnect_summary.get("org_chart_coverage") or {})
         org_people_count = int(org_chart.get("people_count") or 0)
         public_sections = list(deep_research_summary.get("sections") or [])
@@ -359,6 +404,74 @@ class AccountBriefOrchestrator:
         if public_titles:
             return f"Leadership coverage relies on public research sections such as {', '.join(public_titles[:3])}."
         return "Leadership coverage is limited across both internal and public sources."
+
+    @classmethod
+    def _fallback_people_to_prioritize(
+        cls,
+        proconnect_summary: Dict[str, Any],
+        deep_research_summary: Dict[str, Any],
+    ) -> List[str]:
+        rows: List[str] = []
+        rows.extend(cls._public_items(deep_research_summary, "public_people_targets", limit=8))
+
+        for buyer in list(proconnect_summary.get("known_buyers") or [])[:5]:
+            name = cls._first_text(buyer.get("name"))
+            title = cls._first_text(buyer.get("title"), buyer.get("function"))
+            wins = buyer.get("wins_5y")
+            if name:
+                rows.append(
+                    f"{name}{f' | {title}' if title else ''} | Known buyer record"
+                    f"{f' with {wins} win(s) in 5y' if wins not in (None, '') else ''}"
+                )
+
+        org_chart = dict(proconnect_summary.get("org_chart_coverage") or {})
+        for person in list(org_chart.get("items") or [])[:5]:
+            name = cls._first_text(person.get("name"))
+            title = cls._first_text(person.get("title"), person.get("job_title"))
+            if name:
+                rows.append(f"{name}{f' | {title}' if title else ''} | ProConnect org-chart contact")
+
+        return cls._dedupe_text(rows, limit=10)
+
+    @classmethod
+    def _fallback_analyst_follow_ups(
+        cls,
+        proconnect_summary: Dict[str, Any],
+        deep_research_summary: Dict[str, Any],
+    ) -> List[str]:
+        rows = list(deep_research_summary.get("coverage_gaps") or [])[:4]
+        if cls._proconnect_was_skipped(proconnect_summary):
+            rows.insert(0, "Run relationship-owner mapping separately if this account becomes a priority.")
+        freshness = deep_research_summary.get("freshness_assessment")
+        if isinstance(freshness, dict) and freshness.get("needs_review"):
+            gap = cls._first_text(freshness.get("coverage_gap"))
+            if gap:
+                rows.append(gap)
+        return cls._dedupe_text(rows, limit=6)
+
+    @classmethod
+    def _public_items(cls, deep_research_summary: Dict[str, Any], key: str, *, limit: int) -> List[str]:
+        return cls._dedupe_text(
+            [cls._first_text(item) for item in list(deep_research_summary.get(key) or [])],
+            limit=limit,
+        )
+
+    @classmethod
+    def _dedupe_text(cls, items: List[str], *, limit: int) -> List[str]:
+        rows: List[str] = []
+        seen = set()
+        for item in list(items or []):
+            text = cls._first_text(item)
+            if not text:
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(text)
+            if len(rows) >= limit:
+                break
+        return rows
 
     @staticmethod
     def _proconnect_was_skipped(proconnect_summary: Dict[str, Any]) -> bool:
@@ -420,30 +533,33 @@ class AccountBriefOrchestrator:
         if not text:
             return None
 
-        internal_patterns = [
-            r"\bproconnect\b",
-            r"\bprotiviti\b",
-            r"\brobert\s+half\b",
-            r"\brhi\b",
-            r"\bpro\b",
-            r"\bmsa\b",
-            r"\bno\s+known\s+work\b",
-            r"\bknown\s+work\b",
-            r"\bworked\s+before\b",
-            r"\baccount\s+team\b",
-            r"\brelationship\s+(?:owner|owners|gap|gaps|route|routes|mapping|status|context|network)\b",
-            r"\bconnected\s+colleagues?\b",
-            r"\bwarm\s+intro\b",
-            r"\binternal\s+(?:buyer|buyers|pipeline|relationship|relationships|opportunity|opportunities)\b",
-            r"\bopen\s+opportunit(?:y|ies)\b",
-            r"\bpast\s+work\b",
-            r"\bpipeline\b",
-            r"\bpgp\s+elite\b",
-            r"\benterprise\s+revenue\s+acceleration\b",
-        ]
-        if any(re.search(pattern, text, flags=re.IGNORECASE) for pattern in internal_patterns):
-            return None
-        return text
+        replacements = {
+            r"\benterprise\s+revenue\s+acceleration\b": "cross-functional account expansion",
+            r"\bpgp\s+elite\b": "account expansion",
+            r"\bproconnect\b": "",
+            r"\bprotiviti\b": "",
+            r"\brobert\s+half\b": "",
+            r"\brhi\b": "",
+            r"\bpro\b": "",
+            r"\bmsa\b": "",
+            r"\bno\s+known\s+work\b": "",
+            r"\bknown\s+work\b": "",
+            r"\bworked\s+before\b": "",
+            r"\baccount\s+team\b": "",
+            r"\brelationship\s+(?:owner|owners|gap|gaps|route|routes|status|context|network|mapping)\b": "public relationship context",
+            r"\bconnected\s+colleagues?\b": "",
+            r"\bwarm\s+intro\b": "public relationship hook",
+            r"\bprivate\s+(?:buyer|buyers|sales|relationship|relationships|opportunity|opportunities)\b": "",
+            r"\bopen\s+opportunit(?:y|ies)\b": "",
+            r"\bpast\s+work\b": "",
+            r"\bpipeline\b": "",
+        }
+        sanitized = text
+        for pattern, replacement in replacements.items():
+            sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"\s*/\s*", " ", sanitized)
+        sanitized = re.sub(r"\s+", " ", sanitized).strip(" .;,-")
+        return sanitized or None
 
     @staticmethod
     def _merge_coverage_gaps(*groups: List[str]) -> List[str]:
