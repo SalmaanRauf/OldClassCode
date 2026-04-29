@@ -32,6 +32,7 @@ DEEP_RESEARCH_MAX_RETRY_ATTEMPTS = 1
 # restore the older active message/step polling experiment.
 DEEP_RESEARCH_ENABLE_LIVE_PROGRESS_POLLING = False
 DEFAULT_DEEP_RESEARCH_MAX_CONCURRENT_RUNS = 2
+AZURE_AI_TOKEN_SCOPE = "https://ai.azure.com/.default"
 
 
 class _RetryableDeepResearchRunError(RuntimeError):
@@ -94,11 +95,14 @@ class DeepResearchClient:
         async with self._lock:
             if self._client:
                 return
-            credential = DefaultAzureCredential()
-            client = AIProjectClient(endpoint=self._project_endpoint, credential=credential)
-            self._credential = credential
-            self._client = client
-            await self._ensure_agent()
+            async with _get_deep_research_client_init_lock():
+                if self._client:
+                    return
+                credential = _build_default_azure_credential()
+                client = AIProjectClient(endpoint=self._project_endpoint, credential=credential)
+                self._credential = credential
+                self._client = client
+                await self._ensure_agent()
 
     async def _ensure_agent(self) -> None:
         if self._agent_id or not self._client:
@@ -1193,6 +1197,7 @@ deep_research_client: Optional[DeepResearchClient] = None
 _deep_research_clients: Dict[Tuple[str, str], DeepResearchClient] = {}
 _deep_research_registry_lock = threading.Lock()
 _deep_research_run_semaphores: Dict[int, asyncio.Semaphore] = {}
+_deep_research_client_init_locks: Dict[int, asyncio.Lock] = {}
 
 
 def get_deep_research_client(
@@ -1259,6 +1264,19 @@ def _get_deep_research_run_semaphore() -> asyncio.Semaphore:
     return semaphore
 
 
+def _get_deep_research_client_init_lock() -> asyncio.Lock:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+    loop_key = id(loop)
+    lock = _deep_research_client_init_locks.get(loop_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _deep_research_client_init_locks[loop_key] = lock
+    return lock
+
+
 def _deep_research_max_concurrent_runs() -> int:
     raw = os.getenv("DEEP_RESEARCH_MAX_CONCURRENT_RUNS", str(DEFAULT_DEEP_RESEARCH_MAX_CONCURRENT_RUNS))
     try:
@@ -1266,3 +1284,61 @@ def _deep_research_max_concurrent_runs() -> int:
     except (TypeError, ValueError):
         value = DEFAULT_DEEP_RESEARCH_MAX_CONCURRENT_RUNS
     return max(1, min(value, 6))
+
+
+async def preflight_deep_research_authentication() -> Dict[str, Any]:
+    """Validate Azure identity once before launching a batch of long runs."""
+    credential = _build_default_azure_credential()
+    try:
+        token = await credential.get_token(AZURE_AI_TOKEN_SCOPE)
+        return {
+            "scope": AZURE_AI_TOKEN_SCOPE,
+            "expires_on": getattr(token, "expires_on", None),
+        }
+    except Exception as exc:
+        raise RuntimeError(_format_azure_auth_preflight_error(exc)) from exc
+    finally:
+        await credential.close()
+
+
+def _build_default_azure_credential() -> DefaultAzureCredential:
+    kwargs: Dict[str, Any] = {
+        "process_timeout": _float_env("AZURE_CREDENTIAL_PROCESS_TIMEOUT_SECONDS", 60.0),
+    }
+    # Azure CLI is the supported work-laptop path for this project. PowerShell
+    # credential probing is slow/noisy when Az.Accounts is not installed.
+    if _bool_env("AZURE_IDENTITY_EXCLUDE_POWERSHELL_CREDENTIAL", True):
+        kwargs["exclude_powershell_credential"] = True
+    try:
+        return DefaultAzureCredential(**kwargs)
+    except TypeError:
+        logger.debug("Installed azure-identity does not support credential kwargs: %s", kwargs)
+        return DefaultAzureCredential()
+
+
+def _format_azure_auth_preflight_error(exc: Exception) -> str:
+    return (
+        "Azure authentication preflight failed before launching Deep Research.\n"
+        "Run this once in the same PowerShell/venv, then rerun the batch with --resume:\n\n"
+        "  az login\n"
+        "  az account list --output table\n"
+        "  az account set --subscription \"<subscription id or name containing the AI Foundry project>\"\n"
+        "  az account get-access-token --scope https://ai.azure.com/.default\n\n"
+        "If Azure CLI opens a browser or MFA prompt, complete it before rerunning. "
+        "The failed batch output folder can be reused with --resume or --only-failed.\n\n"
+        f"Original Azure identity error: {exc}"
+    )
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not str(raw).strip():
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _float_env(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default

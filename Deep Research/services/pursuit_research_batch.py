@@ -148,22 +148,23 @@ class PursuitResearchBatchRunner:
                 "use_proconnect": account.use_proconnect,
             }
         except Exception as exc:
+            error_message = self._format_exception(exc)
             error_payload = {
                 "account": asdict(account),
                 "status": "failed",
-                "error": str(exc),
+                "error": error_message,
             }
             self._write_json_atomic(json_path, error_payload)
             self._write_text_atomic(
                 markdown_path,
-                f"# {account.account_name}\n\nBatch run failed: {exc}\n",
+                f"# {account.account_name}\n\nBatch run failed: {error_message}\n",
             )
-            await self._emit_progress(index, account, "failed", str(exc))
+            await self._emit_progress(index, account, "failed", error_message)
             return {
                 "account_name": account.account_name,
                 "campaign": account.campaign,
                 "status": "failed",
-                "error": str(exc),
+                "error": error_message,
                 "json_path": str(json_path),
                 "markdown_path": str(markdown_path),
                 "use_proconnect": account.use_proconnect,
@@ -181,6 +182,11 @@ class PursuitResearchBatchRunner:
         if payload.get("type") == "account_brief" or payload.get("synthesis"):
             return {"status": "success"}
         return {"status": str(payload.get("status") or "unknown")}
+
+    @staticmethod
+    def _format_exception(exc: Exception) -> str:
+        text = " ".join(str(exc or "").split()).strip()
+        return text or type(exc).__name__
 
     @staticmethod
     def _skipped_result(account: PursuitAccount, json_path: Path, markdown_path: Path, reason: str) -> Dict[str, Any]:

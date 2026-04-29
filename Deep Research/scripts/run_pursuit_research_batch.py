@@ -9,7 +9,7 @@ import asyncio
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -94,6 +94,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Write the account plan but do not call ProConnect or Deep Research.",
     )
+    parser.add_argument(
+        "--skip-auth-preflight",
+        action="store_true",
+        help="Skip the Azure identity preflight check before launching live Deep Research calls.",
+    )
     return parser.parse_args()
 
 
@@ -117,7 +122,7 @@ async def main_async() -> int:
         / "scripts"
         / "output"
         / "pursuit_research"
-        / datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+        / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -145,6 +150,21 @@ async def main_async() -> int:
     if args.dry_run:
         print("Dry run complete. No research calls executed.")
         return 0
+
+    if not args.skip_auth_preflight:
+        print("Checking Azure authentication before launching batch...", flush=True)
+        from services.deep_research_client import preflight_deep_research_authentication
+
+        try:
+            auth_status = await preflight_deep_research_authentication()
+        except RuntimeError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(
+            "Azure authentication preflight passed "
+            f"(scope={auth_status.get('scope')}, expires_on={auth_status.get('expires_on')}).",
+            flush=True,
+        )
 
     async def progress(event):
         print(
